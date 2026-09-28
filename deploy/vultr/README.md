@@ -2,15 +2,18 @@
 
 Two or more servers behind a Vultr load balancer, all in one region, with
 repository data in Vultr Object Storage. OpenTofu creates the
-infrastructure; GitHub Actions builds the image; `rollout.sh` deploys it.
+infrastructure; GitHub Actions builds the images; `rollout.sh` deploys them.
+Each server also runs the management interface (`web/`) in a second
+container.
 
 ```text
-git clients ──HTTPS──> load balancer (certificate from cert.sh, /_rustgit/health)
-                         │ VPC, port 8080
-                         ├─> rustgit-1 (Docker, cache on local NVMe)
-                         └─> rustgit-2
-                               │
-                               └─> Vultr Object Storage (bucket, prefix "prod")
+git clients ──HTTPS :443──> load balancer (certificate from cert.sh, /_rustgit/health)
+browsers ────HTTPS :8443─>   │ VPC, ports 8080 and 3000
+                             ├─> rustgit-1: rustgit :8080 (cache on local NVMe)
+                             │              rustgit-web :3000 ──> rustgit :8080
+                             └─> rustgit-2: the same
+                                   │
+                                   └─> Vultr Object Storage (bucket, prefix "prod")
 ```
 
 Request forwarding between servers is off: every request checks the
@@ -25,10 +28,10 @@ only if cache rebuilds show up as a cost.
 | `cloud-init.yaml.tftpl` | Host setup: Docker and the `rustgit` systemd unit. No secrets. |
 | `rustgit.toml.tftpl` | Server configuration, rendered into the sensitive output `rustgit_config`. |
 | `tf` | Runs `tofu` with the Vultr API key and the state bucket's keys. |
-| `rollout.sh` | Installs the configuration and an image tag on each server, one at a time. |
+| `rollout.sh` | Installs the configuration and an image tag on each server, one at a time; with `--web`, the management interface. |
 | `cert.sh` | Gets or renews the Let's Encrypt certificate (DNS-01 at Cloudflare) and installs it on the load balancer. |
 | `terraform.tfvars` | Your values (not in Git). See `terraform.tfvars.example`. |
-| `.secrets/` | Local only: plans, SSH known hosts, the first user's password. |
+| `.secrets/` | Local only: plans, SSH known hosts, the first user's password, the interface's session secret. |
 
 ## Requirements
 
@@ -72,14 +75,19 @@ only if cache rebuilds show up as a cost.
    ./tf output -raw registry_password | gh secret set VULTR_REGISTRY_PASSWORD
    ```
 
-   Push to `master`, or start the workflow by hand. Its summary names the
-   image tag.
+   Push to `master`, or start the workflows by hand (`image.yml` for
+   rustgit, `web-image.yml` for the interface). Their summaries name the
+   image tags.
 
-4. Deploy that tag:
+4. Deploy the tags:
 
    ```bash
    ./rollout.sh <tag>
+   ./rollout.sh --web <web tag>
    ```
+
+   The interface is then at `./tf output -raw web_url`
+   (`https://<domain>:8443`). Sign in as the first user.
 
 5. Create repositories from your computer, with the server configuration:
 
@@ -91,8 +99,12 @@ only if cache rebuilds show up as a cost.
 
 ## Changes
 
-- **New release:** push to `master`, then `./rollout.sh <tag>`.
-- **Users and settings:** edit `terraform.tfvars` or the template, then
+- **New release:** push to `master`, then `./rollout.sh <tag>` and, if
+  `web/` changed, `./rollout.sh --web <web tag>`.
+- **Users:** create and change them in the interface; they are kept in
+  storage and need no rollout. Users in `terraform.tfvars` take precedence
+  and are read-only there.
+- **Configured users and settings:** edit `terraform.tfvars` or the template, then
   `./tf apply` (it changes only outputs) and `./rollout.sh <current tag>`.
   Password hashes come from `rustgit hash-password`.
 - **More servers:** raise `server_count`, `./tf apply`, then
@@ -107,6 +119,16 @@ A restart sends SIGTERM. The server fails its health check for 10 seconds
 (`drain_delay_secs`; the load balancer needs 2 failed checks at 3-second
 intervals), then finishes running requests for up to 180 seconds. Docker
 waits 200 seconds and systemd 230 seconds before they kill it.
+
+## Management interface
+
+`rollout.sh --web` installs the `rustgit-web` unit, `/etc/rustgit-web/web.env`
+(with the session secret from `.secrets/web-session-secret`, created on
+first use and the same on every server), and the image. The container calls
+rustgit on its own server. It is public on port 8443, only over HTTPS;
+sign-in needs a rustgit user with `"*" = "admin"`, and failed sign-ins are
+not rate-limited, so give such users long random passwords. The load
+balancer's health check covers rustgit only.
 
 ## Not included
 

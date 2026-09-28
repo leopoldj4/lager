@@ -3,16 +3,20 @@
 # one at a time. Each restart drains the server first (SIGTERM): the load
 # balancer stops sending it requests while running pushes finish.
 #
-#   ./rollout.sh <image tag>
+#   ./rollout.sh <image tag>          # rustgit
+#   ./rollout.sh --web <image tag>    # the management interface (web/)
 set -euo pipefail
 cd "$(dirname "$0")"
-tag=${1:?usage: rollout.sh <image tag>}
+web=false
+if [[ ${1:-} == --web ]]; then
+  web=true
+  shift
+fi
+tag=${1:?usage: rollout.sh [--web] <image tag>}
 
 out() { ./tf output -raw "$1"; }
 registry=$(out registry)
-image="$registry:$tag"
 host=${registry%%/*}
-config=$(out rustgit_config)
 reg_user=$(out registry_username)
 reg_pass=$(out registry_password)
 ips=$(./tf output -json server_ips | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)))')
@@ -22,6 +26,73 @@ ssh_opts=(-i ~/.ssh/rustgit_ed25519 -o StrictHostKeyChecking=accept-new
 mkdir -p .secrets
 run() { ssh "${ssh_opts[@]}" "root@$1" "${@:2}"; }
 
+# Waits until a command succeeds on the server, or stops the rollout.
+healthy() {
+  local ip=$1 check=$2 unit=$3
+  for _ in $(seq 60); do
+    if run "$ip" "$check" >/dev/null 2>&1; then
+      echo "   healthy"
+      return
+    fi
+    sleep 3
+  done
+  echo "   $ip did not become healthy; stopping the rollout" >&2
+  run "$ip" "journalctl -u $unit -n 30 --no-pager" >&2 || true
+  exit 1
+}
+
+if $web; then
+  image="$registry-web:$tag"
+  # The same secret on every server: the load balancer alternates between
+  # them, and each must read the session cookie of the other.
+  secret_file=.secrets/web-session-secret
+  [[ -s $secret_file ]] || (umask 077 && openssl rand -hex 32 >"$secret_file")
+  env="RUSTGIT_URL=http://host.docker.internal:8080
+RUSTGIT_PUBLIC_URL=$(out git_url)
+SESSION_SECRET=$(<"$secret_file")
+NODE_OPTIONS=--max-old-space-size=192"
+  # Not in cloud-init: servers created before the interface get it here.
+  unit='[Unit]
+Description=rustgit management interface
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/rustgit-web/web.env
+ConditionPathExists=/etc/rustgit-web/image.env
+
+[Service]
+EnvironmentFile=/etc/rustgit-web/image.env
+ExecStartPre=-/usr/bin/docker rm -f rustgit-web
+ExecStartPre=/usr/bin/docker pull -q ${IMAGE}
+# rustgit on this server answers the admin API calls.
+ExecStart=/usr/bin/docker run --rm --name rustgit-web \
+  --memory 256m --add-host=host.docker.internal:host-gateway \
+  -p 3000:3000 --env-file /etc/rustgit-web/web.env ${IMAGE}
+ExecStop=/usr/bin/docker stop -t 10 rustgit-web
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target'
+  for ip in $ips; do
+    echo "== $ip: $image"
+    run "$ip" 'cloud-init status --wait >/dev/null'
+    run "$ip" 'install -d -m 0700 /etc/rustgit-web && umask 077 &&
+      cat > /etc/rustgit-web/web.env.new &&
+      mv /etc/rustgit-web/web.env.new /etc/rustgit-web/web.env' <<<"$env"
+    run "$ip" 'cat > /etc/systemd/system/rustgit-web.service &&
+      systemctl daemon-reload && systemctl enable -q rustgit-web' <<<"$unit"
+    run "$ip" "docker login -u '$reg_user' --password-stdin '$host' >/dev/null" <<<"$reg_pass"
+    run "$ip" "docker pull -q '$image' >/dev/null &&
+      echo 'IMAGE=$image' > /etc/rustgit-web/image.env &&
+      systemctl restart rustgit-web"
+    healthy "$ip" 'curl -sf -o /dev/null http://127.0.0.1:3000/login' rustgit-web
+  done
+  exit 0
+fi
+
+image="$registry:$tag"
+config=$(out rustgit_config)
 for ip in $ips; do
   echo "== $ip: $image"
   # Wait for cloud-init on new servers.
@@ -34,14 +105,5 @@ for ip in $ips; do
   run "$ip" "docker pull -q '$image' >/dev/null &&
     echo 'IMAGE=$image' > /etc/rustgit/image.env &&
     systemctl restart rustgit"
-  for _ in $(seq 60); do
-    if run "$ip" 'curl -sf http://127.0.0.1:8080/_rustgit/health >/dev/null'; then
-      echo "   healthy"
-      continue 2
-    fi
-    sleep 3
-  done
-  echo "   $ip did not become healthy; stopping the rollout" >&2
-  run "$ip" 'journalctl -u rustgit -n 30 --no-pager' >&2 || true
-  exit 1
+  healthy "$ip" 'curl -sf http://127.0.0.1:8080/_rustgit/health' rustgit
 done
