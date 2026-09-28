@@ -33,6 +33,7 @@ jobs:
           USERNAME: ${{ secrets.VULTR_REGISTRY_USERNAME }}
           PASSWORD: ${{ secrets.VULTR_REGISTRY_PASSWORD }}
         run: |
+          : "${REGISTRY:?repository variable VULTR_REGISTRY is not set}"
           loaded=$(./result | docker load | sed -n 's/^Loaded image: //p')
           image="$REGISTRY:${GITHUB_SHA::12}"
           docker tag "$loaded" "$image"
