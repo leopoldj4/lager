@@ -186,12 +186,21 @@ fn authorize(
 }
 
 /// Only simple protocol requests are passed to Git.
+///
+/// Protocol version 2 is never passed on: its `upload-pack` accepts any
+/// object ID in a want and ignores `uploadpack.allow*InWant`. The cache
+/// holds objects of rejected pushes, so reads use protocol version 0 or 1,
+/// which accept only wants reachable from the advertised refs.
 fn git_protocol(headers: &HeaderMap) -> Option<String> {
     let v = headers.get("git-protocol")?.to_str().ok()?;
     let ok = v.len() <= 256
         && v.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"=:.,-_".contains(&b));
-    ok.then(|| v.to_string())
+    let kept: Vec<&str> = v
+        .split(':')
+        .filter(|p| !p.starts_with("version=") || *p == "version=1")
+        .collect();
+    (ok && !kept.is_empty()).then(|| kept.join(":"))
 }
 
 async fn process_permit(s: &AppInner) -> Result<tokio::sync::OwnedSemaphorePermit, Response> {
@@ -262,13 +271,9 @@ async fn info_refs(
     let out = crate::git::run(&mut cmd, None)
         .await
         .map_err(|e| repo_error(RepoError::Internal(e.to_string())))?;
-    let mut data = Vec::new();
-    if !protocol.as_deref().unwrap_or("").contains("version=2") {
-        data.extend(crate::git::pktline::encode(
-            format!("# service={}\n", service.name()).as_bytes(),
-        ));
-        data.extend_from_slice(crate::git::pktline::FLUSH);
-    }
+    let mut data =
+        crate::git::pktline::encode(format!("# service={}\n", service.name()).as_bytes());
+    data.extend_from_slice(crate::git::pktline::FLUSH);
     data.extend(out);
     Ok(git_response(
         format!("application/x-{}-advertisement", service.name()),
@@ -480,7 +485,11 @@ impl DiskReservations {
             None => free_space(&self.dir).map_err(|e| format!("cannot check disk space: {e}"))?,
         };
         let mut reserved = self.reserved.lock().unwrap();
-        if free.saturating_sub(*reserved).saturating_sub(bytes) < self.min_free {
+        // A reservation larger than the free space fails even without a minimum.
+        let left = free
+            .checked_sub(*reserved)
+            .and_then(|f| f.checked_sub(bytes));
+        if left.is_none_or(|l| l < self.min_free) {
             return Err("insufficient disk space on the server".into());
         }
         *reserved += bytes;
@@ -535,6 +544,22 @@ mod tests {
     }
 
     #[test]
+    fn protocol_version_2_is_not_passed_to_git() {
+        let h = |v: &str| {
+            let mut m = HeaderMap::new();
+            m.insert("git-protocol", HeaderValue::from_str(v).unwrap());
+            git_protocol(&m)
+        };
+        assert_eq!(h("version=2"), None);
+        assert_eq!(h("version=1"), Some("version=1".into()));
+        assert_eq!(
+            h("version=2:object-format=sha1"),
+            Some("object-format=sha1".into())
+        );
+        assert_eq!(h("version=2 ; rm"), None);
+    }
+
+    #[test]
     fn disk_reservations_keep_the_minimum_free() {
         let d = DiskReservations::new(Path::new("/"), 100);
         *d.free_override.lock().unwrap() = Some(1000);
@@ -542,5 +567,9 @@ mod tests {
         assert!(d.reserve(400).is_err());
         drop(a);
         assert!(d.reserve(900).is_ok());
+        let none = DiskReservations::new(Path::new("/"), 0);
+        *none.free_override.lock().unwrap() = Some(10);
+        assert!(none.reserve(11).is_err());
+        assert!(none.reserve(10).is_ok());
     }
 }
