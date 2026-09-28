@@ -585,7 +585,13 @@ pub fn read_config() -> &'static str {
      \tallowTipSHA1InWant = false\n\tallowFilter = false\n\tallowRefInWant = false\n"
 }
 
-fn set_limit(resource: libc::c_int, value: u64) -> std::io::Result<()> {
+/// The resource argument of `setrlimit`: an unsigned enum in glibc.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+type Resource = libc::__rlimit_resource_t;
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+type Resource = libc::c_int;
+
+fn set_limit(resource: Resource, value: u64) -> std::io::Result<()> {
     if value == 0 {
         return Ok(());
     }
@@ -594,8 +600,7 @@ fn set_limit(resource: libc::c_int, value: u64) -> std::io::Result<()> {
         rlim_max: value as libc::rlim_t,
     };
     // SAFETY: `l` is a valid rlimit value.
-    #[allow(clippy::useless_conversion)]
-    if unsafe { libc::setrlimit(resource.try_into().unwrap(), &l) } != 0 {
+    if unsafe { libc::setrlimit(resource, &l) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())

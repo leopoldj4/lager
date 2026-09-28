@@ -35,8 +35,10 @@
 
         # The server runs git upload-pack / receive-pack, so Git is a runtime
         # dependency. Pinning it through flake.lock gives the fixed Git version
-        # the implementation plan requires.
-        git = pkgs.git;
+        # the implementation plan requires. The server needs only Git's core
+        # commands: gitMinimal leaves out Perl, Python, and documentation,
+        # which keeps the container image small. Tests use the same Git.
+        git = pkgs.gitMinimal;
 
         # Cargo sources, plus the README: a unit test checks its examples.
         src = lib.cleanSourceWith {
@@ -50,8 +52,12 @@
           strictDeps = true;
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
-          # Protocol tests drive real Git clients.
-          nativeCheckInputs = [ git ];
+          # Protocol tests drive real Git clients. HTTP clients need CA
+          # certificates on Linux even for plain HTTP.
+          nativeCheckInputs = [
+            git
+            pkgs.cacert
+          ];
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -81,10 +87,46 @@
           ];
           text = builtins.readFile ./dev/start-local.sh;
         };
+        # Container image (Linux only). `nix build .#docker` gives a script
+        # that streams the image: `./result | docker load`. tini is PID 1
+        # because Git starts processes that rustgit does not reap when they
+        # are orphaned; it forwards SIGTERM for the clean stop.
+        docker = pkgs.dockerTools.streamLayeredImage {
+          name = "rustgit";
+          contents = [ pkgs.dockerTools.caCertificates ];
+          fakeRootCommands = ''
+            mkdir -p etc tmp var/cache/rustgit var/empty
+            chmod 1777 tmp
+            chown 10001:10001 var/cache/rustgit
+            echo 'root:x:0:0::/var/empty:/bin/false' > etc/passwd
+            echo 'rustgit:x:10001:10001::/var/empty:/bin/false' >> etc/passwd
+            echo 'root:x:0:' > etc/group
+            echo 'rustgit:x:10001:' >> etc/group
+          '';
+          config = {
+            Entrypoint = [
+              "${pkgs.tini}/bin/tini"
+              "--"
+              "${rustgit}/bin/rustgit"
+            ];
+            Cmd = [
+              "-c"
+              "/etc/rustgit/rustgit.toml"
+              "serve"
+            ];
+            User = "10001:10001";
+            Env = [ "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt" ];
+            ExposedPorts."8080/tcp" = { };
+            Volumes."/var/cache/rustgit" = { };
+          };
+        };
       in
       {
-        packages.default = rustgit;
-        packages.local = local;
+        packages = {
+          default = rustgit;
+          inherit local;
+        }
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux { inherit docker; };
 
         apps.default = flake-utils.lib.mkApp { drv = rustgit; };
         apps.local = flake-utils.lib.mkApp { drv = local; };
