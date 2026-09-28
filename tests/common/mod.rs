@@ -420,3 +420,65 @@ pub async fn tree_files(client: &Client, dir: &Path, rev: &str) -> HashMap<Strin
     }
     out
 }
+
+/// What a client learned about its push.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PushResult {
+    Accepted,
+    Rejected,
+    /// A timeout or unknown result. Not a definite failure.
+    Unknown,
+}
+
+pub async fn push_result(client: &Client, dir: &Path, args: &[&str]) -> PushResult {
+    let out = client.run(dir, args).await;
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.success() {
+        PushResult::Accepted
+    } else if err.contains("result unknown") {
+        PushResult::Unknown
+    } else {
+        PushResult::Rejected
+    }
+}
+
+/// Checks the stored history against the transaction rules and the results
+/// that clients received. `pushes` pairs a pushed commit with its result.
+pub async fn check_history(env: &Env, pushes: &[(String, PushResult)]) {
+    let history = env.history().await;
+    assert_eq!(history[0].generation, 0);
+    let mut state = RefState::default();
+    let mut requests = std::collections::HashSet::new();
+    for (i, e) in history.iter().enumerate() {
+        assert_eq!(e.generation, i as u64, "generations are contiguous");
+        // Every entry applies to the state before it: each expected old
+        // value matched, so no accepted change was lost or applied twice.
+        state
+            .apply_entry(e)
+            .expect("entry applies to the previous state");
+        if e.operation == Operation::Push {
+            assert!(requests.insert(e.request), "request applied twice");
+        }
+    }
+    assert_eq!(
+        state
+            .refs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<BTreeMap<_, _>>(),
+        env.stored_refs().await,
+        "the head's view (with snapshots) equals the complete history"
+    );
+    for (oid, result) in pushes {
+        let n = history
+            .iter()
+            .flat_map(|e| &e.refs)
+            .filter(|u| u.new.as_ref().map(|o| o.as_str()) == Some(oid.as_str()))
+            .count();
+        match result {
+            PushResult::Accepted => assert_eq!(n, 1, "accepted push {oid} is in the history once"),
+            PushResult::Rejected => assert_eq!(n, 0, "rejected push {oid} is in the history"),
+            PushResult::Unknown => assert!(n <= 1),
+        }
+    }
+}
