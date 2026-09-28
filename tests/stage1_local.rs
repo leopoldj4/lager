@@ -465,7 +465,15 @@ async fn a_push_without_disk_space_is_rejected_before_receipt() {
     alice.ok(&a, &["push", "--quiet", "origin", "main"]).await;
 
     alice.commit(&a, &[("f", b"2")], "two").await;
-    *server.running.state.disk.free_override.lock().unwrap() = Some(0);
+    *server
+        .running
+        .state
+        .registry
+        .svc
+        .disk
+        .free_override
+        .lock()
+        .unwrap() = Some(0);
     let err = alice.fails(&a, &["push", "origin", "main"]).await;
     assert!(err.contains("507"), "{err}");
     assert_eq!(env.stored_refs().await["refs/heads/main"], c1);

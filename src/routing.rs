@@ -87,6 +87,11 @@ impl Routing {
         self.cfg.servers.iter().find(|s| s.id == id)
     }
 
+    /// Whether this server is the first available server for the repository.
+    pub fn is_preferred_self(&self, repo: RepoId) -> bool {
+        self.preferred(repo).is_none_or(|p| p.id == self.self_id)
+    }
+
     /// Tells other servers about an accepted push. Failures are ignored.
     pub fn notify(&self, repo: RepoId, generation: u64) {
         if !self.cfg.notify {

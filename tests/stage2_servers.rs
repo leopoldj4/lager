@@ -340,3 +340,134 @@ async fn all_caches_lost_still_permits_recovery_from_storage() {
     );
     bob.ok(&b, &["fsck", "--full", "--strict"]).await;
 }
+
+/// Simple deterministic random numbers, so that a failing seed repeats.
+struct Rng(u64);
+
+impl Rng {
+    fn below(&mut self, n: u64) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0 % n
+    }
+}
+
+/// Concurrent pushes to shared and separate branches on three servers, with
+/// lost responses, delays, and failed uploads. The recorded history must obey
+/// the transaction rules and agree with every definite client result;
+/// unknown results count as unknown, never as failures.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_history_with_random_storage_faults_obeys_the_transaction_rules() {
+    let seed = std::env::var("RUSTGIT_TEST_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0x5eed_cafe_u64);
+    let mut rng = Rng(seed);
+    let env = Env::new();
+    let servers = [env.start().await, env.start().await, env.start().await];
+    let setup = env.client("setup");
+    let s = setup.init(&servers[0].url(), "work").await;
+    setup.commit(&s, &[("f", b"base")], "base").await;
+    setup.ok(&s, &["push", "--quiet", "origin", "main"]).await;
+
+    let clients: Vec<Client> = (0..4).map(|i| env.client(&format!("w{i}"))).collect();
+    let mut dirs = Vec::new();
+    for c in &clients {
+        dirs.push(c.clone(&servers[0].url(), "work").await);
+    }
+    let mut results = Vec::new();
+    for round in 0..6 {
+        env.fault.clear_rules();
+        let faults = [
+            (Op::Put, "head.json", Action::LoseResponse),
+            (
+                Op::Put,
+                "head.json",
+                Action::Delay(Duration::from_millis(150)),
+            ),
+            (Op::Put, "head.json", Action::Fail),
+            (Op::Put, "/entries/", Action::Fail),
+            (
+                Op::PutFile,
+                "/packs/",
+                Action::Delay(Duration::from_millis(100)),
+            ),
+            (
+                Op::Get,
+                "head.json",
+                Action::Delay(Duration::from_millis(50)),
+            ),
+        ];
+        for _ in 0..2 {
+            let (op, key, action) = faults[rng.below(faults.len() as u64) as usize].clone();
+            env.fault
+                .add_rule(op, key, action, Some(1 + rng.below(2) as usize));
+        }
+        let mut plans = Vec::new();
+        for (i, c) in clients.iter().enumerate() {
+            let server = &servers[rng.below(3) as usize];
+            let branch = if rng.below(2) == 0 {
+                "main".to_string()
+            } else {
+                format!("b{i}")
+            };
+            let url = server.url();
+            c.ok(
+                &dirs[i],
+                &[
+                    "fetch",
+                    "--quiet",
+                    &url,
+                    "+refs/heads/*:refs/remotes/origin/*",
+                ],
+            )
+            .await;
+            let base = if c
+                .run(
+                    &dirs[i],
+                    &["rev-parse", "--verify", "-q", &format!("origin/{branch}")],
+                )
+                .await
+                .status
+                .success()
+            {
+                format!("origin/{branch}")
+            } else {
+                "origin/main".to_string()
+            };
+            c.ok(&dirs[i], &["checkout", "--quiet", "-B", &branch, &base])
+                .await;
+            let commit = c
+                .commit(
+                    &dirs[i],
+                    &[(&format!("f{i}"), format!("{round} {i}").as_bytes())],
+                    "x",
+                )
+                .await;
+            plans.push((i, url, branch, commit));
+        }
+        let outcomes = futures::future::join_all(plans.iter().map(|(i, url, branch, _)| {
+            let (client, dir) = (&clients[*i], &dirs[*i]);
+            async move {
+                let spec = format!("HEAD:{branch}");
+                push_result(client, dir, &["push", url, &spec]).await
+            }
+        }))
+        .await;
+        for ((_, _, _, commit), r) in plans.into_iter().zip(outcomes) {
+            results.push((commit, r));
+        }
+    }
+    env.fault.clear_rules();
+    check_history(&env, &results).await;
+    let accepted = results
+        .iter()
+        .filter(|(_, r)| *r == PushResult::Accepted)
+        .count();
+    assert!(accepted >= 6, "seed {seed}: {accepted} pushes accepted");
+    let stored = env.stored_refs().await;
+    for s in &servers {
+        assert_eq!(setup.ls_remote(&s.url()).await, stored, "seed {seed}");
+    }
+}

@@ -166,6 +166,9 @@ impl Controller {
             ));
         }
         entries.remove(0);
+        let _space = self
+            .svc
+            .reserve_for_packs(entries.iter().flat_map(|e| e.packs.iter()))?;
         let mut refs = known.refs.clone();
         for e in &entries {
             self.apply_entry_locally(&cache, &mut refs, e).await?;
@@ -240,6 +243,13 @@ impl Controller {
         tracing::info!(repo = %self.repo, generation = head.generation, "rebuilding cache from storage");
         let chain = load_chain(&self.svc.storage, head).await?;
         let refs = chain_state(&chain).map_err(RepoError::Internal)?;
+        let _space = self.svc.reserve_for_packs(
+            chain
+                .snapshot
+                .iter()
+                .flat_map(|s| s.packs.iter())
+                .chain(chain.entries.iter().flat_map(|e| e.packs.iter())),
+        )?;
         let base = self.svc.repo_cache_dir(self.repo);
         tokio::fs::create_dir_all(&base).await?;
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -249,6 +259,10 @@ impl Controller {
             let _ = tokio::fs::remove_dir_all(&tmp).await;
             return Err(e);
         }
+        self.svc
+            .failpoints
+            .hit(crate::failpoint::REBUILD_BEFORE_REPLACE)
+            .await;
         let dir = base.join(format!("{id}.git"));
         tokio::fs::rename(&tmp, &dir).await?;
         st.poison();
@@ -350,6 +364,14 @@ impl Controller {
     }
 
     async fn check_leftover(&self, dir: &Path, head: &Head) -> Result<Known, RepoError> {
+        // Lock files show a ref change that did not finish: a stop during a
+        // local transaction. Such a cache is never used.
+        if let Some(lock) = find_lock_file(dir).await? {
+            return Err(RepoError::Internal(format!(
+                "incomplete local change: {}",
+                lock.display()
+            )));
+        }
         let data = tokio::fs::read(dir.join(MARKER)).await?;
         let m: Marker =
             serde_json::from_slice(&data).map_err(|e| RepoError::Internal(e.to_string()))?;
@@ -409,6 +431,32 @@ impl Controller {
             refs: state,
         })
     }
+}
+
+/// A Git lock file for refs or `HEAD`, if one exists.
+async fn find_lock_file(dir: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
+    for name in ["HEAD.lock", "packed-refs.lock"] {
+        if tokio::fs::try_exists(dir.join(name)).await? {
+            return Ok(Some(dir.join(name)));
+        }
+    }
+    let mut stack = vec![dir.join("refs")];
+    while let Some(d) = stack.pop() {
+        let mut rd = match tokio::fs::read_dir(&d).await {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        while let Some(e) = rd.next_entry().await? {
+            let p = e.path();
+            if e.file_type().await?.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "lock") {
+                return Ok(Some(p));
+            }
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) async fn write_marker(

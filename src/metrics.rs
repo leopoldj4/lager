@@ -57,6 +57,12 @@ impl Metrics {
     /// Prometheus text format.
     pub fn render(&self) -> String {
         let mut out = String::new();
+        let (own, git) = (
+            cpu_seconds(libc::RUSAGE_SELF),
+            cpu_seconds(libc::RUSAGE_CHILDREN),
+        );
+        out.push_str(&format!("rustgit_process_cpu_seconds_total {own}\n"));
+        out.push_str(&format!("rustgit_git_cpu_seconds_total {git}\n"));
         for (k, v) in self.counters.lock().unwrap().iter() {
             out.push_str(&format!("rustgit_{k}_total {v}\n"));
         }
@@ -79,6 +85,17 @@ impl Metrics {
         }
         out
     }
+}
+
+/// User and system CPU time of this process, or of its finished children.
+fn cpu_seconds(who: libc::c_int) -> f64 {
+    let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: `u` is a valid out pointer.
+    if unsafe { libc::getrusage(who, &mut u) } != 0 {
+        return 0.0;
+    }
+    let t = |v: libc::timeval| v.tv_sec as f64 + v.tv_usec as f64 / 1e6;
+    t(u.ru_utime) + t(u.ru_stime)
 }
 
 /// Measures one step until dropped or finished.

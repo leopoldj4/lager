@@ -58,6 +58,13 @@ impl StorageError {
     }
 }
 
+pub enum Versioned<T> {
+    Missing,
+    /// The object still has the ETag the caller supplied.
+    Unchanged,
+    Found(T, ETag),
+}
+
 pub enum HeadRead {
     Missing,
     /// The head still has the ETag the caller supplied.
@@ -82,6 +89,22 @@ pub struct Storage {
     backend: Arc<dyn Backend>,
     prefix: String,
     verify_uploads: bool,
+    /// Limits simultaneous pack uploads.
+    uploads: Option<Arc<tokio::sync::Semaphore>>,
+    stats: Arc<StorageStats>,
+}
+
+/// Pack transfers, for measurements of storage use and cost.
+#[derive(Debug, Default)]
+pub struct StorageStats {
+    pub pack_uploads: std::sync::atomic::AtomicU64,
+    pub uploaded_bytes: std::sync::atomic::AtomicU64,
+    pub pack_downloads: std::sync::atomic::AtomicU64,
+    pub downloaded_bytes: std::sync::atomic::AtomicU64,
+}
+
+fn count(counter: &std::sync::atomic::AtomicU64, n: u64) {
+    counter.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
 }
 
 const IDEMPOTENT_ATTEMPTS: usize = 4;
@@ -96,7 +119,23 @@ impl Storage {
             backend,
             prefix,
             verify_uploads: true,
+            uploads: None,
+            stats: Default::default(),
         }
+    }
+
+    pub fn stats(&self) -> &StorageStats {
+        &self.stats
+    }
+
+    /// At most `n` pack uploads run at the same time.
+    pub fn with_upload_limit(mut self, n: usize) -> Self {
+        self.uploads = Some(Arc::new(tokio::sync::Semaphore::new(n.max(1))));
+        self
+    }
+
+    pub fn prefix(&self) -> &str {
+        &self.prefix
     }
 
     /// Whether a stored pack is read back and its checksum compared.
@@ -135,28 +174,40 @@ impl Storage {
         known: Option<&ETag>,
     ) -> Result<HeadRead, StorageError> {
         let key = self.head_key(repo);
+        Ok(match self.read_versioned::<Head>(&key, known).await? {
+            Versioned::Missing => HeadRead::Missing,
+            Versioned::Unchanged => HeadRead::Unchanged,
+            Versioned::Found(head, etag) => {
+                head.check(repo)
+                    .map_err(|e| StorageError::Corrupt(format!("{key}: {e}")))?;
+                HeadRead::Found { head, etag }
+            }
+        })
+    }
+
+    /// Reads an object that changes in place, with its ETag.
+    pub async fn read_versioned<T: DeserializeOwned>(
+        &self,
+        key: &str,
+        known: Option<&ETag>,
+    ) -> Result<Versioned<T>, StorageError> {
         let mut last = String::new();
         for attempt in 0..IDEMPOTENT_ATTEMPTS {
-            match self.backend.get(&key, known.map(|e| e.0.as_str())).await {
+            match self.backend.get(key, known.map(|e| e.0.as_str())).await {
                 Ok(f) => {
-                    let head: Head = decode(&key, &f.data)?;
-                    head.check(repo)
-                        .map_err(|e| StorageError::Corrupt(format!("{key}: {e}")))?;
+                    let value: T = decode(key, &f.data)?;
                     let etag = f
                         .etag
                         .ok_or_else(|| StorageError::Other(format!("{key}: no ETag")))?;
-                    return Ok(HeadRead::Found {
-                        head,
-                        etag: ETag(etag),
-                    });
+                    return Ok(Versioned::Found(value, ETag(etag)));
                 }
-                Err(BackendError::NotFound) => return Ok(HeadRead::Missing),
-                Err(BackendError::NotModified) => return Ok(HeadRead::Unchanged),
+                Err(BackendError::NotFound) => return Ok(Versioned::Missing),
+                Err(BackendError::NotModified) => return Ok(Versioned::Unchanged),
                 Err(BackendError::Unavailable(m)) => {
                     last = m;
                     backoff(attempt).await;
                 }
-                Err(e) => return Err(StorageError::from_backend(&key, e)),
+                Err(e) => return Err(StorageError::from_backend(key, e)),
             }
         }
         Err(StorageError::Unavailable(last))
@@ -185,15 +236,28 @@ impl Storage {
 
     async fn write_head(&self, head: &Head, mode: WriteMode) -> CasOutcome {
         let key = self.head_key(head.repository);
-        let data = Bytes::from(serde_json::to_vec_pretty(head).expect("head serializes"));
-        match self.backend.put(&key, data, mode).await {
+        let revision = head.revision;
+        self.write_versioned(&key, head, mode, |h: &Head| h.revision == revision)
+            .await
+    }
+
+    /// Creates (`WriteMode::Create`) or replaces (`WriteMode::Update`) an
+    /// object that changes in place. Exactly one request is sent; the caller
+    /// resolves unknown results. `is_ours` recognizes the written value when
+    /// the service accepts a write without returning an ETag.
+    pub async fn write_versioned<T: Serialize + DeserializeOwned>(
+        &self,
+        key: &str,
+        value: &T,
+        mode: WriteMode,
+        is_ours: impl Fn(&T) -> bool,
+    ) -> CasOutcome {
+        let data = Bytes::from(serde_json::to_vec_pretty(value).expect("record serializes"));
+        match self.backend.put(key, data, mode).await {
             Ok(Some(etag)) => CasOutcome::Accepted(ETag(etag)),
-            Ok(None) => match self.load_head(head.repository).await {
-                // The service accepted the write without returning an ETag.
-                Ok(Some((h, etag))) if h.revision == head.revision => CasOutcome::Accepted(etag),
-                Ok(_) => {
-                    CasOutcome::Unknown("accepted write without ETag, head since changed".into())
-                }
+            Ok(None) => match self.read_versioned::<T>(key, None).await {
+                Ok(Versioned::Found(v, etag)) if is_ours(&v) => CasOutcome::Accepted(etag),
+                Ok(_) => CasOutcome::Unknown("accepted write without ETag, since changed".into()),
                 Err(e) => CasOutcome::Unknown(e.to_string()),
             },
             Err(BackendError::Conflict) => CasOutcome::Conflict,
@@ -316,6 +380,10 @@ impl Storage {
             .map_err(|e| StorageError::Other(e.to_string()))?;
         let key = self.pack_key(repo, &sha256);
         let pack = PackRef { sha256, size };
+        let _permit = match &self.uploads {
+            Some(s) => Some(s.clone().acquire_owned().await.expect("never closed")),
+            None => None,
+        };
         let mut last = String::new();
         for attempt in 0..IDEMPOTENT_ATTEMPTS {
             let result = async {
@@ -333,6 +401,8 @@ impl Storage {
             .await;
             match result {
                 Ok(()) => {
+                    count(&self.stats.pack_uploads, 1);
+                    count(&self.stats.uploaded_bytes, size);
                     if self.verify_uploads {
                         self.verify_pack(repo, &pack).await?;
                     }
@@ -383,7 +453,11 @@ impl Storage {
         let mut last = String::new();
         for attempt in 0..IDEMPOTENT_ATTEMPTS {
             match self.fetch_once(&key, pack, dest).await {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    count(&self.stats.pack_downloads, 1);
+                    count(&self.stats.downloaded_bytes, pack.size);
+                    return Ok(());
+                }
                 Err(StorageError::Unavailable(m)) => {
                     last = m;
                     backoff(attempt).await;

@@ -6,7 +6,9 @@
 #![allow(clippy::result_large_err)]
 
 pub mod backup;
+pub mod catalog;
 pub mod config;
+pub mod failpoint;
 pub mod git;
 pub mod http;
 pub mod maintenance;

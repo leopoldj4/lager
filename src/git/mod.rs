@@ -36,6 +36,9 @@ pub struct Git {
     path_env: String,
     /// Directory containing the `proc-receive` hook.
     hooks_dir: PathBuf,
+    /// CPU seconds and address-space bytes for client request processes.
+    cpu_secs: u64,
+    memory_bytes: u64,
 }
 
 impl Git {
@@ -54,7 +57,36 @@ impl Git {
             home,
             path_env,
             hooks_dir,
+            cpu_secs: 0,
+            memory_bytes: 0,
         })
+    }
+
+    /// Resource limits for the Git processes of client requests. 0: none.
+    pub fn with_process_limits(mut self, cpu_secs: u64, memory_bytes: u64) -> Self {
+        self.cpu_secs = cpu_secs;
+        self.memory_bytes = memory_bytes;
+        self
+    }
+
+    /// A Git command for a client request, with CPU and memory limits.
+    pub fn service_command(&self) -> Command {
+        let mut c = self.command();
+        let (cpu, mem) = (self.cpu_secs, self.memory_bytes);
+        if cpu > 0 || mem > 0 {
+            // SAFETY: the closure only calls setrlimit, which is
+            // async-signal-safe, and allocates nothing.
+            unsafe {
+                c.pre_exec(move || {
+                    set_limit(libc::RLIMIT_CPU, cpu)?;
+                    #[cfg(target_os = "linux")]
+                    set_limit(libc::RLIMIT_AS, mem)?;
+                    let _ = mem;
+                    Ok(())
+                });
+            }
+        }
+        c
     }
 
     pub fn hooks_dir(&self) -> &Path {
@@ -189,6 +221,64 @@ impl Git {
         Ok(u32::from_be_bytes([
             header[8], header[9], header[10], header[11],
         ]))
+    }
+
+    /// Total and largest size, after decompression, of the objects reachable
+    /// from `include` and not from `exclude`. Streams the object list.
+    pub async fn object_sizes(
+        &self,
+        dir: &Path,
+        include: &[Oid],
+        exclude: &[Oid],
+    ) -> Result<(u64, u64), GitError> {
+        let mut input = String::new();
+        for o in include {
+            input.push_str(o.as_str());
+            input.push('\n');
+        }
+        for o in exclude {
+            input.push('^');
+            input.push_str(o.as_str());
+            input.push('\n');
+        }
+        let mut list = self
+            .in_repo(dir)
+            .args(["rev-list", "--objects", "--no-object-names", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let mut stdin = list.stdin.take().expect("piped");
+        let writer = tokio::spawn(async move {
+            let _ = stdin.write_all(input.as_bytes()).await;
+        });
+        let oids: Stdio = list.stdout.take().expect("piped").try_into()?;
+        let mut sizes = self
+            .in_repo(dir)
+            .args(["cat-file", "--batch-check=%(objectsize)"])
+            .stdin(oids)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let mut lines = BufReader::new(sizes.stdout.take().expect("piped")).lines();
+        let (mut total, mut largest) = (0u64, 0u64);
+        while let Some(line) = lines.next_line().await? {
+            let n: u64 = line
+                .trim()
+                .parse()
+                .map_err(|_| GitError::Protocol(format!("object size {line:?}")))?;
+            total = total.saturating_add(n);
+            largest = largest.max(n);
+        }
+        let _ = writer.await;
+        let (a, b) = (list.wait().await?, sizes.wait().await?);
+        if !a.success() || !b.success() {
+            return Err(GitError::Failed {
+                cmd: "rev-list".into(),
+                stderr: format!("{a}, {b}"),
+            });
+        }
+        Ok((total, largest))
     }
 
     pub async fn is_ancestor(&self, dir: &Path, old: &Oid, new: &Oid) -> Result<bool, GitError> {
@@ -495,6 +585,45 @@ pub fn read_config() -> &'static str {
      \tallowTipSHA1InWant = false\n\tallowFilter = false\n\tallowRefInWant = false\n"
 }
 
+fn set_limit(resource: libc::c_int, value: u64) -> std::io::Result<()> {
+    if value == 0 {
+        return Ok(());
+    }
+    let l = libc::rlimit {
+        rlim_cur: value as libc::rlim_t,
+        rlim_max: value as libc::rlim_t,
+    };
+    // SAFETY: `l` is a valid rlimit value.
+    #[allow(clippy::useless_conversion)]
+    if unsafe { libc::setrlimit(resource.try_into().unwrap(), &l) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 fn config_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The limits apply to client request processes only. A shell stands in
+    /// for Git so that the limit can be read back.
+    #[tokio::test]
+    async fn client_request_processes_get_the_cpu_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = Git::new("/bin/sh".into(), dir.path(), Path::new("/bin/true"))
+            .unwrap()
+            .with_process_limits(7, 0);
+        let limited = run(sh.service_command().args(["-c", "ulimit -t"]), None)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&limited).trim(), "7");
+        let internal = run(sh.command().args(["-c", "ulimit -t"]), None)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&internal).trim(), "unlimited");
+    }
 }
