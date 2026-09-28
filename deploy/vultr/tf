@@ -7,14 +7,11 @@ if [[ -z "${VULTR_API_KEY:-}" ]]; then
   VULTR_API_KEY=$(sed -n 's/^api-key: *//p' ~/.vultr-cli.yaml)
 fi
 export VULTR_API_KEY
-if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-  if [[ ! -f .secrets/cloudflare-token ]]; then
-    echo "missing .secrets/cloudflare-token (Cloudflare API token: Zone Read, DNS Edit)" >&2
-    exit 1
-  fi
-  CLOUDFLARE_API_TOKEN=$(<.secrets/cloudflare-token)
+# Cloudflare API token (Zone Read, DNS Edit) for the DNS record. Commands
+# that read only outputs work without it.
+if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -f .secrets/cloudflare-token ]]; then
+  export CLOUDFLARE_API_TOKEN=$(<.secrets/cloudflare-token)
 fi
-export CLOUDFLARE_API_TOKEN
 # The Object Storage subscription with the state bucket (label "rustgit").
 eval "$(vultr-cli object-storage list -o json | python3 -c '
 import json, shlex, sys
