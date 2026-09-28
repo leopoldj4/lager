@@ -185,6 +185,15 @@ orb create nixos nix-builder
 orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build "$PWD#docker" --no-link --print-out-paths | xargs -I{} orb -m nix-builder {} | docker load
 ```
 
+That builds for the Mac's architecture (arm64). For x86_64 servers, name
+the system: the same machine builds it with Rosetta, and runs the tests
+too. Only rustgit is compiled; everything else comes from the binary
+cache. The first build takes about ten minutes.
+
+```bash
+orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build "$PWD#packages.x86_64-linux.docker" --no-link --print-out-paths | xargs -I{} orb -m nix-builder {} | docker load
+```
+
 ## Development
 
 ```bash
