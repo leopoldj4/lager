@@ -143,8 +143,77 @@ pub async fn run(storage: &Storage) -> Vec<(&'static str, CheckResult)> {
             other => Err(format!("{:?}", other.map(|f| f.data))),
         },
     ));
+    // 6. Concurrent writers: exactly one wins, whichever service nodes
+    // the requests reach. A provider that checks and then writes without a
+    // lock lets two pushes accept the same head.
+    let race_key = format!("{}race.json", storage.repo_prefix(repo));
+    out.push((
+        "concurrent conditional creates: exactly one succeeds",
+        race(&b, &race_key, 0, WriteMode::Create).await,
+    ));
+    let mut cas_race = Ok(());
+    for round in 1..=RACE_ROUNDS {
+        let etag = match b.get(&race_key, None).await {
+            Ok(f) => f.etag,
+            Err(e) => {
+                cas_race = Err(e.to_string());
+                break;
+            }
+        };
+        let Some(etag) = etag else {
+            cas_race = Err("read returned no ETag".into());
+            break;
+        };
+        cas_race = race(&b, &race_key, round, WriteMode::Update(etag)).await;
+        if cas_race.is_err() {
+            break;
+        }
+    }
+    out.push((
+        "concurrent CAS: exactly one writer wins each round",
+        cas_race.map_err(|e| format!("{e} (after the rounds before it passed)")),
+    ));
     cleanup(storage, repo).await;
     out
+}
+
+const RACE_WRITERS: usize = 8;
+const RACE_ROUNDS: usize = 5;
+
+/// Starts `RACE_WRITERS` conditional writes of different contents at once.
+/// Exactly one must succeed, the others must report a conflict, and a read
+/// must return the winner's contents.
+async fn race(
+    b: &std::sync::Arc<dyn super::Backend>,
+    key: &str,
+    round: usize,
+    mode: WriteMode,
+) -> CheckResult {
+    let contents = |i: usize| Bytes::from(format!("round {round} writer {i}"));
+    let writes = (0..RACE_WRITERS).map(|i| b.put(key, contents(i), mode.clone()));
+    let results = futures::future::join_all(writes).await;
+    let mut winners = Vec::new();
+    for (i, r) in results.into_iter().enumerate() {
+        match r {
+            Ok(_) => winners.push(i),
+            Err(BackendError::Conflict) => {}
+            Err(e) => return Err(format!("round {round}: writer {i}: {e}")),
+        }
+    }
+    let [winner] = winners[..] else {
+        return Err(format!(
+            "round {round}: {} of {RACE_WRITERS} writers succeeded",
+            winners.len()
+        ));
+    };
+    match b.get(key, None).await {
+        Ok(f) if f.data == contents(winner) => Ok(()),
+        Ok(f) => Err(format!(
+            "round {round}: writer {winner} succeeded, but a read returns {:?}",
+            String::from_utf8_lossy(&f.data)
+        )),
+        Err(e) => Err(format!("round {round}: {e}")),
+    }
 }
 
 async fn cleanup(storage: &Storage, repo: RepoId) {
