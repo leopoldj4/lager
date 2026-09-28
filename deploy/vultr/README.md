@@ -35,8 +35,11 @@ only if cache rebuilds show up as a cost.
 
 ## Requirements
 
-- `~/.vultr-cli.yaml` with an API key (`api-key: ...`), restricted to your
-  IP address in the Vultr console.
+- `~/.vultr-cli.yaml` with an API key (`api-key: ...`). Its access control
+  in the Vultr console (Account → API) allows every address, `0.0.0.0/0`
+  and `::/0`, so deployments work from any network. The key then has full
+  account access from anywhere: keep the file readable only by you
+  (`chmod 600`), and regenerate the key if it may have leaked.
 - An Object Storage subscription labeled `rustgit` in the region. It
   passed `rustgit check-storage` (docs/TESTING.md); test again after any
   change of cluster or tier.
@@ -110,6 +113,7 @@ only if cache rebuilds show up as a cost.
 - **More servers:** raise `server_count`, `./tf apply`, then
   `./rollout.sh <current tag>`.
 - **Another admin address:** add it to `admin_cidrs` and `./tf apply`.
+  This is SSH access to the servers; the API key works from anywhere.
 - **Certificate:** run `./cert.sh` every month. It renews when fewer than
   30 days are left.
 
