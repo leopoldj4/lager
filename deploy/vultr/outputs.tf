@@ -6,11 +6,6 @@ output "server_ips" {
   value = vultr_instance.server[*].main_ip
 }
 
-output "delegation" {
-  description = "NS records to add for the domain at the parent zone's DNS provider."
-  value       = "${var.domain} NS ns1.vultr.com, ${var.domain} NS ns2.vultr.com"
-}
-
 output "registry" {
   description = "Image repository for docker push and pull."
   value       = "${vultr_container_registry.main.urn}/rustgit"
