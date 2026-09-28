@@ -95,6 +95,8 @@ impl Env {
                 tls_private_key: None,
                 tls_terminated_upstream: false,
                 admin_api: true,
+                drain_delay_secs: 0,
+                shutdown_timeout_secs: 30,
             },
             storage: StorageConfig {
                 kind: StorageKind::Memory,

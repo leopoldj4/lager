@@ -62,6 +62,8 @@ listen = "0.0.0.0:8080"
 id = "git-1"                       # this server in [routing]
 cache_dir = "/var/cache/rustgit"   # local SSD; can be removed at any time
 tls_terminated_upstream = true     # or tls_certificate / tls_private_key
+drain_delay_secs = 5               # on stop: health check fails first
+shutdown_timeout_secs = 180        # on stop: wait for running requests
 
 [storage]
 prefix = "prod"
@@ -137,6 +139,16 @@ permission-rule version that log entries record.
 
 ## Operation
 
+- `GET /_rustgit/health`: the load balancer check. 503 while the storage
+  service does not answer (checked at most once per second) or while the
+  server stops. `GET /_rustgit/live` only shows that the process runs.
+- On `SIGTERM` or `SIGINT` the server stops cleanly: the health check fails
+  for `drain_delay_secs` while requests are still served, then the server
+  accepts no new connections and waits up to `shutdown_timeout_secs` for
+  running requests and pushes. Responses meanwhile carry
+  `x-rustgit-draining: 1`, and other servers stop forwarding to it. A
+  second signal stops at once, which is also safe. Allow the service
+  manager enough time (for systemd, `TimeoutStopSec` above the sum).
 - `GET /_rustgit/metrics`: counters and median, 95th, and 99th percentile
   delays per push step, in Prometheus text format.
 - `POST /_rustgit/snapshot?repo=<name>` and `POST /_rustgit/rebuild?repo=<name>`

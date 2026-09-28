@@ -34,6 +34,7 @@ if [[ ! -f "$config" ]]; then
 [server]
 listen = "$listen"
 cache_dir = "$cache_dir"
+drain_delay_secs = 0
 
 [storage]
 prefix = "local"

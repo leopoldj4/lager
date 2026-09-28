@@ -1,6 +1,7 @@
 //! Git smart HTTP requests, identity checks, permissions, and resource limits.
 
 pub mod access;
+pub mod health;
 pub mod limits;
 pub mod password;
 pub mod process;
@@ -28,6 +29,9 @@ use crate::model::RequestId;
 use crate::repository::{PendingPush, PushAccess, Registry, RepoError};
 
 pub const REQUEST_ID_HEADER: &str = "x-rustgit-request-id";
+/// Set on every response while the server stops. Other servers then stop
+/// sending it requests.
+pub const DRAINING_HEADER: &str = "x-rustgit-draining";
 
 pub struct AppInner {
     pub registry: Arc<Registry>,
@@ -38,20 +42,37 @@ pub struct AppInner {
     pub routing: Option<Arc<crate::routing::Routing>>,
     pub socket_path: PathBuf,
     pub admin_api: bool,
+    pub health: health::Health,
 }
 
 pub type AppState = Arc<AppInner>;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/_rustgit/health", get(|| async { "ok" }))
+        .route("/_rustgit/health", get(ready))
+        .route("/_rustgit/live", get(|| async { "ok\n" }))
         .route("/_rustgit/metrics", get(metrics))
         .route("/_rustgit/notify", post(crate::routing::notify_handler))
         .route("/_rustgit/snapshot", post(snapshot))
         .route("/_rustgit/rebuild", post(rebuild))
         .fallback(git_handler)
-        .layer(middleware::from_fn(request_id))
+        .layer(middleware::from_fn_with_state(state.clone(), request_id))
         .with_state(state)
+}
+
+/// Readiness for a load balancer: 503 while the storage service does not
+/// answer or while the server stops. `/_rustgit/live` only shows that the
+/// process runs.
+async fn ready(State(s): State<AppState>) -> Response {
+    use health::NotReady;
+    match s.health.check().await {
+        Ok(()) => "ok\n".into_response(),
+        Err(NotReady::Draining) => (StatusCode::SERVICE_UNAVAILABLE, "draining\n").into_response(),
+        Err(NotReady::StorageUnavailable) => {
+            s.registry.svc.metrics.inc("health_storage_failures");
+            (StatusCode::SERVICE_UNAVAILABLE, "storage unavailable\n").into_response()
+        }
+    }
 }
 
 /// The identifier of one HTTP request, for diagnostic records. A push uses
@@ -61,7 +82,7 @@ pub struct RequestTag(pub uuid::Uuid);
 
 /// Gives each request an identifier, a log span, and one summary record.
 /// Credentials and contents are never logged.
-async fn request_id(mut req: Request, next: Next) -> Response {
+async fn request_id(State(s): State<AppState>, mut req: Request, next: Next) -> Response {
     let id = uuid::Uuid::new_v4();
     req.extensions_mut().insert(RequestTag(id));
     let span = tracing::info_span!("request", id = %id);
@@ -73,6 +94,10 @@ async fn request_id(mut req: Request, next: Next) -> Response {
         REQUEST_ID_HEADER,
         HeaderValue::from_str(&id.to_string()).expect("uuid"),
     );
+    if s.health.is_draining() {
+        resp.headers_mut()
+            .insert(DRAINING_HEADER, HeaderValue::from_static("1"));
+    }
     span.in_scope(|| {
         tracing::info!(
             %method,
@@ -112,6 +137,10 @@ async fn metrics(State(s): State<AppState>) -> Response {
         caches += c.cached_generation().await.is_some() as u64;
     }
     text.push_str(&format!("rustgit_caches {caches}\n"));
+    text.push_str(&format!(
+        "rustgit_draining {}\n",
+        s.health.is_draining() as u8
+    ));
     text.push_str(&format!(
         "rustgit_git_processes_in_use {}\n",
         svc.limits.max_git_processes - s.processes.available_permits()

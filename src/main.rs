@@ -132,8 +132,20 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Serve => {
             let server = rustgit::server::start(cfg, Some(cli.config.clone()), storage).await?;
             eprintln!("rustgit serving on {}", server.url());
-            tokio::signal::ctrl_c().await?;
-            server.stop();
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut term = signal(SignalKind::terminate())?;
+            let mut int = signal(SignalKind::interrupt())?;
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
+            eprintln!("rustgit stopping; a second signal stops at once");
+            // Stopping at any point is safe: storage decides every push.
+            tokio::select! {
+                _ = server.shutdown() => {}
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
         }
         Cmd::Repo { cmd } => repo_cmd(&cli.config, &cfg, &storage, cmd).await?,
         Cmd::Snapshot { name } => {
