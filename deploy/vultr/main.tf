@@ -1,5 +1,7 @@
 locals {
   tls = var.tls_dir != null
+  # The zone that holds the Git host name, at Cloudflare.
+  parent_zone = join(".", slice(split(".", var.domain), 1, length(split(".", var.domain))))
 }
 
 data "vultr_object_storage" "main" {
@@ -135,4 +137,22 @@ resource "vultr_load_balancer" "main" {
     unhealthy_threshold = 2
     healthy_threshold   = 2
   }
+}
+
+data "cloudflare_zone" "parent" {
+  filter = {
+    name = local.parent_zone
+  }
+}
+
+resource "cloudflare_dns_record" "git" {
+  zone_id = data.cloudflare_zone.parent.id
+  name    = var.domain
+  type    = "A"
+  content = vultr_load_balancer.main.ipv4
+  ttl     = 300
+  # Not proxied: Cloudflare's proxy limits requests to 100 MB, which
+  # large pushes exceed, and would terminate TLS itself.
+  proxied = false
+  comment = "rustgit load balancer (deploy/vultr)"
 }
