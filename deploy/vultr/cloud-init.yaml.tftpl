@@ -1,0 +1,44 @@
+#cloud-config
+# Host setup only. rollout.sh installs /etc/rustgit/rustgit.toml and
+# /etc/rustgit/image.env, logs in to the registry, and starts rustgit.
+package_update: true
+packages:
+  - docker.io
+  - curl
+
+write_files:
+  - path: /etc/systemd/system/rustgit.service
+    content: |
+      [Unit]
+      Description=rustgit Git server
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+      ConditionPathExists=/etc/rustgit/rustgit.toml
+      ConditionPathExists=/etc/rustgit/image.env
+
+      [Service]
+      EnvironmentFile=/etc/rustgit/image.env
+      ExecStartPre=-/usr/bin/docker rm -f rustgit
+      ExecStartPre=/usr/bin/docker pull -q $${IMAGE}
+      # The stop timeout exceeds drain_delay_secs + shutdown_timeout_secs.
+      ExecStart=/usr/bin/docker run --rm --name rustgit \
+        --stop-timeout 200 --memory ${container_memory} \
+        -p 8080:8080 \
+        -v /etc/rustgit:/etc/rustgit:ro \
+        -v /var/cache/rustgit:/var/cache/rustgit \
+        $${IMAGE}
+      ExecStop=/usr/bin/docker stop -t 200 rustgit
+      TimeoutStopSec=230
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - install -d -m 0755 /etc/rustgit
+  - install -d -m 0700 -o 10001 -g 10001 /var/cache/rustgit
+  - systemctl enable --now docker
+  - systemctl daemon-reload
+  - systemctl enable rustgit

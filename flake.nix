@@ -151,6 +151,9 @@
             # (If-None-Match / If-Match), which the head CAS depends on.
             pkgs.seaweedfs
             pkgs.awscli2 # for poking at buckets and conditional writes by hand
+            # Deployment (deploy/vultr).
+            pkgs.opentofu
+            pkgs.vultr-cli
             pkgs.cargo-nextest
             pkgs.cargo-watch
           ];
