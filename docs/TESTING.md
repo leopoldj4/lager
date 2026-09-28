@@ -32,6 +32,19 @@ The randomized history test repeats with `RUSTGIT_TEST_SEED=<n>`.
 
 Before each release, run the provider tests and `rustgit check-storage`
 against every intended provider (IMPLEMENTATION_PLAN.md Stage 3 item 11).
+`check-storage` includes races: concurrent conditional writes must have
+exactly one winner. Repeat it several times; one passing race is weak
+evidence.
+
+Tested providers:
+
+| Provider | Date | Result |
+|---|---|---|
+| SeaweedFS (`weed mini`, local) | 2026-09-28 | `check-storage` and all provider tests pass |
+| Vultr Object Storage, Standard tier, `ewr1.vultrobjects.com` | 2026-09-28 | `check-storage` passes 20 of 20 runs (100 CAS race rounds); all provider tests pass |
+
+Results apply to the tested cluster only: other clusters of the same
+provider can run other software (Vultr's Performance tier is on `ewr2`).
 
 ## Stage 1 checks
 
