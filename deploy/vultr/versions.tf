@@ -6,6 +6,10 @@ terraform {
       source  = "vultr/vultr"
       version = "~> 2.0"
     }
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 5.0"
+    }
   }
 
   # State in Vultr Object Storage. The bucket keeps old versions, and the
@@ -30,3 +34,7 @@ terraform {
 
 # The API key comes from VULTR_API_KEY (./tf reads ~/.vultr-cli.yaml).
 provider "vultr" {}
+
+# The token comes from CLOUDFLARE_API_TOKEN (./tf reads
+# .secrets/cloudflare-token): Zone Read and DNS Edit for the parent zone.
+provider "cloudflare" {}

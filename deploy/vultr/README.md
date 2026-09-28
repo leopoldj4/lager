@@ -5,7 +5,7 @@ repository data in Vultr Object Storage. OpenTofu creates the
 infrastructure; GitHub Actions builds the image; `rollout.sh` deploys it.
 
 ```text
-git clients ──HTTPS──> load balancer (Let's Encrypt, /_rustgit/health)
+git clients ──HTTPS──> load balancer (certificate from cert.sh, /_rustgit/health)
                          │ VPC, port 8080
                          ├─> rustgit-1 (Docker, cache on local NVMe)
                          └─> rustgit-2
@@ -26,6 +26,7 @@ only if cache rebuilds show up as a cost.
 | `rustgit.toml.tftpl` | Server configuration, rendered into the sensitive output `rustgit_config`. |
 | `tf` | Runs `tofu` with the Vultr API key and the state bucket's keys. |
 | `rollout.sh` | Installs the configuration and an image tag on each server, one at a time. |
+| `cert.sh` | Gets or renews the Let's Encrypt certificate (DNS-01 at Cloudflare) and installs it on the load balancer. |
 | `terraform.tfvars` | Your values (not in Git). See `terraform.tfvars.example`. |
 | `.secrets/` | Local only: plans, SSH known hosts, the first user's password. |
 
@@ -37,32 +38,33 @@ only if cache rebuilds show up as a cost.
   passed `rustgit check-storage` (docs/TESTING.md); test again after any
   change of cluster or tier.
 - `~/.ssh/rustgit_ed25519`: the deploy key for root on the servers.
+- `.secrets/cloudflare-token`: a Cloudflare API token with Zone Read and
+  DNS Edit for the parent zone (`leoj.de`). OpenTofu creates the host's A
+  record with it, and `cert.sh` answers the certificate challenge.
 - The dev shell (`nix develop`) provides `tofu`, `vultr-cli`, and `aws`.
 
 ## First deployment
 
-1. Create the infrastructure without HTTPS:
+1. Create the infrastructure and the DNS record, without HTTPS:
 
    ```bash
    ./tf apply
    ```
 
-2. Delegate the domain to Vultr DNS. At the DNS provider of the parent
-   zone (Cloudflare for `leoj.de`), add the records from
-   `./tf output delegation`: two `NS` records for `rustgit`. Wait until
-   `dig +short rustgit.leoj.de` returns the load balancer address
-   (`./tf output load_balancer_ip`).
+   The A record at Cloudflare is not proxied: Cloudflare's proxy limits
+   requests to 100 MB, which large pushes exceed.
 
-3. Turn on HTTPS. The load balancer gets a Let's Encrypt certificate, and
-   HTTP redirects to HTTPS:
+2. Get the certificate and turn on HTTPS. This accepts the Let's Encrypt
+   terms of service. HTTP then redirects to HTTPS.
 
    ```bash
-   ./tf apply -var tls=true
+   ./cert.sh
    ```
 
-   Then set `tls = true` in `terraform.tfvars`.
+   Vultr's automatic certificates are not usable: they need the parent
+   zone in Vultr DNS, and Vultr DNS refuses subdomain zones.
 
-4. Configure GitHub Actions (`.github/workflows/image.yml`):
+3. Configure GitHub Actions (`.github/workflows/image.yml`):
 
    ```bash
    gh variable set VULTR_REGISTRY --body "$(./tf output -raw registry)"
@@ -73,13 +75,13 @@ only if cache rebuilds show up as a cost.
    Push to `master`, or start the workflow by hand. Its summary names the
    image tag.
 
-5. Deploy that tag:
+4. Deploy that tag:
 
    ```bash
    ./rollout.sh <tag>
    ```
 
-6. Create repositories from your computer, with the server configuration:
+5. Create repositories from your computer, with the server configuration:
 
    ```bash
    ./tf output -raw rustgit_config > .secrets/rustgit.toml
@@ -96,6 +98,8 @@ only if cache rebuilds show up as a cost.
 - **More servers:** raise `server_count`, `./tf apply`, then
   `./rollout.sh <current tag>`.
 - **Another admin address:** add it to `admin_cidrs` and `./tf apply`.
+- **Certificate:** run `./cert.sh` every month. It renews when fewer than
+  30 days are left.
 
 ## Stopping and timeouts
 

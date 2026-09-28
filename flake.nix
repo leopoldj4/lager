@@ -154,6 +154,7 @@
             # Deployment (deploy/vultr).
             pkgs.opentofu
             pkgs.vultr-cli
+            pkgs.lego
             pkgs.cargo-nextest
             pkgs.cargo-watch
           ];
