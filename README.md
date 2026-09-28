@@ -161,6 +161,30 @@ permission-rule version that log entries record.
   A push whose result is unknown says so; the client should fetch before it
   pushes again.
 
+## Container image
+
+`nix build .#docker` (Linux, or a Linux builder) gives a script that
+streams the image:
+
+```bash
+nix build .#docker && ./result | docker load
+```
+
+The image holds only rustgit, the pinned Git, tini as PID 1, and CA
+certificates. It runs as user 10001 and reads
+`/etc/rustgit/rustgit.toml`; mount the configuration as a secret, and the
+cache at `/var/cache/rustgit` on local disk. Set the container stop timeout
+above `drain_delay_secs` plus `shutdown_timeout_secs`, and keep
+`git_memory_bytes` times `max_git_processes` below the memory limit.
+
+On a Mac, an OrbStack NixOS machine works as the Linux builder: it sees
+the Mac's files, so this builds and loads the image into OrbStack's Docker:
+
+```bash
+orb create nixos nix-builder
+orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build "$PWD#docker" --no-link --print-out-paths | xargs -I{} orb -m nix-builder {} | docker load
+```
+
 ## Development
 
 ```bash
