@@ -92,6 +92,7 @@ provider can run other software (Vultr's Performance tier is on `ewr2`).
 | Measurements meet the agreed requirements | `load::repositories_of_three_sizes_meet_the_load_requirements` |
 | Measurements per step, storage use, Git work, no series per repository | `access_http::measurements_cover_push_steps_storage_use_and_git_work` |
 | Production identity, ref permissions, catalog, TLS | `production_access::*` |
+| Users in storage, managed through the admin API | `admin_api::*`, `users::tests::*` |
 | Diagnostic records | `diagnostics::diagnostic_records_name_requests_but_not_credentials_or_contents` |
 | Automatic compaction on one server | `maintenance_faults::the_preferred_server_creates_snapshots_automatically` |
 

@@ -22,6 +22,7 @@ use crate::metrics::Metrics;
 use crate::model::branch_ref;
 use crate::repository::{Registry, Services};
 use crate::storage::{ObjectStoreBackend, Storage};
+use crate::users::UserStore;
 
 /// Storage from the configuration. `memory` storage is new and empty.
 pub fn storage_from_config(cfg: &Config) -> anyhow::Result<Storage> {
@@ -173,6 +174,10 @@ pub async fn start_with_listener(
     let mut directory = Directory::new(&cfg, config_path)?;
     if cfg.catalog.kind == CatalogKind::Storage {
         directory = directory.with_catalog(Arc::new(Catalog::new(
+            svc.storage.clone(),
+            Duration::from_secs(cfg.catalog.cache_secs),
+        )));
+        directory = directory.with_users(Arc::new(UserStore::new(
             svc.storage.clone(),
             Duration::from_secs(cfg.catalog.cache_secs),
         )));
