@@ -18,3 +18,4 @@ pub mod repository;
 pub mod routing;
 pub mod server;
 pub mod storage;
+pub mod users;

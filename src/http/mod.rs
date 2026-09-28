@@ -1,6 +1,7 @@
 //! Git smart HTTP requests, identity checks, permissions, and resource limits.
 
 pub mod access;
+pub mod api;
 pub mod health;
 pub mod limits;
 pub mod password;
@@ -55,6 +56,7 @@ pub fn router(state: AppState) -> Router {
         .route("/_rustgit/notify", post(crate::routing::notify_handler))
         .route("/_rustgit/snapshot", post(snapshot))
         .route("/_rustgit/rebuild", post(rebuild))
+        .nest("/_rustgit/api", api::router())
         .fallback(git_handler)
         .layer(middleware::from_fn_with_state(state.clone(), request_id))
         .with_state(state)

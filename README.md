@@ -153,6 +153,10 @@ permission-rule version that log entries record.
   delays per push step, in Prometheus text format.
 - `POST /_rustgit/snapshot?repo=<name>` and `POST /_rustgit/rebuild?repo=<name>`
   (admin access): create a snapshot, or rebuild the local cache from storage.
+- `/_rustgit/api/`: JSON for user management and the repository list, for
+  users with `"*" = "admin"`. With `catalog.kind = "storage"`, users created
+  there are kept in storage and need no configuration change; users in the
+  file take precedence. See [decision 4](docs/decisions/0004-users-in-storage.md).
 - Every response has an `x-rustgit-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: rustgit: accepted ...` line. Logs never contain credentials or
@@ -160,6 +164,20 @@ permission-rule version that log entries record.
 - If the storage service is unavailable, new reads and writes fail with 503.
   A push whose result is unknown says so; the client should fetch before it
   pushes again.
+
+## Management interface
+
+`web/` is a Next.js application for the admin API: it lists repositories
+and creates, changes, and deletes users. Sign in with a user that has
+`"*" = "admin"`.
+
+```bash
+cd web && npm install && npm run dev
+```
+
+It reads `RUSTGIT_URL` (default `http://127.0.0.1:8080`),
+`RUSTGIT_PUBLIC_URL` for clone URLs, and `SESSION_SECRET`, which encrypts
+the session cookie and is required with `npm run build && npm start`.
 
 ## Container image
 

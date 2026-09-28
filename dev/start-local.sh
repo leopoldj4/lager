@@ -46,6 +46,10 @@ access_key_id = "rustgit-dev"
 secret_access_key = "rustgit-dev-secret"
 allow_http = true
 
+[catalog]
+kind = "storage"                  # repositories and managed users in storage
+cache_secs = 1
+
 [[users]]
 name = "dev"
 password = "dev"

@@ -2,8 +2,9 @@
 //!
 //! Identities come from the configuration file (development passwords on the
 //! loopback address, salted hashes elsewhere) or from an external identity
-//! service. Repository names come from the configuration file or from the
-//! repository catalog in storage. The directory reloads the file when it
+//! service. Users can also be kept in storage (`crate::users`); users in the
+//! file take precedence. Repository names come from the configuration file or
+//! from the repository catalog in storage. The directory reloads the file when it
 //! changes; each reload increases the permission-rule version that log
 //! entries record.
 
@@ -19,6 +20,7 @@ use super::password::{PasswordHash, constant_time_eq};
 use crate::catalog::Catalog;
 use crate::config::{Access, Config, IdentityConfig, RepoConfig, UserConfig};
 use crate::storage::StorageError;
+use crate::users::UserStore;
 
 pub struct Directory {
     inner: RwLock<Inner>,
@@ -26,6 +28,7 @@ pub struct Directory {
     mtime: Mutex<Option<SystemTime>>,
     identity: Option<IdentityService>,
     catalog: Option<Arc<Catalog>>,
+    users: Option<Arc<UserStore>>,
     /// Recently verified salted hashes, by digest of the credentials: a
     /// slow hash for each Git request would dominate small fetches.
     verified: Mutex<HashMap<[u8; 32], Instant>>,
@@ -58,13 +61,20 @@ pub enum Identity {
         name: String,
         access: BTreeMap<String, Access>,
     },
+    /// A user from storage, with the access its record granted.
+    Stored {
+        name: String,
+        access: BTreeMap<String, Access>,
+    },
 }
 
 impl Identity {
     pub fn name(&self) -> &str {
         match self {
             Identity::Anonymous => "anonymous",
-            Identity::User(u) | Identity::External { name: u, .. } => u,
+            Identity::User(u)
+            | Identity::External { name: u, .. }
+            | Identity::Stored { name: u, .. } => u,
         }
     }
 }
@@ -85,6 +95,7 @@ impl Directory {
             mtime: Mutex::new(mtime),
             identity,
             catalog: None,
+            users: None,
             verified: Mutex::new(HashMap::new()),
         })
     }
@@ -97,6 +108,45 @@ impl Directory {
 
     pub fn catalog(&self) -> Option<&Arc<Catalog>> {
         self.catalog.as_ref()
+    }
+
+    /// Also accepts users from storage.
+    pub fn with_users(mut self, users: Arc<UserStore>) -> Self {
+        self.users = Some(users);
+        self
+    }
+
+    /// The user store, if users can be managed here: not when an identity
+    /// service decides who the users are.
+    pub fn user_store(&self) -> Option<&Arc<UserStore>> {
+        self.users.as_ref().filter(|_| self.identity.is_none())
+    }
+
+    /// Users from the configuration file.
+    pub fn configured_users(&self) -> Vec<UserConfig> {
+        let mut users: Vec<_> = self.inner.read().unwrap().users.values().cloned().collect();
+        users.sort_by(|a, b| a.name.cmp(&b.name));
+        users
+    }
+
+    pub fn is_configured_user(&self, name: &str) -> bool {
+        self.inner.read().unwrap().users.contains_key(name)
+    }
+
+    /// Admin access to every repository: needed for user management.
+    pub fn is_global_admin(&self, who: &Identity) -> bool {
+        let map = match who {
+            Identity::Anonymous => return false,
+            Identity::User(name) => {
+                let inner = self.inner.read().unwrap();
+                return inner
+                    .users
+                    .get(name)
+                    .is_some_and(|u| u.access.get("*") == Some(&Access::Admin));
+            }
+            Identity::External { access, .. } | Identity::Stored { access, .. } => access,
+        };
+        map.get("*") == Some(&Access::Admin)
     }
 
     /// Reloads the table if the configuration file changed. A file that does
@@ -147,25 +197,12 @@ impl Directory {
         if let Some(service) = &self.identity {
             return service.check(&user, &password).await;
         }
-        let inner = self.inner.read().unwrap();
-        let u = inner.users.get(&user).ok_or(AuthError::BadCredentials)?;
+        let configured = self.inner.read().unwrap().users.get(&user).cloned();
+        let Some(u) = configured else {
+            return self.authenticate_stored(user, &password).await;
+        };
         let ok = match (&u.password_hash, &u.password_sha256, &u.password) {
-            (Some(h), _, _) => {
-                let key = credential_digest(&user, &password);
-                let mut verified = self.verified.lock().unwrap();
-                if verified
-                    .get(&key)
-                    .is_some_and(|t| t.elapsed() < VERIFIED_FOR)
-                {
-                    true
-                } else if PasswordHash::parse(h).is_ok_and(|h| h.verify(&password)) {
-                    verified.retain(|_, t| t.elapsed() < VERIFIED_FOR);
-                    verified.insert(key, Instant::now());
-                    true
-                } else {
-                    false
-                }
-            }
+            (Some(h), _, _) => self.verify_hash(&user, &password, h),
             (None, Some(h), _) => hex::decode(h)
                 .map(|h| constant_time_eq(&Sha256::digest(password.as_bytes()), &h))
                 .unwrap_or(false),
@@ -182,6 +219,48 @@ impl Directory {
         }
     }
 
+    async fn authenticate_stored(
+        &self,
+        user: String,
+        password: &str,
+    ) -> Result<Identity, AuthError> {
+        let Some(store) = &self.users else {
+            return Err(AuthError::BadCredentials);
+        };
+        let record = store
+            .lookup(&user)
+            .await
+            .map_err(|e| AuthError::Unavailable(e.to_string()))?
+            .ok_or(AuthError::BadCredentials)?;
+        if self.verify_hash(&user, password, &record.password_hash) {
+            Ok(Identity::Stored {
+                name: user,
+                access: record.access,
+            })
+        } else {
+            Err(AuthError::BadCredentials)
+        }
+    }
+
+    /// Checks a salted hash, reusing recent results. The key includes the
+    /// hash, so a changed password is checked again.
+    fn verify_hash(&self, user: &str, password: &str, hash: &str) -> bool {
+        let key = credential_digest(user, &format!("{password}\0{hash}"));
+        let mut verified = self.verified.lock().unwrap();
+        if verified
+            .get(&key)
+            .is_some_and(|t| t.elapsed() < VERIFIED_FOR)
+        {
+            true
+        } else if PasswordHash::parse(hash).is_ok_and(|h| h.verify(password)) {
+            verified.retain(|_, t| t.elapsed() < VERIFIED_FOR);
+            verified.insert(key, Instant::now());
+            true
+        } else {
+            false
+        }
+    }
+
     /// The access level and the rule version it was computed with.
     pub fn access(&self, who: &Identity, repo: &RepoConfig) -> (Access, u64) {
         let inner = self.inner.read().unwrap();
@@ -193,7 +272,9 @@ impl Directory {
         let base = match who {
             Identity::Anonymous => Access::None,
             Identity::User(name) => granted(inner.users.get(name).map(|u| &u.access)),
-            Identity::External { access, .. } => granted(Some(access)),
+            Identity::External { access, .. } | Identity::Stored { access, .. } => {
+                granted(Some(access))
+            }
         };
         let level = if repo.anonymous_read {
             base.max(Access::Read)
