@@ -5,14 +5,14 @@ variable "region" {
 }
 
 variable "domain" {
-  description = "Git host name. Its DNS zone is created in Vultr DNS; delegate it with NS records."
+  description = "Git host name. Point it at the load balancer with an A record."
   type        = string
 }
 
-variable "tls" {
-  description = "Request a certificate for the domain. Turn on after the NS delegation resolves."
-  type        = bool
-  default     = false
+variable "tls_dir" {
+  description = "Directory with cert.pem, key.pem, and chain.pem for the domain (./cert.sh). Without it, the load balancer serves only HTTP."
+  type        = string
+  default     = null
 }
 
 variable "server_count" {

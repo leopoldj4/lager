@@ -1,3 +1,7 @@
+locals {
+  tls = var.tls_dir != null
+}
+
 data "vultr_object_storage" "main" {
   filter {
     name   = "label"
@@ -87,10 +91,21 @@ resource "vultr_load_balancer" "main" {
   region              = var.region
   label               = "rustgit"
   vpc                 = vultr_vpc.main.id
-  attached_instances  = vultr_instance.server[*].id
+  attached_instances  = sort(vultr_instance.server[*].id)
   balancing_algorithm = "roundrobin"
-  ssl_redirect        = var.tls
-  auto_ssl_domain     = var.tls ? var.domain : null
+  ssl_redirect        = local.tls
+
+  # Vultr's automatic certificates need the parent zone in Vultr DNS, and
+  # Vultr DNS refuses subdomain zones. ./cert.sh gets the certificate
+  # through the parent zone's DNS instead.
+  dynamic "ssl" {
+    for_each = local.tls ? [1] : []
+    content {
+      certificate = file("${var.tls_dir}/cert.pem")
+      private_key = file("${var.tls_dir}/key.pem")
+      chain       = file("${var.tls_dir}/chain.pem")
+    }
+  }
 
   forwarding_rules {
     frontend_protocol = "http"
@@ -100,7 +115,7 @@ resource "vultr_load_balancer" "main" {
   }
 
   dynamic "forwarding_rules" {
-    for_each = var.tls ? [1] : []
+    for_each = local.tls ? [1] : []
     content {
       frontend_protocol = "https"
       frontend_port     = 443
@@ -120,9 +135,4 @@ resource "vultr_load_balancer" "main" {
     unhealthy_threshold = 2
     healthy_threshold   = 2
   }
-}
-
-resource "vultr_dns_domain" "git" {
-  domain = var.domain
-  ip     = vultr_load_balancer.main.ipv4
 }
