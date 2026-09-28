@@ -309,3 +309,54 @@ async fn raw_get(server: &Server, path: &str, user: &str) -> u16 {
     let text = String::from_utf8_lossy(&out);
     text.split_whitespace().nth(1).unwrap().parse().unwrap()
 }
+
+/// Measurements: per step, never per repository.
+#[tokio::test(flavor = "multi_thread")]
+async fn measurements_cover_push_steps_storage_use_and_git_work() {
+    let env = Env::new();
+    let server = env.start().await;
+    let alice = env.client("alice");
+    let a = alice.init(&server.url(), "work").await;
+    alice
+        .commit(&a, &[("f", &noise(1, 50_000)[..])], "one")
+        .await;
+    alice.ok(&a, &["push", "--quiet", "origin", "main"]).await;
+    let fresh = env.start().await;
+    env.client("bob").clone(&fresh.url_as("bob"), "copy").await;
+
+    let text = |s: &Server| {
+        let url = format!("{}/_rustgit/metrics", s.base());
+        async move { reqwest::get(url).await.unwrap().text().await.unwrap() }
+    };
+    let value = |text: &str, name: &str| -> f64 {
+        text.lines()
+            .find_map(|l| l.strip_prefix(&format!("{name} ")))
+            .unwrap_or_else(|| panic!("{name} missing"))
+            .parse()
+            .unwrap()
+    };
+    let writer = text(&server).await;
+    assert_eq!(value(&writer, "rustgit_pushes_accepted_total"), 1.0);
+    assert_eq!(value(&writer, "rustgit_storage_pack_uploads_total"), 1.0);
+    assert!(value(&writer, "rustgit_storage_uploaded_bytes_total") > 50_000.0);
+    assert!(value(&writer, "rustgit_receive_pack_requests_total") >= 1.0);
+    for step in ["push_read_head", "push_upload", "push_cas", "push_total"] {
+        for q in ["0.5", "0.95", "0.99"] {
+            assert!(
+                writer.contains(&format!(
+                    "rustgit_step_seconds{{step=\"{step}\",quantile=\"{q}\"}}"
+                )),
+                "{step} {q}"
+            );
+        }
+    }
+    let reader = text(&fresh).await;
+    assert_eq!(value(&reader, "rustgit_caches"), 1.0);
+    assert_eq!(value(&reader, "rustgit_cache_rebuilds_total"), 1.0);
+    assert_eq!(value(&reader, "rustgit_storage_pack_downloads_total"), 1.0);
+    assert!(value(&reader, "rustgit_upload_pack_requests_total") >= 1.0);
+    assert!(value(&reader, "rustgit_git_cpu_seconds_total") > 0.0);
+    for t in [&writer, &reader] {
+        assert!(!t.contains(&env.repo.to_string()) && !t.contains(REPO));
+    }
+}

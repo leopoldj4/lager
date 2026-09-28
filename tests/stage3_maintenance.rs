@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use common::*;
 use rustgit::config::RepoConfig;
+use rustgit::maintenance::{CleanupOptions, cleanup};
 use rustgit::model::{Operation, RepoId, RepoState, branch_ref};
 use rustgit::repository::admin;
 use rustgit::storage::fault::{Action, Op};
@@ -206,9 +207,13 @@ async fn data_removal_reports_first_and_keeps_recovery_possible() {
     let expected = env.stored_refs().await;
 
     let before = env.storage.list_repo(env.repo).await.unwrap().len();
-    let report = rustgit::maintenance::cleanup(&env.storage, env.repo, Duration::ZERO, true)
-        .await
-        .unwrap();
+    let report = cleanup(
+        &env.storage,
+        env.repo,
+        &CleanupOptions::report(Duration::ZERO),
+    )
+    .await
+    .unwrap();
     assert!(report.report_only);
     assert_eq!(report.removed, 0);
     // The packs of the four pushes before the snapshot are covered by it.
@@ -220,13 +225,19 @@ async fn data_removal_reports_first_and_keeps_recovery_possible() {
     assert_eq!(packs.len(), 4, "{:#?}", report.candidates);
     assert_eq!(env.storage.list_repo(env.repo).await.unwrap().len(), before);
 
-    let removed = rustgit::maintenance::cleanup(&env.storage, env.repo, Duration::ZERO, false)
-        .await
-        .unwrap();
+    let removed = cleanup(
+        &env.storage,
+        env.repo,
+        &CleanupOptions::remove(Duration::ZERO),
+    )
+    .await
+    .unwrap();
     assert_eq!(removed.removed, report.candidates.len());
+    assert!(removed.fence_generation.is_some());
+    // Everything reported is gone; the fence entry is new.
     assert_eq!(
         env.storage.list_repo(env.repo).await.unwrap().len(),
-        before - removed.removed
+        before - removed.removed + 1
     );
 
     // Recovery works from what remains, and the running server still works.
@@ -271,10 +282,13 @@ async fn data_removal_does_not_break_an_active_push() {
     tokio::time::timeout(Duration::from_secs(30), reached.notified())
         .await
         .unwrap();
-    let report =
-        rustgit::maintenance::cleanup(&env.storage, env.repo, Duration::from_secs(3600), false)
-            .await
-            .unwrap();
+    let report = cleanup(
+        &env.storage,
+        env.repo,
+        &CleanupOptions::remove(Duration::from_secs(3600)),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.removed, 0);
     assert!(
         report.retained_recent >= 2,
@@ -548,12 +562,7 @@ async fn one_customer_cannot_read_another_customers_repository() {
     let server = env
         .start_with(
             |cfg| {
-                cfg.repos.push(RepoConfig {
-                    name: "other".into(),
-                    id: other_id,
-                    default_branch: "main".into(),
-                    anonymous_read: false,
-                });
+                cfg.repos.push(RepoConfig::new("other", other_id));
                 // bob and carol belong to the first customer only.
                 for u in &mut cfg.users {
                     if u.name == "bob" || u.name == "carol" {

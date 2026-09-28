@@ -65,6 +65,7 @@ pub async fn create_repository(
         snapshot: None,
         object_format: ObjectFormat::Sha1,
         state: RepoState::Active,
+        removal: None,
     };
     for _ in 0..4 {
         match storage.create_head(&head).await {

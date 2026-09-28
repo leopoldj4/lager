@@ -35,6 +35,8 @@ pub struct Input {
     pub body: Body,
     pub gzip: bool,
     pub max_bytes: u64,
+    /// Customer traffic budget, charged as the body arrives.
+    pub budget: Option<super::limits::ByteBudget>,
 }
 
 /// Starts `cmd` with the request body as stdin and returns its stdout as a
@@ -44,12 +46,14 @@ pub fn spawn_service(
     input: Input,
     guards: Guards,
     label: &'static str,
+    metrics: Arc<crate::metrics::Metrics>,
 ) -> std::io::Result<Body> {
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(false);
     let mut child = cmd.spawn()?;
+    metrics.inc("git_processes_started");
     let mut stdin = child.stdin.take().expect("piped");
     let stdout = child.stdout.take().expect("piped");
     let stderr = child.stderr.take().expect("piped");
@@ -66,16 +70,27 @@ pub fn spawn_service(
         } else {
             Box::pin(reader)
         };
-        let mut limited = (&mut reader).take(input.max_bytes.saturating_add(1));
-        let copied =
-            tokio::io::copy_buf(&mut BufReader::with_capacity(BUF, &mut limited), &mut stdin).await;
-        if let Ok(n) = copied
-            && n > input.max_bytes
-        {
-            over.store(true, Ordering::SeqCst);
-        }
+        use tokio::io::AsyncWriteExt;
+        let mut buf = vec![0u8; BUF];
+        let mut total = 0u64;
+        let result = loop {
+            let n = match reader.read(&mut buf).await {
+                Ok(0) => break Ok(()),
+                Ok(n) => n,
+                Err(e) => break Err(e),
+            };
+            total += n as u64;
+            let within_budget = input.budget.as_ref().is_none_or(|b| b(n as u64));
+            if total > input.max_bytes || !within_budget {
+                over.store(true, Ordering::SeqCst);
+                break Ok(());
+            }
+            if let Err(e) = stdin.write_all(&buf[..n]).await {
+                break Err(e);
+            }
+        };
         drop(stdin);
-        copied.map(|_| ())
+        result
     });
 
     // Diagnostics: keep a bounded amount, drain the rest.
@@ -109,6 +124,7 @@ pub fn spawn_service(
         // keep this task alive.
         writer.abort();
         let status = child.wait().await;
+        metrics.inc("git_processes_exited");
         if cancelled {
             log_exit(label, status);
         }

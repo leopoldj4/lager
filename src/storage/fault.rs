@@ -24,6 +24,8 @@ pub enum Op {
 pub enum Action {
     /// Fail without contacting the service.
     Fail,
+    /// Report a conditional-write conflict without contacting the service.
+    Conflict,
     /// Perform the operation, then report no answer (a lost response).
     LoseResponse,
     /// Wait, then perform the operation.
@@ -124,6 +126,10 @@ impl FaultBackend {
             Some(Action::Fail) => {
                 self.record(op, key, "injected-failure");
                 Err(BackendError::Unavailable("injected failure".into()))
+            }
+            Some(Action::Conflict) => {
+                self.record(op, key, "injected-conflict");
+                Err(BackendError::Conflict)
             }
             Some(Action::LoseResponse) => {
                 let r = f.await;

@@ -6,8 +6,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{CacheInstance, Controller, Known, PendingPush, RepoError};
-use crate::config::Access;
+use super::{CacheInstance, Controller, Known, PendingPush, PushAccess, RepoError};
+use crate::config::{Access, ref_rule};
+use crate::failpoint;
 use crate::git::hook::{HookCommand, HookResponse, HookResult};
 use crate::metrics::StepTimer;
 use crate::model::{
@@ -96,11 +97,59 @@ struct Request {
     id: RequestId,
     checksum: String,
     updates: Vec<RefUpdate>,
+    /// No CAS is sent after this time: uploads of an expired operation may
+    /// already be removed (see `maintenance::cleanup`).
+    deadline: Instant,
 }
+
+/// The pack of the current attempt: the parent entry it was built against,
+/// the pack (none if no objects are new), and its upload time.
+type AttemptPack = Option<(EntryId, Option<PackRef>, u64)>;
 
 enum Attempt {
     Done(HookResponse),
     Retry(&'static str),
+}
+
+/// Whether a change may reference packs uploaded at a given time.
+pub(crate) enum Fence {
+    Clear,
+    /// A pack is on the removal list of an expired fence: upload it again.
+    Reupload,
+    /// A pack is on the removal list of an active fence.
+    Wait,
+}
+
+/// Checks packs against the head's latest removal fence. Earlier fences
+/// expired before the latest one was attached, and every pack of this change
+/// was uploaded after the head was read.
+pub(crate) async fn fence_check(
+    storage: &Storage,
+    head: &Head,
+    packs: &[PackRef],
+    uploaded_at_ms: u64,
+) -> Result<Fence, RepoError> {
+    let Some(r) = &head.removal else {
+        return Ok(Fence::Clear);
+    };
+    let safe_after = r.reuse_after_ms;
+    if packs.is_empty() || uploaded_at_ms > safe_after {
+        return Ok(Fence::Clear);
+    }
+    let fence = storage.get_entry(head.repository, r.entry).await?;
+    let Operation::Removal { packs: removed, .. } = &fence.operation else {
+        return Err(RepoError::Internal(
+            "removal pointer names another entry".into(),
+        ));
+    };
+    if !packs.iter().any(|p| removed.contains(&p.sha256)) {
+        return Ok(Fence::Clear);
+    }
+    Ok(if now_ms() > safe_after {
+        Fence::Reupload
+    } else {
+        Fence::Wait
+    })
 }
 
 impl Controller {
@@ -112,16 +161,16 @@ impl Controller {
         let format = op.cache.format;
         let updates = match parse_commands(format, &commands) {
             Ok(u) => u,
-            Err(m) => return reject_all(&names, &m, None),
+            Err(m) => return reject_all(&names, &m),
         };
         let _w = self.write_op.lock().await;
         let req = Request {
-            id: RequestId::new(),
+            id: op.request,
             checksum: request_checksum(&op.user, &updates),
             updates,
+            deadline: Instant::now() + Duration::from_secs(self.svc.limits.push_deadline_secs),
         };
-        let deadline = Instant::now() + Duration::from_secs(self.svc.limits.push_deadline_secs);
-        let mut pack: Option<(EntryId, Option<PackRef>)> = None;
+        let mut pack: AttemptPack = None;
         let mut attempt = 0u32;
         loop {
             attempt += 1;
@@ -129,24 +178,25 @@ impl Controller {
                 Ok(Attempt::Done(r)) => return r,
                 Ok(Attempt::Retry(why)) => {
                     self.svc.metrics.inc("push_retries");
-                    tracing::debug!(repo = %self.repo, attempt, why, "push retry");
+                    tracing::debug!(repo = %self.repo, request = %req.id, attempt, why, "push retry");
                 }
                 Err(RepoError::Unavailable(m)) => {
                     self.svc.metrics.inc("push_storage_unavailable");
-                    return reject_all(&names, &format!("storage unavailable: {m}"), None);
+                    return reject_all(&names, &format!("storage unavailable: {m}"));
                 }
                 Err(RepoError::NotFound) => {
-                    return reject_all(&names, "repository not found", None);
+                    return reject_all(&names, "repository not found");
                 }
-                Err(RepoError::Deleted) => return reject_all(&names, "repository deleted", None),
+                Err(RepoError::Deleted) => return reject_all(&names, "repository deleted"),
+                Err(RepoError::NoSpace(m)) => return reject_all(&names, &m),
                 Err(RepoError::Internal(m)) => {
-                    tracing::error!(repo = %self.repo, error = %m, "push failed");
-                    return reject_all(&names, "internal error", None);
+                    tracing::error!(repo = %self.repo, request = %req.id, error = %m, "push failed");
+                    return reject_all(&names, &format!("internal error (request {})", req.id));
                 }
             }
-            if attempt >= self.svc.limits.push_retry_limit || Instant::now() >= deadline {
+            if attempt >= self.svc.limits.push_retry_limit || Instant::now() >= req.deadline {
                 self.svc.metrics.inc("push_conflicts_exhausted");
-                return reject_all(&names, "concurrent changes; retry the push", None);
+                return reject_all(&names, "concurrent changes; retry the push");
             }
             tokio::time::sleep(jitter(attempt)).await;
         }
@@ -157,13 +207,17 @@ impl Controller {
         op: &PendingPush,
         req: &Request,
         names: &[String],
-        pack: &mut Option<(EntryId, Option<PackRef>)>,
+        pack: &mut AttemptPack,
     ) -> Result<Attempt, RepoError> {
         let svc = &self.svc;
+        let fail = &svc.failpoints;
         // Permission rules can change between attempts.
-        let access = (op.access)();
+        let access = (op.access)().await.map_err(RepoError::Unavailable)?;
+        if access.repo != self.repo {
+            return Err(RepoError::NotFound);
+        }
         if access.level < Access::Write {
-            return Ok(Attempt::Done(reject_all(names, "permission denied", None)));
+            return Ok(Attempt::Done(reject_all(names, "permission denied")));
         }
 
         // Steps 5-6: read the head, bring the local copy to it.
@@ -185,7 +239,6 @@ impl Controller {
                 return Ok(Attempt::Done(reject_all(
                     names,
                     "server cache was replaced; retry the push",
-                    None,
                 )));
             }
             let k = st.known.clone().expect("current");
@@ -206,24 +259,40 @@ impl Controller {
             }
         };
         if let Some(r) = self
-            .check_objects_and_rules(dir, &base.refs, &req.updates, access.level)
+            .check_objects_and_rules(dir, &base.refs, &req.updates, &access)
             .await?
         {
             return Ok(Attempt::Done(reject_some(names, &r)));
         }
 
         // Steps 10-12: a pack relative to the parent state, uploaded and checked.
-        if pack.as_ref().map(|(e, _)| *e) != Some(base.head.latest_entry) {
+        fail.hit(failpoint::PUSH_BEFORE_UPLOAD).await;
+        if pack.as_ref().map(|(e, _, _)| *e) != Some(base.head.latest_entry) {
             let p = self
                 .build_and_store_pack(dir, &base.refs, &req.updates)
                 .await?;
-            *pack = Some((base.head.latest_entry, p));
+            *pack = Some((base.head.latest_entry, p, now_ms()));
         }
-        let packs: Vec<PackRef> = pack
-            .as_ref()
-            .and_then(|(_, p)| p.clone())
-            .into_iter()
-            .collect();
+        let (packs, uploaded_at): (Vec<PackRef>, u64) = match pack.as_ref() {
+            Some((_, p, at)) => (p.clone().into_iter().collect(), *at),
+            None => (vec![], now_ms()),
+        };
+        match fence_check(&svc.storage, &head, &packs, uploaded_at).await? {
+            Fence::Clear => {}
+            Fence::Reupload => {
+                *pack = None;
+                return Ok(Attempt::Retry("pack was on a removal list"));
+            }
+            Fence::Wait => {
+                *pack = None;
+                svc.metrics.inc("push_removal_fence_waits");
+                return Ok(Attempt::Done(reject_all(
+                    names,
+                    "stored data removal in progress; retry the push later",
+                )));
+            }
+        }
+        fail.hit(failpoint::PUSH_AFTER_UPLOAD).await;
 
         // Step 13: an entry that points to the observed previous entry.
         let entry = LogEntry {
@@ -246,6 +315,7 @@ impl Controller {
             let _t = StepTimer::new(&svc.metrics, "push_put_entry");
             svc.storage.put_entry(&entry).await?;
         }
+        fail.hit(failpoint::PUSH_AFTER_ENTRY).await;
 
         // Steps 14-18 under the state lock.
         let mut st = self.state.lock().await;
@@ -267,10 +337,18 @@ impl Controller {
                 return Ok(Attempt::Done(reject_all(
                     names,
                     "server cache was replaced; retry the push",
-                    None,
                 )));
             }
         };
+        fail.hit(failpoint::PUSH_AFTER_PREPARE).await;
+        if Instant::now() >= req.deadline {
+            let _ = txn.abort().await;
+            svc.metrics.inc("push_deadline_expired");
+            return Ok(Attempt::Done(reject_all(
+                names,
+                "push took too long; retry the push",
+            )));
+        }
         let new_head = head.advance(&entry);
         let expected = base.etag.clone().unwrap_or(etag);
         let outcome = {
@@ -286,7 +364,7 @@ impl Controller {
             }
             CasOutcome::Unknown(m) => {
                 svc.metrics.inc("cas_unknown");
-                tracing::warn!(repo = %self.repo, error = %m, "CAS result unknown; resolving");
+                tracing::warn!(repo = %self.repo, request = %req.id, error = %m, "CAS result unknown; resolving");
                 let until =
                     Instant::now() + Duration::from_secs(svc.limits.unknown_result_deadline_secs);
                 match resolve_unknown_cas(&svc.storage, &new_head, &expected, entry.id, until).await
@@ -299,22 +377,26 @@ impl Controller {
                     Resolution::Unknown(m) => {
                         svc.metrics.inc("push_result_unknown");
                         let _ = txn.abort().await;
+                        tracing::warn!(repo = %self.repo, request = %req.id, error = %m, "push result unknown");
                         // The next storage check applies the entry if it was accepted.
                         return Ok(Attempt::Done(reject_all(
                             names,
                             &format!(
-                                "result unknown (storage did not answer: {m}); fetch to check before retrying"
+                                "result unknown (request {}; storage did not answer: {m}); \
+                                 fetch to check before retrying",
+                                req.id
                             ),
-                            None,
                         )));
                     }
                 }
             }
         };
+        fail.hit(failpoint::PUSH_AFTER_CAS).await;
 
         // Step 17: complete the local transaction. The push is accepted now,
         // whatever happens locally.
         svc.metrics.inc("pushes_accepted");
+        tracing::info!(repo = %self.repo, request = %req.id, generation = entry.generation, refs = req.updates.len(), "push accepted");
         match txn.commit().await {
             Ok(()) => {
                 let marker = super::sync::write_marker(
@@ -339,7 +421,7 @@ impl Controller {
                 }
             }
             Err(e) => {
-                tracing::error!(repo = %self.repo, error = %e, "local completion failed after CAS; cache blocked");
+                tracing::error!(repo = %self.repo, request = %req.id, error = %e, "local completion failed after CAS; cache blocked");
                 svc.metrics.inc("local_completion_failures");
                 st.poison();
             }
@@ -355,11 +437,12 @@ impl Controller {
             generation: entry.generation,
         };
         if let Err(e) = svc.storage.put_receipt(&receipt).await {
-            tracing::warn!(repo = %self.repo, error = %e, "receipt not stored; the history still holds the entry");
+            tracing::warn!(repo = %self.repo, request = %req.id, error = %e, "receipt not stored; the history still holds the entry");
         }
         if let Some(n) = svc.notifier.lock().unwrap().clone() {
             n(self.repo, entry.generation);
         }
+        fail.hit(failpoint::PUSH_AFTER_LOCAL_COMMIT).await;
         Ok(Attempt::Done(HookResponse {
             results: names
                 .iter()
@@ -370,53 +453,95 @@ impl Controller {
                 })
                 .collect(),
             messages: vec![format!(
-                "rustgit: accepted as generation {}",
-                entry.generation
+                "rustgit: accepted as generation {} (request {})",
+                entry.generation, req.id
             )],
         }))
     }
 
-    /// Checks objects, types, fast-forward rules, and force permission.
+    /// Checks objects, types, sizes, fast-forward rules, and ref permissions.
     async fn check_objects_and_rules(
         &self,
         dir: &std::path::Path,
         base: &RefState,
         updates: &[RefUpdate],
-        level: Access,
+        access: &PushAccess,
     ) -> Result<Option<Vec<(String, String)>>, RepoError> {
         let git = &self.svc.git;
+        let limits = &self.svc.limits;
         let new_oids: Vec<Oid> = updates.iter().filter_map(|u| u.new.clone()).collect();
         let types = git.object_types(dir, &new_oids).await?;
         let mut bad = Vec::new();
         for u in updates {
             let name = u.name.to_string();
+            let rule = ref_rule(&access.ref_rules, u.name.as_str());
+            let (kind, need) = match (&u.old, &u.new) {
+                (_, None) => ("deletion", rule.map_or(Access::Write, |r| r.delete)),
+                (None, Some(_)) => ("creation", rule.map_or(Access::Write, |r| r.update)),
+                (Some(old), Some(new)) => {
+                    let forced = match types.get(new).cloned().flatten() {
+                        Some(_) if u.name.is_tag() => true,
+                        Some(t) if t == "commit" => !git.is_ancestor(dir, old, new).await?,
+                        // Missing or wrong objects are reported below.
+                        _ => false,
+                    };
+                    if forced {
+                        ("force", rule.map_or(Access::Force, |r| r.force))
+                    } else {
+                        ("update", rule.map_or(Access::Write, |r| r.update))
+                    }
+                }
+            };
+            if access.level < need {
+                let why = match (kind, rule) {
+                    ("force", None) if u.name.is_tag() => {
+                        "tag update needs force permission".into()
+                    }
+                    ("force", None) => "non-fast-forward; force permission required".into(),
+                    _ => format!("ref rule: {kind} needs {need:?} access").to_lowercase(),
+                };
+                bad.push((name, why));
+                continue;
+            }
             let Some(new) = &u.new else { continue };
             match types.get(new).cloned().flatten() {
                 None => bad.push((name, "missing object".into())),
                 Some(t) if u.name.is_branch() && t != "commit" => {
                     bad.push((name, format!("branch must point to a commit, not a {t}")))
                 }
-                Some(_) => {
-                    if let Some(old) = &u.old {
-                        let forced = if u.name.is_tag() {
-                            true
-                        } else {
-                            !git.is_ancestor(dir, old, new).await?
-                        };
-                        if forced && level < Access::Force {
-                            let why = if u.name.is_tag() {
-                                "tag update needs force permission"
-                            } else {
-                                "non-fast-forward; force permission required"
-                            };
-                            bad.push((name, why.into()));
-                        }
-                    }
-                }
+                Some(_) => {}
             }
         }
-        let _ = base;
-        Ok(if bad.is_empty() { None } else { Some(bad) })
+        if !bad.is_empty() {
+            return Ok(Some(bad));
+        }
+        if !new_oids.is_empty() {
+            let exclude: Vec<Oid> = base.refs.values().cloned().collect();
+            let (total, largest) = git.object_sizes(dir, &new_oids, &exclude).await?;
+            let reason = if largest > limits.max_object_bytes {
+                Some(format!(
+                    "object larger than {} bytes",
+                    limits.max_object_bytes
+                ))
+            } else if total > limits.max_expanded_bytes {
+                Some(format!(
+                    "push expands to more than {} bytes",
+                    limits.max_expanded_bytes
+                ))
+            } else {
+                None
+            };
+            if let Some(r) = reason {
+                self.svc.metrics.inc("object_limit_rejections");
+                return Ok(Some(
+                    updates
+                        .iter()
+                        .map(|u| (u.name.to_string(), r.clone()))
+                        .collect(),
+                ));
+            }
+        }
+        Ok(None)
     }
 
     async fn build_and_store_pack(
@@ -480,7 +605,7 @@ fn parse_commands(
         .collect()
 }
 
-fn reject_all(names: &[String], reason: &str, _detail: Option<&str>) -> HookResponse {
+fn reject_all(names: &[String], reason: &str) -> HookResponse {
     HookResponse {
         results: names
             .iter()

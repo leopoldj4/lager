@@ -1,31 +1,40 @@
 //! Git smart HTTP requests, identity checks, permissions, and resource limits.
 
 pub mod access;
+pub mod limits;
+pub mod password;
 pub mod process;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tokio::sync::Semaphore;
+use tracing::Instrument;
 
-use self::access::{Directory, Identity};
+use self::access::{AuthError, Directory, Identity};
+use self::limits::{CustomerLimits, LimitExceeded};
 use self::process::{Guards, Input, spawn_service};
 use crate::config::{Access, RepoConfig};
 use crate::git::hook;
+use crate::model::RequestId;
 use crate::repository::{PendingPush, PushAccess, Registry, RepoError};
+
+pub const REQUEST_ID_HEADER: &str = "x-rustgit-request-id";
 
 pub struct AppInner {
     pub registry: Arc<Registry>,
     pub directory: Arc<Directory>,
     pub processes: Arc<Semaphore>,
-    pub disk: Arc<DiskReservations>,
+    pub process_wait: Duration,
+    pub customers: CustomerLimits,
     pub routing: Option<Arc<crate::routing::Routing>>,
     pub socket_path: PathBuf,
     pub admin_api: bool,
@@ -39,15 +48,78 @@ pub fn router(state: AppState) -> Router {
         .route("/_rustgit/metrics", get(metrics))
         .route("/_rustgit/notify", post(crate::routing::notify_handler))
         .route("/_rustgit/snapshot", post(snapshot))
+        .route("/_rustgit/rebuild", post(rebuild))
         .fallback(git_handler)
+        .layer(middleware::from_fn(request_id))
         .with_state(state)
 }
 
+/// The identifier of one HTTP request, for diagnostic records. A push uses
+/// it as its request UUID, so the log entry and the server log agree.
+#[derive(Clone, Copy, Debug)]
+pub struct RequestTag(pub uuid::Uuid);
+
+/// Gives each request an identifier, a log span, and one summary record.
+/// Credentials and contents are never logged.
+async fn request_id(mut req: Request, next: Next) -> Response {
+    let id = uuid::Uuid::new_v4();
+    req.extensions_mut().insert(RequestTag(id));
+    let span = tracing::info_span!("request", id = %id);
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let start = Instant::now();
+    let mut resp = next.run(req).instrument(span.clone()).await;
+    resp.headers_mut().insert(
+        REQUEST_ID_HEADER,
+        HeaderValue::from_str(&id.to_string()).expect("uuid"),
+    );
+    span.in_scope(|| {
+        tracing::info!(
+            %method,
+            path,
+            status = resp.status().as_u16(),
+            ms = start.elapsed().as_millis() as u64,
+            "request"
+        )
+    });
+    resp
+}
+
 async fn metrics(State(s): State<AppState>) -> Response {
+    use std::sync::atomic::Ordering::Relaxed;
+    let svc = &s.registry.svc;
+    let mut text = svc.metrics.render();
+    let st = svc.storage.stats();
+    for (name, v) in [
+        ("storage_pack_uploads_total", st.pack_uploads.load(Relaxed)),
+        (
+            "storage_uploaded_bytes_total",
+            st.uploaded_bytes.load(Relaxed),
+        ),
+        (
+            "storage_pack_downloads_total",
+            st.pack_downloads.load(Relaxed),
+        ),
+        (
+            "storage_downloaded_bytes_total",
+            st.downloaded_bytes.load(Relaxed),
+        ),
+    ] {
+        text.push_str(&format!("rustgit_{name} {v}\n"));
+    }
+    let mut caches = 0;
+    for c in s.registry.controllers() {
+        caches += c.cached_generation().await.is_some() as u64;
+    }
+    text.push_str(&format!("rustgit_caches {caches}\n"));
+    text.push_str(&format!(
+        "rustgit_git_processes_in_use {}\n",
+        svc.limits.max_git_processes - s.processes.available_permits()
+    ));
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        s.registry.svc.metrics.render(),
+        text,
     )
         .into_response()
 }
@@ -130,18 +202,32 @@ fn unauthorized() -> Response {
     r
 }
 
+fn unavailable(what: &str, m: &str) -> Response {
+    tracing::warn!(error = %m, "{what} unavailable");
+    plain(
+        StatusCode::SERVICE_UNAVAILABLE,
+        &format!("{what} unavailable; retry later"),
+    )
+}
+
+fn too_many(e: LimitExceeded, metrics: &crate::metrics::Metrics) -> Response {
+    metrics.inc("customer_limit_rejections");
+    let mut r = plain(
+        StatusCode::TOO_MANY_REQUESTS,
+        &format!("customer limit reached: {}", e.0),
+    );
+    r.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+    r
+}
+
 fn repo_error(e: RepoError) -> Response {
     match e {
         RepoError::NotFound | RepoError::Deleted => {
             plain(StatusCode::NOT_FOUND, "repository not found")
         }
-        RepoError::Unavailable(m) => {
-            tracing::warn!(error = %m, "storage unavailable");
-            plain(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "storage unavailable; retry later",
-            )
-        }
+        RepoError::Unavailable(m) => unavailable("storage", &m),
+        RepoError::NoSpace(m) => plain(StatusCode::INSUFFICIENT_STORAGE, &m),
         RepoError::Internal(m) => {
             tracing::error!(error = %m, "internal error");
             plain(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
@@ -156,7 +242,7 @@ struct Authorized {
 
 /// Checks identity and repository permission. Unknown repositories and
 /// missing permission look the same to anonymous clients.
-fn authorize(
+async fn authorize(
     s: &AppInner,
     headers: &HeaderMap,
     name: &str,
@@ -166,15 +252,24 @@ fn authorize(
     let auth = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
-    let identity = s.directory.authenticate(auth).map_err(|_| unauthorized())?;
-    let Some(repo) = s.directory.repo(name) else {
+    let identity = match s.directory.authenticate(auth).await {
+        Ok(i) => i,
+        Err(AuthError::BadCredentials) => return Err(unauthorized()),
+        Err(AuthError::Unavailable(m)) => return Err(unavailable("identity service", &m)),
+    };
+    let repo = s
+        .directory
+        .repo(name)
+        .await
+        .map_err(|e| repo_error(e.into()))?;
+    let Some(repo) = repo else {
         return Err(if identity == Identity::Anonymous {
             unauthorized()
         } else {
             plain(StatusCode::NOT_FOUND, "repository not found")
         });
     };
-    let (level, _) = s.directory.access(&identity, name);
+    let (level, _) = s.directory.access(&identity, &repo);
     if level < need {
         return Err(match (&identity, level) {
             (Identity::Anonymous, _) => unauthorized(),
@@ -182,6 +277,9 @@ fn authorize(
             _ => plain(StatusCode::FORBIDDEN, "permission denied"),
         });
     }
+    s.customers
+        .admit_request(repo.customer.as_deref())
+        .map_err(|e| too_many(e, &s.registry.svc.metrics))?;
     Ok(Authorized { repo, identity })
 }
 
@@ -203,20 +301,37 @@ fn git_protocol(headers: &HeaderMap) -> Option<String> {
     (ok && !kept.is_empty()).then(|| kept.join(":"))
 }
 
-async fn process_permit(s: &AppInner) -> Result<tokio::sync::OwnedSemaphorePermit, Response> {
-    match tokio::time::timeout(Duration::from_secs(10), s.processes.clone().acquire_owned()).await {
-        Ok(Ok(p)) => Ok(p),
+/// A server process slot and, for customers with a limit, a customer slot.
+async fn process_permit(s: &AppInner, repo: &RepoConfig) -> Result<Guards, Response> {
+    let mut guards = Guards::default();
+    let customer = s
+        .customers
+        .process_permit(repo.customer.as_deref())
+        .map_err(|e| too_many(e, &s.registry.svc.metrics))?;
+    if let Some(p) = customer {
+        guards.hold(p);
+    }
+    match tokio::time::timeout(s.process_wait, s.processes.clone().acquire_owned()).await {
+        Ok(Ok(p)) => {
+            guards.hold(p);
+            Ok(guards)
+        }
         _ => {
             s.registry.svc.metrics.inc("process_limit_rejections");
-            Err(plain(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "server busy; retry later",
-            ))
+            let mut r = plain(StatusCode::SERVICE_UNAVAILABLE, "server busy; retry later");
+            r.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+            Err(r)
         }
     }
 }
 
 async fn git_handler(State(s): State<AppState>, req: Request) -> Response {
+    let tag = req
+        .extensions()
+        .get::<RequestTag>()
+        .copied()
+        .unwrap_or(RequestTag(uuid::Uuid::new_v4()));
     let (parts, body) = req.into_parts();
     let Some(route) = parse_git_path(parts.uri.path()) else {
         return plain(StatusCode::NOT_FOUND, "not found");
@@ -235,7 +350,7 @@ async fn git_handler(State(s): State<AppState>, req: Request) -> Response {
             info_refs(&s, &parts.headers, &parts.uri, &name, service, body).await
         }
         (&Method::POST, GitRoute::Rpc(name, service)) => {
-            rpc(&s, &parts.headers, &parts.uri, &name, service, body).await
+            rpc(&s, tag, &parts.headers, &parts.uri, &name, service, body).await
         }
         _ => Err(plain(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")),
     };
@@ -250,17 +365,18 @@ async fn info_refs(
     service: Service,
     body: Body,
 ) -> Result<Response, Response> {
-    let auth = authorize(s, headers, name, service.needs())?;
+    let auth = authorize(s, headers, name, service.needs()).await?;
     if let Err(r) =
         crate::routing::forward_or_keep(s, Method::GET, uri, headers, auth.repo.id, body).await
     {
         return Ok(r);
     }
+    s.registry.svc.metrics.inc("ref_advertisements");
     let controller = s.registry.controller(auth.repo.id);
     let view = controller.prepare_read().await.map_err(repo_error)?;
-    let _permit = process_permit(s).await?;
+    let _permits = process_permit(s, &auth.repo).await?;
     let protocol = git_protocol(headers);
-    let mut cmd = s.registry.svc.git.command();
+    let mut cmd = s.registry.svc.git.service_command();
     cmd.arg(service.subcommand())
         .arg("--stateless-rpc")
         .arg("--advertise-refs")
@@ -302,13 +418,14 @@ fn git_response(content_type: String, body: Body) -> Response {
 
 async fn rpc(
     s: &AppState,
+    tag: RequestTag,
     headers: &HeaderMap,
     uri: &axum::http::Uri,
     name: &str,
     service: Service,
     body: Body,
 ) -> Result<Response, Response> {
-    let auth = authorize(s, headers, name, service.needs())?;
+    let auth = authorize(s, headers, name, service.needs()).await?;
     let expected = format!("application/x-{}-request", service.name());
     if headers
         .get(header::CONTENT_TYPE)
@@ -347,8 +464,13 @@ async fn rpc(
         .and_then(|v| v.parse::<u64>().ok());
     let mut guards = Guards::default();
     let controller = s.registry.controller(auth.repo.id);
-    let mut cmd = s.registry.svc.git.command();
+    let mut cmd = s.registry.svc.git.service_command();
+    s.registry.svc.metrics.inc(match service {
+        Service::UploadPack => "upload_pack_requests",
+        Service::ReceivePack => "receive_pack_requests",
+    });
     let max_bytes;
+    let mut budget = None;
     match service {
         Service::UploadPack => {
             // Negotiation requests are small; the limit protects memory and disk.
@@ -362,38 +484,38 @@ async fn rpc(
             if content_length.is_some_and(|n| n > max_bytes) {
                 return Err(plain(StatusCode::PAYLOAD_TOO_LARGE, "push too large"));
             }
+            let expected = content_length.unwrap_or(limits.default_push_reservation_bytes);
+            budget = s
+                .customers
+                .receive_budget(auth.repo.customer.as_deref(), content_length.unwrap_or(0))
+                .map_err(|e| too_many(e, &s.registry.svc.metrics))?;
             let reservation = s
+                .registry
+                .svc
                 .disk
-                .reserve(
-                    content_length
-                        .unwrap_or(limits.default_push_reservation_bytes)
-                        .saturating_mul(2),
-                )
+                .reserve(expected.saturating_mul(2))
                 .map_err(|m| {
                     s.registry.svc.metrics.inc("disk_limit_rejections");
                     plain(StatusCode::INSUFFICIENT_STORAGE, &m)
                 })?;
             guards.hold(reservation);
             let (cache, view) = controller.prepare_write().await.map_err(repo_error)?;
-            let directory = s.directory.clone();
-            let identity_name = auth.identity.name().to_string();
-            let repo_name = auth.repo.name.clone();
-            let who = auth.identity;
             let op = PendingPush {
                 repo: auth.repo.id,
-                user: identity_name,
-                access: Arc::new(move || {
-                    directory.reload_if_changed();
-                    let (level, rules_version) = directory.access(&who, &repo_name);
-                    PushAccess {
-                        level,
-                        rules_version,
-                    }
-                }),
+                user: auth.identity.name().to_string(),
+                request: RequestId(tag.0),
+                access: push_access(
+                    s.directory.clone(),
+                    auth.identity.clone(),
+                    auth.repo.name.clone(),
+                ),
                 cache: cache.clone(),
             };
             let token = s.registry.register_push(op);
-            cmd.arg("receive-pack")
+            // Git also stops reading at the receive limit.
+            cmd.arg("-c")
+                .arg(format!("receive.maxInputSize={max_bytes}"))
+                .arg("receive-pack")
                 .arg("--stateless-rpc")
                 .arg(&cache.dir)
                 .env(hook::ENV_SOCKET, &s.socket_path)
@@ -406,16 +528,18 @@ async fn rpc(
     if let Some(p) = git_protocol(headers) {
         cmd.env("GIT_PROTOCOL", p);
     }
-    guards.hold(process_permit(s).await?);
+    guards.hold(process_permit(s, &auth.repo).await?);
     let body = spawn_service(
         cmd,
         Input {
             body,
             gzip,
             max_bytes,
+            budget,
         },
         guards,
         service.name(),
+        s.registry.svc.metrics.clone(),
     )
     .map_err(|e| repo_error(RepoError::Internal(e.to_string())))?;
     Ok(git_response(
@@ -424,8 +548,37 @@ async fn rpc(
     ))
 }
 
+/// The permission check that the push procedure repeats before each
+/// attempt: the configuration file or catalog can change in between.
+fn push_access(
+    directory: Arc<Directory>,
+    who: Identity,
+    repo_name: String,
+) -> crate::repository::AccessCheck {
+    Arc::new(move || {
+        let (directory, who, repo_name) = (directory.clone(), who.clone(), repo_name.clone());
+        Box::pin(async move {
+            directory.reload_if_changed();
+            let repo = directory
+                .repo(&repo_name)
+                .await
+                .map_err(|e| e.to_string())?;
+            let Some(repo) = repo else {
+                return Ok(PushAccess::none());
+            };
+            let (level, rules_version) = directory.access(&who, &repo);
+            Ok(PushAccess {
+                repo: repo.id,
+                level,
+                rules_version,
+                ref_rules: repo.ref_rules,
+            })
+        })
+    })
+}
+
 #[derive(serde::Deserialize)]
-struct SnapshotQuery {
+struct RepoQuery {
     repo: String,
 }
 
@@ -433,18 +586,43 @@ struct SnapshotQuery {
 async fn snapshot(
     State(s): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<SnapshotQuery>,
+    Query(q): Query<RepoQuery>,
 ) -> Response {
     if !s.admin_api {
         return plain(StatusCode::NOT_FOUND, "not found");
     }
-    let auth = match authorize(&s, &headers, &q.repo, Access::Admin) {
+    let auth = match authorize(&s, &headers, &q.repo, Access::Admin).await {
         Ok(a) => a,
         Err(r) => return r,
     };
     let controller = s.registry.controller(auth.repo.id);
     match crate::maintenance::snapshot(&controller, auth.identity.name()).await {
         Ok(r) => (StatusCode::OK, axum::Json(r)).into_response(),
+        Err(e) => repo_error(e),
+    }
+}
+
+/// Blocks the local cache of a repository and rebuilds it from storage.
+/// Active reads finish with the cache they started with.
+async fn rebuild(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RepoQuery>,
+) -> Response {
+    if !s.admin_api {
+        return plain(StatusCode::NOT_FOUND, "not found");
+    }
+    let auth = match authorize(&s, &headers, &q.repo, Access::Admin).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let controller = s.registry.controller(auth.repo.id);
+    match controller.rebuild_cache().await {
+        Ok(generation) => (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({ "generation": generation })),
+        )
+            .into_response(),
         Err(e) => repo_error(e),
     }
 }

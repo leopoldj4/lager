@@ -38,7 +38,12 @@
         # the implementation plan requires.
         git = pkgs.git;
 
-        src = craneLib.cleanCargoSource ./.;
+        # Cargo sources, plus the README: a unit test checks its examples.
+        src = lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type: lib.hasSuffix "/README.md" path || craneLib.filterCargoSources path type;
+          name = "source";
+        };
 
         commonArgs = {
           inherit src;
@@ -62,11 +67,27 @@
             meta.mainProgram = "rustgit";
           }
         );
+        # Local mode: the pinned SeaweedFS as the S3-compatible service, one
+        # server, development credentials. Storage data and caches live in
+        # separate directories under ./.local.
+        local = pkgs.writeShellApplication {
+          name = "rustgit-local";
+          runtimeInputs = [
+            rustgit
+            pkgs.seaweedfs
+            git
+            pkgs.coreutils
+            pkgs.gnugrep
+          ];
+          text = builtins.readFile ./dev/start-local.sh;
+        };
       in
       {
         packages.default = rustgit;
+        packages.local = local;
 
         apps.default = flake-utils.lib.mkApp { drv = rustgit; };
+        apps.local = flake-utils.lib.mkApp { drv = local; };
 
         checks = {
           inherit rustgit;

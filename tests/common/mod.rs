@@ -47,6 +47,14 @@ impl Env {
         Self::with_limits(test_limits())
     }
 
+    /// Shared storage on another backend, for example a provider.
+    pub fn on_backend(backend: Arc<dyn rustgit::storage::Backend>, prefix: &str) -> Env {
+        let mut env = Self::new();
+        env.fault = Arc::new(FaultBackend::new(backend));
+        env.storage = Storage::new(env.fault.clone(), prefix);
+        env
+    }
+
     pub fn with_limits(limits: Limits) -> Env {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(
@@ -96,21 +104,21 @@ impl Env {
             },
             limits: self.limits.clone(),
             routing: RoutingConfig::default(),
-            repos: vec![RepoConfig {
-                name: REPO.into(),
-                id: self.repo,
-                default_branch: "main".into(),
-                anonymous_read: false,
-            }],
+            repos: vec![RepoConfig::new(REPO, self.repo)],
             users: USERS
                 .iter()
                 .map(|(name, level)| UserConfig {
                     name: (*name).into(),
                     password: Some(password(name)),
                     password_sha256: None,
+                    password_hash: None,
                     access: BTreeMap::from([("*".to_string(), *level)]),
                 })
                 .collect(),
+            customers: vec![],
+            identity: None,
+            catalog: Default::default(),
+            maintenance: Default::default(),
         }
     }
 
@@ -481,4 +489,233 @@ pub async fn check_history(env: &Env, pushes: &[(String, PushResult)]) {
             PushResult::Unknown => assert!(n <= 1),
         }
     }
+}
+
+impl Env {
+    /// Starts `n` servers with a fixed server list (`s0`, `s1`, ...) and
+    /// separate caches on the shared storage.
+    pub async fn cluster(&self, n: usize, edit: impl Fn(&mut Config)) -> Vec<Server> {
+        let k = self
+            .servers
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut listeners = Vec::new();
+        for _ in 0..n {
+            listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+        }
+        let peers: Vec<rustgit::config::PeerConfig> = listeners
+            .iter()
+            .enumerate()
+            .map(|(i, l)| rustgit::config::PeerConfig {
+                id: format!("s{i}"),
+                url: format!("http://{}", l.local_addr().unwrap()),
+            })
+            .collect();
+        let mut out = Vec::new();
+        for (i, l) in listeners.into_iter().enumerate() {
+            let cache_dir = self.path(&format!("c{k}-{i}"));
+            let mut cfg = self.config(&cache_dir);
+            cfg.server.id = format!("s{i}");
+            cfg.routing.servers = peers.clone();
+            cfg.routing.peer_token = Some("peer-secret".into());
+            edit(&mut cfg);
+            let running = rustgit::server::start_with_listener(cfg, None, self.storage.clone(), l)
+                .await
+                .unwrap();
+            out.push(Server { running, cache_dir });
+        }
+        out
+    }
+}
+
+impl Server {
+    pub fn svc(&self) -> &Arc<rustgit::repository::Services> {
+        &self.running.registry().svc
+    }
+
+    pub fn metric(&self, name: &str) -> u64 {
+        self.svc().metrics.get(name)
+    }
+
+    pub fn url_for(&self, user: &str, repo: &str) -> String {
+        format!(
+            "http://{user}:{}@{}/{repo}.git",
+            password(user),
+            self.running.addr
+        )
+    }
+}
+
+/// A load balancer that sends each HTTP request, not each connection, to
+/// the next server. One Git operation then uses several servers.
+pub struct Balancer {
+    pub addr: std::net::SocketAddr,
+    /// The server index for each request, in order.
+    pub served: Arc<std::sync::Mutex<Vec<usize>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for Balancer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl Balancer {
+    pub async fn start(servers: &[&Server]) -> Balancer {
+        use axum::body::Body;
+        use axum::extract::{Request, State};
+        use futures::TryStreamExt;
+        #[derive(Clone)]
+        struct St {
+            backends: Arc<Vec<std::net::SocketAddr>>,
+            next: Arc<std::sync::atomic::AtomicUsize>,
+            served: Arc<std::sync::Mutex<Vec<usize>>>,
+            client: reqwest::Client,
+        }
+        async fn forward(State(st): State<St>, req: Request) -> axum::response::Response {
+            let i = st.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % st.backends.len();
+            st.served.lock().unwrap().push(i);
+            let (parts, body) = req.into_parts();
+            let url = format!(
+                "http://{}{}",
+                st.backends[i],
+                parts
+                    .uri
+                    .path_and_query()
+                    .map(|p| p.as_str())
+                    .unwrap_or("/")
+            );
+            let mut r = st.client.request(parts.method.clone(), url);
+            for (k, v) in &parts.headers {
+                if !matches!(k.as_str(), "host" | "connection" | "transfer-encoding") {
+                    r = r.header(k, v);
+                }
+            }
+            let r = r.body(reqwest::Body::wrap_stream(body.into_data_stream()));
+            match r.send().await {
+                Ok(resp) => {
+                    let mut out =
+                        axum::response::Response::builder().status(resp.status().as_u16());
+                    for (k, v) in resp.headers() {
+                        if !matches!(
+                            k.as_str(),
+                            "connection" | "transfer-encoding" | "content-length"
+                        ) {
+                            out = out.header(k.as_str(), v.as_bytes());
+                        }
+                    }
+                    out.body(Body::from_stream(
+                        resp.bytes_stream().map_err(std::io::Error::other),
+                    ))
+                    .unwrap()
+                }
+                Err(_) => axum::response::Response::builder()
+                    .status(502)
+                    .body(Body::empty())
+                    .unwrap(),
+            }
+        }
+        let served = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let st = St {
+            backends: Arc::new(servers.iter().map(|s| s.running.addr).collect()),
+            next: Default::default(),
+            served: served.clone(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        };
+        let app = axum::Router::new().fallback(forward).with_state(st);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        Balancer { addr, served, task }
+    }
+
+    pub fn url_as(&self, user: &str) -> String {
+        format!("http://{user}:{}@{}/{REPO}.git", password(user), self.addr)
+    }
+
+    /// The distinct servers that handled requests.
+    pub fn servers_used(&self) -> std::collections::BTreeSet<usize> {
+        self.served.lock().unwrap().iter().copied().collect()
+    }
+}
+
+/// One pkt-line.
+pub fn pkt(data: &[u8]) -> Vec<u8> {
+    let mut out = format!("{:04x}", data.len() + 4).into_bytes();
+    out.extend_from_slice(data);
+    out
+}
+
+/// A receive-pack request: commands (`old new name`), then the pack.
+pub fn receive_request(commands: &[(&str, &str, &str)], pack: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (i, (old, new, name)) in commands.iter().enumerate() {
+        let caps = if i == 0 { "\0report-status" } else { "" };
+        body.extend(pkt(format!("{old} {new} {name}{caps}\n").as_bytes()));
+    }
+    body.extend_from_slice(b"0000");
+    body.extend_from_slice(pack);
+    body
+}
+
+/// Sends a raw receive-pack request. Returns the status and the report.
+pub async fn raw_receive_pack(server: &Server, user: &str, body: Vec<u8>) -> (u16, String) {
+    let r = reqwest::Client::new()
+        .post(format!("{}/{REPO}.git/git-receive-pack", server.base()))
+        .basic_auth(user, Some(password(user)))
+        .header("content-type", "application/x-git-receive-pack-request")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let status = r.status().as_u16();
+    (
+        status,
+        String::from_utf8_lossy(&r.bytes().await.unwrap()).into_owned(),
+    )
+}
+
+impl Client {
+    /// A pack of the objects that `revs` (one per line, `^` excludes) selects.
+    pub async fn pack(&self, dir: &Path, revs: &str) -> Vec<u8> {
+        use tokio::io::AsyncWriteExt;
+        let mut child = self
+            .command(dir)
+            .args(["pack-objects", "--revs", "--stdout", "-q"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(revs.as_bytes()).await.unwrap();
+        drop(stdin);
+        let out = child.wait_with_output().await.unwrap();
+        assert!(out.status.success());
+        out.stdout
+    }
+}
+
+pub const ZERO: &str = "0000000000000000000000000000000000000000";
+
+/// Starts a fetch of `want` and returns without reading the response: a
+/// slow client. The server keeps a Git process and a read view for it.
+pub async fn start_slow_fetch(server: &Server, user: &str, want: &str) -> reqwest::Response {
+    let mut body = pkt(format!("want {want}\n").as_bytes());
+    body.extend_from_slice(b"0000");
+    body.extend(pkt(b"done\n"));
+    let r = reqwest::Client::new()
+        .post(format!("{}/{REPO}.git/git-upload-pack", server.base()))
+        .basic_auth(user, Some(password(user)))
+        .header("content-type", "application/x-git-upload-pack-request")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    r
 }

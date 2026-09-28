@@ -10,10 +10,12 @@ use tokio::net::{TcpListener, UnixListener, UnixStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
-use crate::config::{Config, StorageKind};
+use crate::catalog::Catalog;
+use crate::config::{CatalogKind, Config, StorageKind};
 use crate::git::Git;
 use crate::git::hook::{HookRequest, HookResponse, HookResult};
 use crate::http::access::Directory;
+use crate::http::limits::CustomerLimits;
 use crate::http::{AppInner, AppState, DiskReservations};
 use crate::metrics::Metrics;
 use crate::model::branch_ref;
@@ -29,7 +31,8 @@ pub fn storage_from_config(cfg: &Config) -> anyhow::Result<Storage> {
         )?),
     };
     Ok(Storage::new(backend, &cfg.storage.prefix)
-        .with_upload_verification(cfg.storage.verify_uploads))
+        .with_upload_verification(cfg.storage.verify_uploads)
+        .with_upload_limit(cfg.limits.max_concurrent_uploads))
 }
 
 pub struct RunningServer {
@@ -86,7 +89,8 @@ pub async fn start_with_listener(
         cfg.server.git_binary.clone(),
         &cache_root.join("work"),
         &hook_binary,
-    )?;
+    )?
+    .with_process_limits(cfg.limits.git_cpu_secs, cfg.limits.git_memory_bytes);
     let version = git.version().await?;
     anyhow::ensure!(
         version >= crate::git::MIN_VERSION,
@@ -103,9 +107,18 @@ pub async fn start_with_listener(
         limits: cfg.limits.clone(),
         metrics,
         notifier: Mutex::new(None),
+        failpoints: Arc::new(crate::failpoint::Failpoints::from_env()),
+        disk: DiskReservations::new(&cache_root, cfg.limits.min_free_disk_bytes),
     });
     let registry = Registry::new(svc.clone())?;
-    let directory = Arc::new(Directory::new(&cfg, config_path));
+    let mut directory = Directory::new(&cfg, config_path)?;
+    if cfg.catalog.kind == CatalogKind::Storage {
+        directory = directory.with_catalog(Arc::new(Catalog::new(
+            svc.storage.clone(),
+            Duration::from_secs(cfg.catalog.cache_secs),
+        )));
+    }
+    let directory = Arc::new(directory);
 
     for r in &cfg.repos {
         let branch = branch_ref(&r.default_branch)?;
@@ -152,11 +165,29 @@ pub async fn start_with_listener(
         }
     }));
 
+    if cfg.maintenance.snapshot_after_entries > 0 {
+        let reg = registry.clone();
+        let routing = routing.clone();
+        let after = cfg.maintenance.snapshot_after_entries;
+        let every = Duration::from_secs(cfg.maintenance.check_interval_secs.max(1));
+        tasks.push(tokio::spawn(async move {
+            let mut tick = tokio::time::interval(every);
+            loop {
+                tick.tick().await;
+                crate::maintenance::auto_snapshot(&reg, after, |repo| {
+                    routing.as_ref().is_none_or(|r| r.is_preferred_self(repo))
+                })
+                .await;
+            }
+        }));
+    }
+
     let state: AppState = Arc::new(AppInner {
         registry: registry.clone(),
         directory,
         processes: Arc::new(Semaphore::new(cfg.limits.max_git_processes)),
-        disk: DiskReservations::new(&cache_root, cfg.limits.min_free_disk_bytes),
+        process_wait: Duration::from_secs(cfg.limits.process_wait_secs),
+        customers: CustomerLimits::new(&cfg.customers),
         routing,
         socket_path: socket_path.clone(),
         admin_api: cfg.server.admin_api,
@@ -180,18 +211,31 @@ pub async fn start_with_listener(
 }
 
 fn bind_socket(path: &Path) -> anyhow::Result<UnixListener> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     anyhow::ensure!(
-        path.as_os_str().len() < 100,
+        path.as_os_str().len() < crate::config::MAX_SOCKET_PATH,
         "socket path too long: {}",
         path.display()
     );
-    let _ = std::fs::remove_file(path);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        match std::fs::DirBuilder::new().mode(0o700).create(parent) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => std::fs::create_dir_all(parent)?,
+        }
+        // A directory that another user prepared could expose the socket.
+        let m = std::fs::symlink_metadata(parent)?;
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        anyhow::ensure!(
+            m.is_dir() && m.uid() == uid,
+            "socket directory {} is not a directory owned by this user",
+            parent.display()
+        );
     }
+    let _ = std::fs::remove_file(path);
     let l = UnixListener::bind(path)?;
     // Private: only this user can connect. Tokens protect each operation.
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     Ok(l)
 }
@@ -264,14 +308,21 @@ async fn serve_http(
     use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
     use hyper_util::server::conn::auto::Builder;
     use hyper_util::service::TowerToHyperService;
+    // Connections belong to this task: stopping the server closes them.
+    // Push procedures run in hook tasks and are not cancelled.
+    let mut connections = tokio::task::JoinSet::new();
     loop {
-        let Ok((tcp, _)) = listener.accept().await else {
+        let accepted = tokio::select! {
+            a = listener.accept() => a,
+            Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+        };
+        let Ok((tcp, _)) = accepted else {
             continue;
         };
         let _ = tcp.set_nodelay(true);
         let service = TowerToHyperService::new(app.clone());
         let tls = tls.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             let mut builder = Builder::new(TokioExecutor::new());
             builder
                 .http1()

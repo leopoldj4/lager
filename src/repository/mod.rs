@@ -17,10 +17,10 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::sync::Mutex;
 
-use crate::config::{Access, Limits};
+use crate::config::{Access, Limits, RefRule};
 use crate::git::Git;
 use crate::metrics::Metrics;
-use crate::model::{Head, ObjectFormat, RefState, RepoId, RepoState};
+use crate::model::{Head, ObjectFormat, RefState, RepoId, RepoState, RequestId};
 use crate::storage::{ETag, HeadRead, Storage, StorageError};
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +31,9 @@ pub enum RepoError {
     Deleted,
     #[error("storage unavailable: {0}")]
     Unavailable(String),
+    /// Not enough local disk space for the work.
+    #[error("{0}")]
+    NoSpace(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -68,6 +71,9 @@ pub struct Services {
     pub limits: Limits,
     pub metrics: Arc<Metrics>,
     pub notifier: StdMutex<Option<Notifier>>,
+    pub failpoints: Arc<crate::failpoint::Failpoints>,
+    /// Disk space for receipts and cache reconstruction.
+    pub disk: Arc<crate::http::DiskReservations>,
 }
 
 impl Services {
@@ -82,21 +88,53 @@ impl Services {
     fn view_dir(&self, repo: RepoId) -> PathBuf {
         self.cache_root.join("views").join(repo.to_string())
     }
+
+    /// Reserves disk space for downloading and indexing packs.
+    pub(crate) fn reserve_for_packs<'a>(
+        &self,
+        packs: impl Iterator<Item = &'a crate::model::PackRef>,
+    ) -> Result<crate::http::DiskReservation, RepoError> {
+        let bytes: u64 = packs.map(|p| p.size).sum();
+        self.disk.reserve(bytes.saturating_mul(2)).map_err(|m| {
+            self.metrics.inc("disk_limit_rejections");
+            RepoError::NoSpace(m)
+        })
+    }
 }
 
 /// Permission of the user of a push, read again before each attempt.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct PushAccess {
+    /// The repository that the name maps to now.
+    pub repo: RepoId,
     pub level: Access,
     pub rules_version: u64,
+    pub ref_rules: Vec<RefRule>,
 }
+
+impl PushAccess {
+    pub fn none() -> Self {
+        Self {
+            repo: RepoId(uuid::Uuid::nil()),
+            level: Access::None,
+            rules_version: 0,
+            ref_rules: vec![],
+        }
+    }
+}
+
+/// Reads the current permission rules. `Err` when they cannot be read.
+pub type AccessCheck =
+    Arc<dyn Fn() -> futures::future::BoxFuture<'static, Result<PushAccess, String>> + Send + Sync>;
 
 /// A push operation that waits for the hook. Found by its access token.
 #[derive(Clone)]
 pub struct PendingPush {
     pub repo: RepoId,
     pub user: String,
-    pub access: Arc<dyn Fn() -> PushAccess + Send + Sync>,
+    /// Also the request UUID of the log entry.
+    pub request: RequestId,
+    pub access: AccessCheck,
     /// The cache the objects were received into.
     pub cache: Arc<CacheInstance>,
 }
@@ -148,6 +186,11 @@ impl Registry {
     /// Takes the operation for a token. Each token works once.
     pub fn take_push(&self, token: &str) -> Option<PendingPush> {
         self.ops.lock().unwrap().remove(token)
+    }
+
+    /// The controllers of repositories that this server has used.
+    pub fn controllers(&self) -> Vec<Arc<Controller>> {
+        self.controllers.lock().unwrap().values().cloned().collect()
     }
 
     /// Removes caches that no active operation uses and that were idle.
@@ -351,6 +394,35 @@ impl Controller {
         };
         self.ensure_current(&mut st, &head, &etag).await?;
         Ok(st)
+    }
+
+    /// The generation that the cache holds, if it holds one.
+    pub async fn cached_generation(&self) -> Option<u64> {
+        let st = self.state.lock().await;
+        st.cache.as_ref()?;
+        st.known.as_ref().map(|k| k.head.generation)
+    }
+
+    /// The accepted head that the cache holds.
+    pub async fn cached_head(&self) -> Option<Head> {
+        let st = self.state.lock().await;
+        st.cache.as_ref()?;
+        st.known.as_ref().map(|k| k.head.clone())
+    }
+
+    /// Blocks the current cache and rebuilds it from storage. Readers and
+    /// pushes that hold the old cache finish with it; its files are removed
+    /// after the last of them.
+    pub async fn rebuild_cache(&self) -> Result<u64, RepoError> {
+        let _w = self.write_op.lock().await;
+        {
+            let mut st = self.state.lock().await;
+            st.poison();
+            st.leftover_checked = true;
+        }
+        *self.last_etag.lock().unwrap() = None;
+        let st = self.sync_to_storage().await?;
+        Ok(st.known.as_ref().map(|k| k.head.generation).unwrap_or(0))
     }
 
     /// Returns a read view that includes every push accepted before the call.

@@ -248,6 +248,16 @@ pub struct SnapshotPointer {
     pub base_generation: u64,
 }
 
+/// The latest data removal fence (see `maintenance::cleanup`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemovalPointer {
+    pub entry: EntryId,
+    /// No removal happens after this time.
+    pub expires_at_ms: u64,
+    /// `expires_at_ms` plus the allowed clock difference between servers.
+    pub reuse_after_ms: u64,
+}
+
 /// `repos/<id>/head.json`. The only record that changes in place.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -261,6 +271,8 @@ pub struct Head {
     pub snapshot: Option<SnapshotPointer>,
     pub object_format: ObjectFormat,
     pub state: RepoState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removal: Option<RemovalPointer>,
 }
 
 impl Head {
@@ -283,6 +295,17 @@ impl Head {
                 });
             }
             Operation::Delete => next.state = RepoState::Deleted,
+            Operation::Removal {
+                expires_at_ms,
+                reuse_after_ms,
+                ..
+            } => {
+                next.removal = Some(RemovalPointer {
+                    entry: entry.id,
+                    expires_at_ms: *expires_at_ms,
+                    reuse_after_ms: *reuse_after_ms,
+                });
+            }
             _ => {}
         }
         next
@@ -316,6 +339,15 @@ pub enum Operation {
         branch: RefName,
     },
     Delete,
+    /// A fence before data removal. The head change makes every pending CAS
+    /// against an earlier head fail. The listed packs are removed before
+    /// `expires_at_ms`; a change that needs one of them uploads it again
+    /// after `reuse_after_ms`.
+    Removal {
+        packs: Vec<String>,
+        expires_at_ms: u64,
+        reuse_after_ms: u64,
+    },
 }
 
 /// A stored pack. `sha256` is also the storage key; never trust an ETag as a
@@ -431,7 +463,10 @@ impl RefState {
                 self.head = Some(default_branch.clone());
             }
             Operation::DefaultBranch { branch } => self.head = Some(branch.clone()),
-            Operation::Push | Operation::Snapshot { .. } | Operation::Delete => {}
+            Operation::Push
+            | Operation::Snapshot { .. }
+            | Operation::Delete
+            | Operation::Removal { .. } => {}
         }
         for u in &entry.refs {
             if self.refs.get(&u.name) != u.old.as_ref() {
@@ -699,6 +734,7 @@ mod tests {
             snapshot: None,
             object_format: ObjectFormat::Sha1,
             state: RepoState::Active,
+            removal: None,
         };
         assert_eq!(
             head.check(head.repository),

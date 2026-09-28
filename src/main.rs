@@ -3,9 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use rustgit::config::{Config, validate_repo_name};
+use rustgit::catalog::Catalog;
+use rustgit::config::{CatalogKind, Config, validate_repo_name};
 use rustgit::model::{RepoId, branch_ref};
 use rustgit::repository::admin;
+use rustgit::storage::Storage;
 
 #[derive(Parser)]
 #[command(name = "rustgit", about = "Git server with S3-compatible storage")]
@@ -36,11 +38,22 @@ enum Cmd {
     /// Find obsolete stored data. Removes it only with --delete.
     Cleanup {
         name: String,
+        /// Keep obsolete packs (recoverable contents) younger than this.
         #[arg(long, default_value_t = 168)]
-        retention_hours: u64,
+        pack_retention_hours: u64,
+        /// Keep receipts and other obsolete records younger than this.
+        #[arg(long, default_value_t = 720)]
+        record_retention_hours: u64,
+        /// Remove the reported data. Without it, only report.
         #[arg(long)]
         delete: bool,
+        /// Permit retention periods shorter than active operations need.
+        #[arg(long, hide = true)]
+        unsafe_short_retention: bool,
     },
+    /// Read a password from standard input and print a salted hash for
+    /// `password_hash` in the configuration file.
+    HashPassword,
     /// Backup and recovery.
     Backup {
         #[command(subcommand)]
@@ -62,6 +75,8 @@ enum RepoCmd {
     Delete { name: String },
     /// Change the default branch (Git HEAD).
     SetDefaultBranch { name: String, branch: String },
+    /// List the repositories.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -99,6 +114,18 @@ fn main() {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
+    if let Cmd::HashPassword = cli.cmd {
+        let mut password = String::new();
+        std::io::stdin().read_line(&mut password)?;
+        let password = password.trim_end_matches(['\r', '\n']);
+        anyhow::ensure!(!password.is_empty(), "empty password");
+        let hash = rustgit::http::password::PasswordHash::new(
+            password,
+            rustgit::http::password::DEFAULT_ITERATIONS,
+        );
+        println!("{hash}");
+        return Ok(());
+    }
     let cfg = Config::load(&cli.config)?;
     let storage = rustgit::server::storage_from_config(&cfg)?;
     match cli.cmd {
@@ -110,7 +137,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Cmd::Repo { cmd } => repo_cmd(&cli.config, &cfg, &storage, cmd).await?,
         Cmd::Snapshot { name } => {
-            let id = repo_id(&cfg, &name)?;
+            let id = repo_id(&cfg, &storage, &name).await?;
             let svc = cli_services(&cfg, storage).await?;
             let registry = rustgit::repository::Registry::new(svc)?;
             let report = rustgit::maintenance::snapshot(&registry.controller(id), "cli").await?;
@@ -118,23 +145,34 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Cmd::Cleanup {
             name,
-            retention_hours,
+            pack_retention_hours,
+            record_retention_hours,
             delete,
+            unsafe_short_retention,
         } => {
-            let id = repo_id(&cfg, &name)?;
-            let report = rustgit::maintenance::cleanup(
-                &storage,
-                id,
-                Duration::from_secs(retention_hours * 3600),
-                !delete,
-            )
-            .await?;
+            let id = repo_id(&cfg, &storage, &name).await?;
+            let opts = rustgit::maintenance::CleanupOptions {
+                pack_retention: Duration::from_secs(pack_retention_hours * 3600),
+                record_retention: Duration::from_secs(record_retention_hours * 3600),
+                removal_window: Duration::from_secs(600),
+                clock_margin: rustgit::maintenance::CLOCK_MARGIN,
+                report_only: !delete,
+            };
+            let min = rustgit::maintenance::CleanupOptions::minimum_retention(&cfg.limits);
+            anyhow::ensure!(
+                unsafe_short_retention || opts.pack_retention.min(opts.record_retention) >= min,
+                "retention periods must be at least {} seconds",
+                min.as_secs()
+            );
+            let report = rustgit::maintenance::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        Cmd::HashPassword => unreachable!("handled before the configuration loads"),
         Cmd::Backup {
             cmd: BackupCmd::Export { name, out },
         } => {
-            let m = rustgit::backup::export(&storage, repo_id(&cfg, &name)?, &out).await?;
+            let m = rustgit::backup::export(&storage, repo_id(&cfg, &storage, &name).await?, &out)
+                .await?;
             println!(
                 "exported generation {} ({} records, {} packs)",
                 m.generation,
@@ -148,6 +186,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let head = rustgit::backup::import(&storage, &dir).await?;
             if let Some(name) = name {
                 validate_repo_name(&name)?;
+                anyhow::ensure!(
+                    cfg.catalog.kind == CatalogKind::Config,
+                    "--name adds the repository to the configuration file; \
+                     the storage catalog assigns new UUIDs to new names"
+                );
                 add_repo_to_config(&cli.config, &name, head.repository, "main")?;
             }
             println!(
@@ -189,6 +232,7 @@ async fn cli_services(
         &dir.join("work"),
         &std::env::current_exe()?,
     )?;
+    std::fs::create_dir_all(&cfg.server.cache_dir)?;
     Ok(Arc::new(rustgit::repository::Services {
         storage,
         git,
@@ -196,23 +240,36 @@ async fn cli_services(
         limits: cfg.limits.clone(),
         metrics: Default::default(),
         notifier: Default::default(),
+        failpoints: Default::default(),
+        disk: rustgit::http::DiskReservations::new(
+            &cfg.server.cache_dir,
+            cfg.limits.min_free_disk_bytes,
+        ),
     }))
 }
 
-fn repo_id(cfg: &Config, name: &str) -> anyhow::Result<RepoId> {
-    cfg.repos
-        .iter()
-        .find(|r| r.name == name)
-        .map(|r| r.id)
-        .ok_or_else(|| anyhow::anyhow!("unknown repository {name}"))
+fn catalog(cfg: &Config, storage: &Storage) -> Option<Catalog> {
+    (cfg.catalog.kind == CatalogKind::Storage)
+        .then(|| Catalog::new(storage.clone(), Duration::ZERO))
+}
+
+async fn repo_id(cfg: &Config, storage: &Storage, name: &str) -> anyhow::Result<RepoId> {
+    let found = match catalog(cfg, storage) {
+        Some(c) => c.lookup(name).await?.map(|r| r.id),
+        None => cfg.repos.iter().find(|r| r.name == name).map(|r| r.id),
+    };
+    found.ok_or_else(|| anyhow::anyhow!("unknown repository {name}"))
 }
 
 async fn repo_cmd(
     path: &Path,
     cfg: &Config,
-    storage: &rustgit::storage::Storage,
+    storage: &Storage,
     cmd: RepoCmd,
 ) -> anyhow::Result<()> {
+    if let Some(catalog) = catalog(cfg, storage) {
+        return catalog_cmd(&catalog, storage, cmd).await;
+    }
     match cmd {
         RepoCmd::Create {
             name,
@@ -241,13 +298,15 @@ async fn repo_cmd(
             println!("created {name} ({id})");
         }
         RepoCmd::Delete { name } => {
-            let head = admin::delete_repository(storage, repo_id(cfg, &name)?, "cli").await?;
+            let head =
+                admin::delete_repository(storage, repo_id(cfg, storage, &name).await?, "cli")
+                    .await?;
             println!("deleted {name} at generation {}", head.generation);
         }
         RepoCmd::SetDefaultBranch { name, branch } => {
             let head = admin::set_default_branch(
                 storage,
-                repo_id(cfg, &name)?,
+                repo_id(cfg, storage, &name).await?,
                 branch_ref(&branch)?,
                 "cli",
             )
@@ -256,6 +315,51 @@ async fn repo_cmd(
                 "default branch of {name} is {branch} (generation {})",
                 head.generation
             );
+        }
+        RepoCmd::List => {
+            for r in &cfg.repos {
+                println!("{}\t{}", r.name, r.id);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn catalog_cmd(catalog: &Catalog, storage: &Storage, cmd: RepoCmd) -> anyhow::Result<()> {
+    match cmd {
+        RepoCmd::Create {
+            name,
+            default_branch,
+        } => {
+            let mut settings = rustgit::config::RepoConfig::new(&name, RepoId::new());
+            settings.default_branch = default_branch;
+            let r = catalog.create(&settings, "cli").await?;
+            println!("created {name} ({})", r.id);
+        }
+        RepoCmd::Delete { name } => {
+            let id = catalog.delete(&name, "cli").await?;
+            println!("deleted {name} ({id})");
+        }
+        RepoCmd::SetDefaultBranch { name, branch } => {
+            let branch_name = branch_ref(&branch)?;
+            let id = catalog
+                .lookup(&name)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("unknown repository {name}"))?
+                .id;
+            let head = admin::set_default_branch(storage, id, branch_name, "cli").await?;
+            catalog
+                .update(&name, |r| r.default_branch = branch.clone())
+                .await?;
+            println!(
+                "default branch of {name} is {branch} (generation {})",
+                head.generation
+            );
+        }
+        RepoCmd::List => {
+            for r in catalog.list().await? {
+                println!("{}\t{}\t{:?}", r.name, r.repository, r.state);
+            }
         }
     }
     Ok(())
