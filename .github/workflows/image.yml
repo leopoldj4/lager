@@ -9,6 +9,11 @@ name: image
 on:
   push:
     branches: [master]
+    # Deployment scripts and documentation do not change the image.
+    paths-ignore:
+      - "deploy/**"
+      - "docs/**"
+      - "**.md"
   workflow_dispatch:
 
 permissions:
