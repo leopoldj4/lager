@@ -168,6 +168,10 @@ pub async fn forward_or_keep(
     };
     match result {
         Ok(resp) => {
+            if resp.headers().contains_key(crate::http::DRAINING_HEADER) {
+                // The peer stops soon: send it no further requests.
+                r.mark_down(&peer.id);
+            }
             let mut out = Response::builder().status(resp.status().as_u16());
             for (k, v) in resp.headers() {
                 if is_end_to_end(k) {

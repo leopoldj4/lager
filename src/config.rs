@@ -62,6 +62,13 @@ pub struct ServerConfig {
     /// Allow maintenance requests (snapshot) through HTTP for admin users.
     #[serde(default = "yes")]
     pub admin_api: bool,
+    /// On stop, the health check fails for this long before the server stops
+    /// accepting connections, so that a load balancer can remove it first.
+    #[serde(default = "default_drain_delay")]
+    pub drain_delay_secs: u64,
+    /// On stop, the longest wait for running requests and pushes.
+    #[serde(default = "default_shutdown_timeout")]
+    pub shutdown_timeout_secs: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -373,6 +380,12 @@ pub struct UserConfig {
 
 fn yes() -> bool {
     true
+}
+fn default_drain_delay() -> u64 {
+    5
+}
+fn default_shutdown_timeout() -> u64 {
+    180
 }
 fn default_server_id() -> String {
     "local".into()

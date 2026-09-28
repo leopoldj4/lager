@@ -128,3 +128,15 @@ against every intended provider (IMPLEMENTATION_PLAN.md Stage 3 item 11).
 | | Deletion during push | `stage3_maintenance::a_push_that_overlaps_deletion_does_not_restore_the_repository` |
 | | Reused name | `stage3_maintenance::a_reused_name_starts_an_empty_repository`, `production_access::repositories_in_the_storage_catalog_are_created_deleted_and_reused` |
 | | Complete cache loss | `stage2_servers::all_caches_lost_still_permits_recovery_from_storage` |
+
+## Operation
+
+Not plan checks; they support deployment behind a load balancer.
+
+| Behavior | Tests |
+|---|---|
+| The health check fails while storage does not answer | `shutdown::the_health_check_fails_while_storage_does_not_answer` |
+| A stopping server fails its health check and still serves requests during the drain delay | `shutdown::a_stopping_server_fails_its_health_check_and_still_serves_requests` |
+| A running push completes and is answered before the server stops | `shutdown::a_running_push_completes_before_the_server_stops` |
+| The shutdown timeout bounds the stop | `shutdown::the_shutdown_timeout_bounds_the_stop` |
+| Other servers stop forwarding to a stopping server | `shutdown::other_servers_stop_forwarding_to_a_stopping_server` |

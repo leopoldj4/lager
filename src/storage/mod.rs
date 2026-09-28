@@ -502,6 +502,16 @@ impl Storage {
             .map_err(|e| StorageError::from_backend(&p, e))
     }
 
+    /// Checks that the service answers requests with these credentials. The
+    /// probe key never exists, so a missing object is the expected answer.
+    pub async fn probe(&self) -> Result<(), StorageError> {
+        let key = format!("{}health/probe", self.prefix);
+        match self.backend.get(&key, None).await {
+            Ok(_) | Err(BackendError::NotFound) => Ok(()),
+            Err(e) => Err(StorageError::from_backend(&key, e)),
+        }
+    }
+
     pub async fn delete(&self, key: &str) -> Result<(), StorageError> {
         match self.backend.delete(key).await {
             Ok(()) | Err(BackendError::NotFound) => Ok(()),
