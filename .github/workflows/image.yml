@@ -14,6 +14,9 @@ on:
       - "deploy/**"
       - "docs/**"
       - "**.md"
+      # The management interface has its own image (web-image.yml).
+      - "web/**"
+      - ".github/workflows/web-image.yml"
   workflow_dispatch:
 
 permissions:

@@ -36,7 +36,8 @@ resource "vultr_ssh_key" "deploy" {
 }
 
 # Public interfaces accept only SSH from the admin addresses. The load
-# balancer reaches port 8080 through the VPC.
+# balancer reaches ports 8080 (rustgit) and 3000 (management interface)
+# through the VPC.
 resource "vultr_firewall_group" "servers" {
   description = "rustgit servers"
 }
@@ -60,6 +61,16 @@ resource "vultr_firewall_rule" "git_from_vpc" {
   subnet_size       = vultr_vpc.main.v4_subnet_mask
   port              = "8080"
   notes             = "load balancer to rustgit"
+}
+
+resource "vultr_firewall_rule" "web_from_vpc" {
+  firewall_group_id = vultr_firewall_group.servers.id
+  protocol          = "tcp"
+  ip_type           = "v4"
+  subnet            = vultr_vpc.main.v4_subnet
+  subnet_size       = vultr_vpc.main.v4_subnet_mask
+  port              = "3000"
+  notes             = "load balancer to the management interface"
 }
 
 data "vultr_os" "debian" {
@@ -123,6 +134,18 @@ resource "vultr_load_balancer" "main" {
       frontend_port     = 443
       backend_protocol  = "http"
       backend_port      = 8080
+    }
+  }
+
+  # The management interface (web/), only over HTTPS: its sign-in form
+  # carries passwords. The health check below covers rustgit only.
+  dynamic "forwarding_rules" {
+    for_each = local.tls ? [1] : []
+    content {
+      frontend_protocol = "https"
+      frontend_port     = var.web_port
+      backend_protocol  = "http"
+      backend_port      = 3000
     }
   }
 

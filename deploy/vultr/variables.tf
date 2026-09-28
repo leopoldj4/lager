@@ -15,6 +15,12 @@ variable "tls_dir" {
   default     = null
 }
 
+variable "web_port" {
+  description = "Load balancer port of the management interface (HTTPS)."
+  type        = number
+  default     = 8443
+}
+
 variable "server_count" {
   type    = number
   default = 2

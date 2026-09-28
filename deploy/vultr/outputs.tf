@@ -6,6 +6,15 @@ output "server_ips" {
   value = vultr_instance.server[*].main_ip
 }
 
+output "git_url" {
+  value = "${local.tls ? "https" : "http"}://${var.domain}"
+}
+
+output "web_url" {
+  description = "The management interface, once a certificate is installed."
+  value       = local.tls ? "https://${var.domain}:${var.web_port}" : null
+}
+
 output "registry" {
   description = "Image repository for docker push and pull."
   value       = "${vultr_container_registry.main.urn}/rustgit"
