@@ -318,6 +318,10 @@ pub struct CatalogConfig {
     /// A name lookup is reused for this time. Deleted repositories are
     /// never served: each request also checks the repository head.
     pub cache_secs: u64,
+    /// A push to a missing repository creates it when the user has at least
+    /// this access to the name (and at least write). Not set: pushes to
+    /// missing repositories fail.
+    pub create_on_push: Option<Access>,
 }
 
 impl Default for CatalogConfig {
@@ -325,6 +329,7 @@ impl Default for CatalogConfig {
         Self {
             kind: CatalogKind::Config,
             cache_secs: 5,
+            create_on_push: None,
         }
     }
 }
@@ -468,6 +473,11 @@ impl Config {
             anyhow::ensure!(
                 self.repos.is_empty(),
                 "with catalog.kind = \"storage\", repositories live in the catalog; remove [[repos]]"
+            );
+        } else {
+            anyhow::ensure!(
+                self.catalog.create_on_push.is_none(),
+                "catalog.create_on_push needs catalog.kind = \"storage\""
             );
         }
         if self.storage.kind == StorageKind::S3 {

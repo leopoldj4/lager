@@ -358,3 +358,166 @@ async fn the_repository_list_shows_active_repositories_and_their_changes() {
     assert_eq!(repos[0]["source"], "catalog");
     assert_eq!(repos[0]["default_branch"], "main");
 }
+
+/// Global admins create, change, and delete catalog repositories through
+/// the API; names can contain `/`.
+#[tokio::test(flavor = "multi_thread")]
+async fn repositories_are_created_changed_and_deleted_through_the_api() {
+    use reqwest::Method;
+    let env = Env::new();
+    let server = start(&env).await;
+    let api = Api::new(&server);
+
+    let (status, body) = api
+        .admin(Method::POST, "/repos", Some(json!({"name": "team/app"})))
+        .await;
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(
+        (&body["default_branch"], &body["generation"]),
+        (&json!("main"), &json!(0))
+    );
+    let id = body["id"].as_str().unwrap().to_string();
+    for (body, expected) in [
+        (json!({"name": "team/app"}), 409),
+        (json!({"name": "../x"}), 400),
+        (json!({"name": "x", "default_branch": "a..b"}), 400),
+    ] {
+        let (status, answer) = api.admin(Method::POST, "/repos", Some(body.clone())).await;
+        assert_eq!(status, expected, "{body} {answer}");
+    }
+    let alice = password("alice");
+    let (status, _) = api
+        .call(
+            Method::POST,
+            "/repos",
+            Some(("alice", &alice)),
+            Some(json!({"name": "other"})),
+        )
+        .await;
+    assert_eq!(status, 403);
+
+    // The new repository takes pushes and a new default branch.
+    let bob = env.client("bob");
+    let dir = bob.init(&server.url_for("bob", "team/app"), "work").await;
+    bob.commit(&dir, &[("f", b"1")], "one").await;
+    bob.ok(&dir, &["push", "--quiet", "origin", "main", "main:dev"])
+        .await;
+    let (status, body) = api
+        .admin(
+            Method::PATCH,
+            "/repos/team/app",
+            Some(json!({"default_branch": "dev"})),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["default_branch"], "dev");
+    let clone = bob.clone(&server.url_for("bob", "team/app"), "clone").await;
+    assert_eq!(
+        bob.ok(&clone, &["symbolic-ref", "--short", "HEAD"]).await,
+        "dev"
+    );
+    let (status, _) = api
+        .admin(
+            Method::PATCH,
+            "/repos/missing",
+            Some(json!({"default_branch": "dev"})),
+        )
+        .await;
+    assert_eq!(status, 404);
+
+    let (status, _) = api.admin(Method::DELETE, "/repos/team/app", None).await;
+    assert_eq!(status, 204);
+    let (status, _) = api.admin(Method::DELETE, "/repos/team/app", None).await;
+    assert_eq!(status, 404);
+    let (_, list) = api.admin(Method::GET, "/repos", None).await;
+    assert!(
+        !list
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == json!(id))
+    );
+    bob.fails(&dir, &["fetch", "origin"]).await;
+}
+
+/// `rustgit login` checks and keeps the credentials; repository commands
+/// then need no configuration file or storage keys.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_command_line_client_logs_in_and_manages_repositories() {
+    let env = Env::new();
+    let server = start(&env).await;
+    let home = env.path("cli-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let run = async |args: &[&str], stdin: &str| {
+        use tokio::io::AsyncWriteExt;
+        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustgit"))
+            .args(args)
+            .current_dir(&home)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", home.join("config"))
+            .env_remove("RUSTGIT_CONFIG")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        input.write_all(stdin.as_bytes()).await.unwrap();
+        drop(input);
+        let out = child.wait_with_output().await.unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let base = server.base();
+
+    let (ok, _, err) = run(&["repo", "list"], "").await;
+    assert!(!ok && err.contains("rustgit login"), "{err}");
+    let (ok, _, err) = run(&["login", &base, "--user", "admin"], "wrong\n").await;
+    assert!(!ok && err.contains("wrong user name or password"), "{err}");
+    assert!(!home.join("config/rustgit/login.toml").exists());
+
+    let (ok, out, err) = run(
+        &["login", &base],
+        &format!("admin\n{}\n", password("admin")),
+    )
+    .await;
+    assert!(ok, "{err}");
+    assert!(out.contains("as admin"), "{out}");
+
+    let (ok, out, err) = run(&["repo", "create", "team/cli"], "").await;
+    assert!(ok, "{err}");
+    assert!(
+        out.contains(&format!("git clone {base}/team/cli.git")),
+        "{out}"
+    );
+    let (ok, _, err) = run(&["repo", "create", "team/cli"], "").await;
+    assert!(!ok && err.contains("exists"), "{err}");
+    let (_, out, _) = run(&["repo", "list"], "").await;
+    assert!(out.lines().any(|l| l.starts_with("team/cli\t")), "{out}");
+    let (ok, out, err) = run(&["repo", "set-default-branch", "team/cli", "dev"], "").await;
+    assert!(ok, "{err}");
+    assert!(out.contains("default branch of team/cli is dev"), "{out}");
+    let (ok, _, err) = run(&["repo", "delete", "team/cli"], "").await;
+    assert!(ok, "{err}");
+    let (_, out, _) = run(&["repo", "list"], "").await;
+    assert!(!out.contains("team/cli"), "{out}");
+
+    // A user without admin access can log in, but not manage repositories.
+    let (ok, out, err) = run(
+        &["login", &format!("{}/", base.replace("://", "://carol@"))],
+        &format!("{}\n", password("carol")),
+    )
+    .await;
+    assert!(ok, "{err}");
+    assert!(out.contains("need admin access"), "{out}");
+    let (ok, _, err) = run(&["repo", "create", "x"], "").await;
+    assert!(!ok && err.contains("HTTP 403"), "{err}");
+
+    let (ok, out, _) = run(&["logout"], "").await;
+    assert!(ok && out.contains("logged out"), "{out}");
+    let (ok, _, _) = run(&["repo", "list"], "").await;
+    assert!(!ok);
+}

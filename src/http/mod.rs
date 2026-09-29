@@ -24,6 +24,7 @@ use tracing::Instrument;
 use self::access::{AuthError, Directory, Identity};
 use self::limits::{CustomerLimits, LimitExceeded};
 use self::process::{Guards, Input, spawn_service};
+use crate::catalog::CatalogError;
 use crate::config::{Access, RepoConfig};
 use crate::git::hook;
 use crate::model::RequestId;
@@ -272,12 +273,14 @@ struct Authorized {
 }
 
 /// Checks identity and repository permission. Unknown repositories and
-/// missing permission look the same to anonymous clients.
+/// missing permission look the same to anonymous clients. With `create`, a
+/// missing repository is created if the user may (`catalog.create_on_push`).
 async fn authorize(
     s: &AppInner,
     headers: &HeaderMap,
     name: &str,
     need: Access,
+    create: bool,
 ) -> Result<Authorized, Response> {
     s.directory.reload_if_changed();
     let auth = headers
@@ -293,6 +296,12 @@ async fn authorize(
         .repo(name)
         .await
         .map_err(|e| repo_error(e.into()))?;
+    let repo = match repo {
+        None if create && s.directory.may_create_on_push(&identity, name) => {
+            Some(create_on_push(s, &identity, name).await?)
+        }
+        repo => repo,
+    };
     let Some(repo) = repo else {
         return Err(if identity == Identity::Anonymous {
             unauthorized()
@@ -312,6 +321,32 @@ async fn authorize(
         .admit_request(repo.customer.as_deref())
         .map_err(|e| too_many(e, &s.registry.svc.metrics))?;
     Ok(Authorized { repo, identity })
+}
+
+/// Creates a missing repository for a push. Both requests of a push can get
+/// here: a server with an older lookup finds the repository that another
+/// server created.
+async fn create_on_push(
+    s: &AppInner,
+    identity: &Identity,
+    name: &str,
+) -> Result<RepoConfig, Response> {
+    let catalog = s
+        .directory
+        .catalog()
+        .expect("checked by may_create_on_push");
+    match catalog.ensure(name, identity.name()).await {
+        Ok((repo, created)) => {
+            if created {
+                s.registry.svc.metrics.inc("repositories_created_on_push");
+                tracing::info!(repo = %name, id = %repo.id, user = %identity.name(), "created repository on push");
+            }
+            Ok(repo)
+        }
+        Err(CatalogError::Storage(e)) => Err(repo_error(e.into())),
+        Err(CatalogError::Invalid(m)) => Err(plain(StatusCode::BAD_REQUEST, &m)),
+        Err(e) => Err(unavailable("repository catalog", &e.to_string())),
+    }
 }
 
 /// Only simple protocol requests are passed to Git.
@@ -396,7 +431,8 @@ async fn info_refs(
     service: Service,
     body: Body,
 ) -> Result<Response, Response> {
-    let auth = authorize(s, headers, name, service.needs()).await?;
+    let create = service == Service::ReceivePack;
+    let auth = authorize(s, headers, name, service.needs(), create).await?;
     if let Err(r) =
         crate::routing::forward_or_keep(s, Method::GET, uri, headers, auth.repo.id, body).await
     {
@@ -456,7 +492,8 @@ async fn rpc(
     service: Service,
     body: Body,
 ) -> Result<Response, Response> {
-    let auth = authorize(s, headers, name, service.needs()).await?;
+    let create = service == Service::ReceivePack;
+    let auth = authorize(s, headers, name, service.needs(), create).await?;
     let expected = format!("application/x-{}-request", service.name());
     if headers
         .get(header::CONTENT_TYPE)
@@ -541,6 +578,10 @@ async fn rpc(
                     auth.repo.name.clone(),
                 ),
                 cache: cache.clone(),
+                default_branch_changed: default_branch_changed(
+                    s.directory.clone(),
+                    auth.repo.name.clone(),
+                ),
             };
             let token = s.registry.register_push(op);
             // Git also stops reading at the receive limit.
@@ -608,6 +649,34 @@ fn push_access(
     })
 }
 
+/// Keeps the default branch in the catalog record equal to the history.
+fn default_branch_changed(
+    directory: Arc<Directory>,
+    repo_name: String,
+) -> Option<crate::repository::DefaultBranchChanged> {
+    directory.catalog()?;
+    Some(Arc::new(move |id, branch| {
+        let (directory, repo_name) = (directory.clone(), repo_name.clone());
+        Box::pin(async move {
+            let catalog = directory.catalog().expect("checked");
+            let Some(short) = branch.as_str().strip_prefix("refs/heads/") else {
+                return;
+            };
+            let result = catalog
+                .update(&repo_name, |r| {
+                    // The name may map to a newer repository by now.
+                    if r.repository == id {
+                        r.default_branch = short.to_string();
+                    }
+                })
+                .await;
+            if let Err(e) = result {
+                tracing::warn!(repo = %repo_name, error = %e, "catalog default branch not changed");
+            }
+        })
+    }))
+}
+
 #[derive(serde::Deserialize)]
 struct RepoQuery {
     repo: String,
@@ -622,7 +691,7 @@ async fn snapshot(
     if !s.admin_api {
         return plain(StatusCode::NOT_FOUND, "not found");
     }
-    let auth = match authorize(&s, &headers, &q.repo, Access::Admin).await {
+    let auth = match authorize(&s, &headers, &q.repo, Access::Admin, false).await {
         Ok(a) => a,
         Err(r) => return r,
     };
@@ -643,7 +712,7 @@ async fn rebuild(
     if !s.admin_api {
         return plain(StatusCode::NOT_FOUND, "not found");
     }
-    let auth = match authorize(&s, &headers, &q.repo, Access::Admin).await {
+    let auth = match authorize(&s, &headers, &q.repo, Access::Admin, false).await {
         Ok(a) => a,
         Err(r) => return r,
     };

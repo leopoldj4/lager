@@ -3,7 +3,8 @@
 //!
 //! `me` answers every authenticated user; everything else needs admin access
 //! to every repository (`"*" = "admin"`). Users from the configuration file
-//! are listed but cannot be changed here.
+//! are listed but cannot be changed here; repositories can be changed only
+//! with the storage catalog.
 
 use std::collections::BTreeMap;
 
@@ -18,14 +19,21 @@ use serde::{Deserialize, Serialize};
 use super::access::{AuthError, Identity};
 use super::password::{DEFAULT_ITERATIONS, PasswordHash};
 use super::{AppInner, AppState};
+use crate::catalog::{Catalog, CatalogError};
 use crate::config::{Access, RepoConfig};
-use crate::model::RepoState;
+use crate::model::{RepoId, RepoState};
+use crate::repository::admin::AdminError;
 use crate::users::{UserError, UserRecord, validate_password};
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me", get(me))
-        .route("/repos", get(repos))
+        .route("/repos", get(repos).post(create_repo))
+        // Repository names can contain `/`.
+        .route(
+            "/repos/{*name}",
+            axum::routing::patch(update_repo).delete(delete_repo),
+        )
         .route("/users", get(users).post(create_user))
         .route(
             "/users/{name}",
@@ -133,25 +141,158 @@ async fn repos(State(s): State<AppState>, headers: HeaderMap) -> Response {
             (repos, "config")
         }
     };
-    let storage = &s.registry.svc.storage;
     let mut out = Vec::with_capacity(list.len());
     for r in list {
-        let generation = match storage.load_head(r.id).await {
-            Ok(h) => h.map(|(h, _)| h.generation),
-            Err(e) => return storage_error(e),
-        };
-        out.push(RepoView {
-            name: r.name,
-            id: r.id.to_string(),
-            default_branch: r.default_branch,
-            anonymous_read: r.anonymous_read,
-            customer: r.customer,
-            ref_rules: r.ref_rules.len(),
-            generation,
-            source,
-        });
+        match repo_view(&s, r, source).await {
+            Ok(v) => out.push(v),
+            Err(r) => return r,
+        }
     }
     Json(out).into_response()
+}
+
+async fn repo_view(
+    s: &AppInner,
+    r: RepoConfig,
+    source: &'static str,
+) -> Result<RepoView, Response> {
+    let generation = match s.registry.svc.storage.load_head(r.id).await {
+        Ok(h) => h.map(|(h, _)| h.generation),
+        Err(e) => return Err(storage_error(e)),
+    };
+    Ok(RepoView {
+        name: r.name,
+        id: r.id.to_string(),
+        default_branch: r.default_branch,
+        anonymous_read: r.anonymous_read,
+        customer: r.customer,
+        ref_rules: r.ref_rules.len(),
+        generation,
+        source,
+    })
+}
+
+fn catalog_error(e: CatalogError) -> Response {
+    match e {
+        CatalogError::Exists(_) | CatalogError::Admin(AdminError::Exists) => {
+            error(StatusCode::CONFLICT, e.to_string())
+        }
+        CatalogError::NotFound(_)
+        | CatalogError::Admin(AdminError::NotFound | AdminError::Deleted) => {
+            error(StatusCode::NOT_FOUND, e.to_string())
+        }
+        CatalogError::Invalid(_) => error(StatusCode::BAD_REQUEST, e.to_string()),
+        CatalogError::Conflict | CatalogError::Admin(AdminError::Conflict) => {
+            error(StatusCode::CONFLICT, e.to_string())
+        }
+        CatalogError::Unknown(m) | CatalogError::Admin(AdminError::Unknown(m)) => {
+            tracing::warn!(error = %m, "repository change result unknown");
+            error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "result unknown; reload before repeating the change",
+            )
+        }
+        CatalogError::Storage(e) | CatalogError::Admin(AdminError::Storage(e)) => storage_error(e),
+    }
+}
+
+/// The caller and the catalog for a repository change, or the reason there
+/// is none.
+async fn manage_repos(
+    s: &AppInner,
+    headers: &HeaderMap,
+) -> Result<(Identity, std::sync::Arc<Catalog>), Response> {
+    let who = admin(s, headers).await?;
+    match s.directory.catalog() {
+        Some(c) => Ok((who, c.clone())),
+        None => Err(error(
+            StatusCode::CONFLICT,
+            "repositories come from the configuration file; \
+             use catalog.kind = \"storage\" to manage them here",
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewRepo {
+    name: String,
+    #[serde(default)]
+    default_branch: Option<String>,
+}
+
+async fn create_repo(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(new): Json<NewRepo>,
+) -> Response {
+    let (who, catalog) = match manage_repos(&s, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let mut settings = RepoConfig::new(&new.name, RepoId::new());
+    if let Some(b) = new.default_branch {
+        settings.default_branch = b;
+    }
+    match catalog.create(&settings, who.name()).await {
+        Ok(r) => {
+            tracing::info!(repo = %r.name, id = %r.id, by = %who.name(), "created repository");
+            match repo_view(&s, r, "catalog").await {
+                Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
+                Err(r) => r,
+            }
+        }
+        Err(e) => catalog_error(e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepoChange {
+    default_branch: String,
+}
+
+async fn update_repo(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(change): Json<RepoChange>,
+) -> Response {
+    let (who, catalog) = match manage_repos(&s, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match catalog
+        .set_default_branch(&name, &change.default_branch, who.name())
+        .await
+    {
+        Ok((r, _)) => {
+            tracing::info!(repo = %name, branch = %change.default_branch, by = %who.name(), "changed default branch");
+            match repo_view(&s, r, "catalog").await {
+                Ok(v) => Json(v).into_response(),
+                Err(r) => r,
+            }
+        }
+        Err(e) => catalog_error(e),
+    }
+}
+
+async fn delete_repo(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    let (who, catalog) = match manage_repos(&s, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match catalog.delete(&name, who.name()).await {
+        Ok(id) => {
+            tracing::info!(repo = %name, %id, by = %who.name(), "deleted repository");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => catalog_error(e),
+    }
 }
 
 #[derive(Serialize)]

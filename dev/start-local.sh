@@ -49,6 +49,7 @@ allow_http = true
 [catalog]
 kind = "storage"                  # repositories and managed users in storage
 cache_secs = 1
+create_on_push = "write"          # git push to a new name creates the repository
 
 [[users]]
 name = "dev"
