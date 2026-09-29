@@ -31,6 +31,8 @@ Without Nix, `dev/start-local.sh` uses `weed`, `git`, and `rustgit` from
 
 ```text
 rustgit [-c rustgit.toml] serve
+rustgit login <url> [--user <name>]          # asks for what the URL lacks
+rustgit logout
 rustgit repo create <name> [--default-branch main]
 rustgit repo delete <name>
 rustgit repo set-default-branch <name> <branch>
@@ -42,6 +44,14 @@ rustgit backup import <dir> [--name <name>]
 rustgit check-storage                        # test the storage requirements
 rustgit hash-password < password.txt         # for password_hash
 ```
+
+After `rustgit login https://git.example.com`, the `repo` commands go
+through that server's admin API with your rustgit user name and password
+(which needs `"*" = "admin"`), so they need no configuration file or storage
+keys. `login` checks the credentials first and keeps them in
+`~/.config/rustgit/login.toml`, readable only by you. With `-c` (or
+`RUSTGIT_CONFIG`), commands use the storage service directly, as before.
+See [decision 6](docs/decisions/0006-command-line-login.md).
 
 `cleanup` reports only, unless `--delete` is given. Run the report first
 and review it. Packs and records have separate retention periods
@@ -78,6 +88,7 @@ secret_access_key = "..."          # restrict to the prefix
 
 [catalog]
 kind = "storage"                   # repository names in the storage catalog
+create_on_push = "write"           # a push to a missing name creates it
 
 [identity]                         # or [[users]] with password_hash
 url = "https://id.example.com/git/check"
@@ -132,6 +143,11 @@ delete = "admin"
 pattern = "refs/heads/release/*"
 update = "admin"
 ```
+
+With `catalog.create_on_push`, `git push` to a missing name creates the
+repository when the user has that access (at least `write`) to the name;
+the first push also sets the default branch if it does not contain `main`.
+See [decision 5](docs/decisions/0005-create-on-push.md).
 
 Plain `password` credentials work only on the loopback address. The
 configuration file reloads when it changes; each reload increases the

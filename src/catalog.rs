@@ -180,6 +180,30 @@ impl Catalog {
         Ok(record.repo_config())
     }
 
+    /// The active repository for a name, created with default settings if
+    /// there is none; true if this call created it. Reads the record, not the
+    /// lookup cache: another server may have created it within the cache time.
+    pub async fn ensure(&self, name: &str, user: &str) -> Result<(RepoConfig, bool), CatalogError> {
+        for _ in 0..4 {
+            if let Some((r, _)) = self.record(name).await?
+                && r.state == RepoState::Active
+            {
+                self.cache.lock().unwrap().remove(name);
+                return Ok((r.repo_config(), false));
+            }
+            match self
+                .create(&RepoConfig::new(name, RepoId::new()), user)
+                .await
+            {
+                Ok(r) => return Ok((r, true)),
+                // Created concurrently: read the winner.
+                Err(CatalogError::Exists(_)) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(CatalogError::Conflict)
+    }
+
     /// Marks the repository deleted, then the record. The tombstone head
     /// comes first so that the repository stops being served even if the
     /// record change fails.
@@ -201,6 +225,34 @@ impl Catalog {
         })
         .await?;
         Ok(record.repository)
+    }
+
+    /// Changes the default branch in the history (Git `HEAD`), then in the
+    /// record.
+    pub async fn set_default_branch(
+        &self,
+        name: &str,
+        branch: &str,
+        user: &str,
+    ) -> Result<(RepoConfig, u64), CatalogError> {
+        let branch_name = branch_ref(branch).map_err(|e| CatalogError::Invalid(e.to_string()))?;
+        let Some((record, _)) = self.record(name).await? else {
+            return Err(CatalogError::NotFound(name.into()));
+        };
+        if record.state != RepoState::Active {
+            return Err(CatalogError::NotFound(name.into()));
+        }
+        let head =
+            admin::set_default_branch(&self.storage, record.repository, branch_name, user).await?;
+        let id = record.repository;
+        let repo = self
+            .update(name, |r| {
+                if r.repository == id {
+                    r.default_branch = branch.to_string();
+                }
+            })
+            .await?;
+        Ok((repo, head.generation))
     }
 
     /// Changes the settings of an active repository with CAS.

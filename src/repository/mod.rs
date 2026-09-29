@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 use crate::config::{Access, Limits, RefRule};
 use crate::git::Git;
 use crate::metrics::Metrics;
-use crate::model::{Head, ObjectFormat, RefState, RepoId, RepoState, RequestId};
+use crate::model::{Head, ObjectFormat, RefName, RefState, RepoId, RepoState, RequestId};
 use crate::storage::{ETag, HeadRead, Storage, StorageError};
 
 #[derive(Debug, thiserror::Error)]
@@ -127,6 +127,11 @@ impl PushAccess {
 pub type AccessCheck =
     Arc<dyn Fn() -> futures::future::BoxFuture<'static, Result<PushAccess, String>> + Send + Sync>;
 
+/// Told the new default branch when a first push chose it, to update copies
+/// of the setting such as the catalog record.
+pub type DefaultBranchChanged =
+    Arc<dyn Fn(RepoId, RefName) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
+
 /// A push operation that waits for the hook. Found by its access token.
 #[derive(Clone)]
 pub struct PendingPush {
@@ -137,6 +142,7 @@ pub struct PendingPush {
     pub access: AccessCheck,
     /// The cache the objects were received into.
     pub cache: Arc<CacheInstance>,
+    pub default_branch_changed: Option<DefaultBranchChanged>,
 }
 
 pub struct Registry {

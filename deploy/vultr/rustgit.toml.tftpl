@@ -20,6 +20,7 @@ secret_access_key = "${secret_key}"
 
 [catalog]
 kind = "storage"
+create_on_push = "write"           # git push to a new name creates the repository
 
 [limits]
 max_git_processes = 12

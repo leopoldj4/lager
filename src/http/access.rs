@@ -41,6 +41,7 @@ struct Inner {
     version: u64,
     repos: HashMap<String, RepoConfig>,
     users: HashMap<String, UserConfig>,
+    create_on_push: Option<Access>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -261,6 +262,20 @@ impl Directory {
         }
     }
 
+    /// Whether a push by `who` may create the missing repository `name`:
+    /// only with the storage catalog, `catalog.create_on_push`, and at least
+    /// that access (and write) to the name. Anonymous users never create.
+    pub fn may_create_on_push(&self, who: &Identity, name: &str) -> bool {
+        let Some(min) = self.inner.read().unwrap().create_on_push else {
+            return false;
+        };
+        if self.catalog.is_none() || *who == Identity::Anonymous {
+            return false;
+        }
+        let probe = RepoConfig::new(name, crate::model::RepoId(uuid::Uuid::nil()));
+        self.access(who, &probe).0 >= min.max(Access::Write)
+    }
+
     /// The access level and the rule version it was computed with.
     pub fn access(&self, who: &Identity, repo: &RepoConfig) -> (Access, u64) {
         let inner = self.inner.read().unwrap();
@@ -317,6 +332,7 @@ impl Inner {
                 .iter()
                 .map(|u| (u.name.clone(), u.clone()))
                 .collect(),
+            create_on_push: cfg.catalog.create_on_push,
         }
     }
 }

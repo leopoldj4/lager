@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use rustgit::catalog::Catalog;
+use rustgit::client::{self, Client, Login};
 use rustgit::config::{CatalogKind, Config, validate_repo_name};
 use rustgit::model::{RepoId, branch_ref};
 use rustgit::repository::admin;
@@ -12,14 +13,10 @@ use rustgit::storage::Storage;
 #[derive(Parser)]
 #[command(name = "rustgit", about = "Git server with S3-compatible storage")]
 struct Cli {
-    #[arg(
-        long,
-        short,
-        env = "RUSTGIT_CONFIG",
-        global = true,
-        default_value = "rustgit.toml"
-    )]
-    config: PathBuf,
+    /// Server configuration [default: rustgit.toml]. Repository commands
+    /// without it go through the server of `rustgit login`, if any.
+    #[arg(long, short, env = "RUSTGIT_CONFIG", global = true)]
+    config: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -28,7 +25,18 @@ struct Cli {
 enum Cmd {
     /// Run the server.
     Serve,
-    /// Repository management.
+    /// Keep a server URL and credentials for repository commands. Asks for
+    /// what the URL does not contain; needs no configuration file.
+    Login {
+        /// For example https://git.example.com or https://user@git.example.com
+        url: String,
+        #[arg(long, short)]
+        user: Option<String>,
+    },
+    /// Remove the credentials that `rustgit login` kept.
+    Logout,
+    /// Repository management: through the server after `rustgit login`,
+    /// or directly in storage with a server configuration.
     Repo {
         #[command(subcommand)]
         cmd: RepoCmd,
@@ -114,7 +122,24 @@ fn main() {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
-    if let Cmd::HashPassword = cli.cmd {
+    let cmd = match cli.cmd {
+        Cmd::Login { url, user } => return login(&url, user).await,
+        Cmd::Logout => return logout(),
+        Cmd::Repo { cmd } if cli.config.is_none() => {
+            if let Some(login) = saved_login()? {
+                return remote_repo_cmd(login, cmd).await;
+            }
+            anyhow::ensure!(
+                Path::new(DEFAULT_CONFIG).exists(),
+                "no {DEFAULT_CONFIG} here; run rustgit login <url> to manage \
+                 repositories through a server, or pass -c <config>"
+            );
+            Cmd::Repo { cmd }
+        }
+        cmd => cmd,
+    };
+    let config_path = cli.config.unwrap_or_else(|| DEFAULT_CONFIG.into());
+    if let Cmd::HashPassword = cmd {
         let mut password = String::new();
         std::io::stdin().read_line(&mut password)?;
         let password = password.trim_end_matches(['\r', '\n']);
@@ -126,11 +151,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         println!("{hash}");
         return Ok(());
     }
-    let cfg = Config::load(&cli.config)?;
+    let cfg = Config::load(&config_path)?;
     let storage = rustgit::server::storage_from_config(&cfg)?;
-    match cli.cmd {
+    match cmd {
         Cmd::Serve => {
-            let server = rustgit::server::start(cfg, Some(cli.config.clone()), storage).await?;
+            let server = rustgit::server::start(cfg, Some(config_path.clone()), storage).await?;
             eprintln!("rustgit serving on {}", server.url());
             use tokio::signal::unix::{SignalKind, signal};
             let mut term = signal(SignalKind::terminate())?;
@@ -147,7 +172,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 _ = int.recv() => {}
             }
         }
-        Cmd::Repo { cmd } => repo_cmd(&cli.config, &cfg, &storage, cmd).await?,
+        Cmd::Repo { cmd } => repo_cmd(&config_path, &cfg, &storage, cmd).await?,
         Cmd::Snapshot { name } => {
             let id = repo_id(&cfg, &storage, &name).await?;
             let svc = cli_services(&cfg, storage).await?;
@@ -179,7 +204,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let report = rustgit::maintenance::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        Cmd::HashPassword => unreachable!("handled before the configuration loads"),
+        Cmd::HashPassword | Cmd::Login { .. } | Cmd::Logout => {
+            unreachable!("handled before the configuration loads")
+        }
         Cmd::Backup {
             cmd: BackupCmd::Export { name, out },
         } => {
@@ -203,7 +230,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     "--name adds the repository to the configuration file; \
                      the storage catalog assigns new UUIDs to new names"
                 );
-                add_repo_to_config(&cli.config, &name, head.repository, "main")?;
+                add_repo_to_config(&config_path, &name, head.repository, "main")?;
             }
             println!(
                 "imported repository {} at generation {}",
@@ -280,7 +307,7 @@ async fn repo_cmd(
     cmd: RepoCmd,
 ) -> anyhow::Result<()> {
     if let Some(catalog) = catalog(cfg, storage) {
-        return catalog_cmd(&catalog, storage, cmd).await;
+        return catalog_cmd(&catalog, cmd).await;
     }
     match cmd {
         RepoCmd::Create {
@@ -337,7 +364,7 @@ async fn repo_cmd(
     Ok(())
 }
 
-async fn catalog_cmd(catalog: &Catalog, storage: &Storage, cmd: RepoCmd) -> anyhow::Result<()> {
+async fn catalog_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
     match cmd {
         RepoCmd::Create {
             name,
@@ -353,24 +380,91 @@ async fn catalog_cmd(catalog: &Catalog, storage: &Storage, cmd: RepoCmd) -> anyh
             println!("deleted {name} ({id})");
         }
         RepoCmd::SetDefaultBranch { name, branch } => {
-            let branch_name = branch_ref(&branch)?;
-            let id = catalog
-                .lookup(&name)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("unknown repository {name}"))?
-                .id;
-            let head = admin::set_default_branch(storage, id, branch_name, "cli").await?;
-            catalog
-                .update(&name, |r| r.default_branch = branch.clone())
-                .await?;
-            println!(
-                "default branch of {name} is {branch} (generation {})",
-                head.generation
-            );
+            let (_, generation) = catalog.set_default_branch(&name, &branch, "cli").await?;
+            println!("default branch of {name} is {branch} (generation {generation})");
         }
         RepoCmd::List => {
             for r in catalog.list().await? {
                 println!("{}\t{}\t{:?}", r.name, r.repository, r.state);
+            }
+        }
+    }
+    Ok(())
+}
+
+const DEFAULT_CONFIG: &str = "rustgit.toml";
+
+fn login_path() -> anyhow::Result<PathBuf> {
+    Login::default_path().ok_or_else(|| anyhow::anyhow!("HOME is not set"))
+}
+
+fn saved_login() -> anyhow::Result<Option<Login>> {
+    Login::load(&login_path()?)
+}
+
+/// Checks the credentials with the server before keeping them.
+async fn login(url: &str, user: Option<String>) -> anyhow::Result<()> {
+    let (url, url_user, url_password) = client::parse_server_url(url)?;
+    let user = match user.or(url_user) {
+        Some(u) => u,
+        None => client::prompt("Username: ", false)?,
+    };
+    let password = match url_password {
+        Some(p) => p,
+        None => client::prompt("Password: ", true)?,
+    };
+    let client = Client::new(Login {
+        url,
+        user,
+        password,
+    })?;
+    let me = client.me().await?;
+    let path = login_path()?;
+    client.login().save(&path)?;
+    println!("logged in to {} as {}", client.login().url, me.name);
+    if !me.admin {
+        println!("repository commands need admin access to every repository (\"*\" = \"admin\")");
+    }
+    Ok(())
+}
+
+fn logout() -> anyhow::Result<()> {
+    let path = login_path()?;
+    match Login::load(&path)? {
+        Some(l) => {
+            std::fs::remove_file(&path)?;
+            println!("logged out of {}", l.url);
+        }
+        None => println!("not logged in"),
+    }
+    Ok(())
+}
+
+async fn remote_repo_cmd(login: Login, cmd: RepoCmd) -> anyhow::Result<()> {
+    let client = Client::new(login)?;
+    match cmd {
+        RepoCmd::Create {
+            name,
+            default_branch,
+        } => {
+            let r = client.create_repo(&name, &default_branch).await?;
+            println!("created {name} ({})", r.id);
+            println!("clone with: git clone {}/{name}.git", client.login().url);
+        }
+        RepoCmd::Delete { name } => {
+            client.delete_repo(&name).await?;
+            println!("deleted {name}");
+        }
+        RepoCmd::SetDefaultBranch { name, branch } => {
+            let r = client.set_default_branch(&name, &branch).await?;
+            println!(
+                "default branch of {name} is {branch} (generation {})",
+                r.generation.unwrap_or(0)
+            );
+        }
+        RepoCmd::List => {
+            for r in client.repos().await? {
+                println!("{}\t{}\t{}", r.name, r.id, r.default_branch);
             }
         }
     }

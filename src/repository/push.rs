@@ -317,6 +317,10 @@ impl Controller {
         }
         fail.hit(failpoint::PUSH_AFTER_ENTRY).await;
 
+        // A first push that does not contain the default branch chooses it,
+        // so that clones check out what was pushed.
+        let adopt = adopted_default_branch(&base.refs, &next);
+
         // Steps 14-18 under the state lock.
         let mut st = self.state.lock().await;
         if st.known.as_ref().map(|k| k.head.revision) != Some(base.head.revision)
@@ -439,8 +443,35 @@ impl Controller {
         if let Err(e) = svc.storage.put_receipt(&receipt).await {
             tracing::warn!(repo = %self.repo, request = %req.id, error = %e, "receipt not stored; the history still holds the entry");
         }
+        let mut messages = vec![format!(
+            "rustgit: accepted as generation {} (request {})",
+            entry.generation, req.id
+        )];
+        let mut generation = entry.generation;
+        if let Some(branch) = adopt {
+            match super::admin::set_default_branch(
+                &svc.storage,
+                self.repo,
+                branch.clone(),
+                &op.user,
+            )
+            .await
+            {
+                Ok(h) => {
+                    generation = h.generation;
+                    let short = branch.as_str().trim_start_matches("refs/heads/");
+                    messages.push(format!("rustgit: default branch is now {short}"));
+                    if let Some(changed) = &op.default_branch_changed {
+                        changed(self.repo, branch).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(repo = %self.repo, request = %req.id, error = %e, "default branch not changed")
+                }
+            }
+        }
         if let Some(n) = svc.notifier.lock().unwrap().clone() {
-            n(self.repo, entry.generation);
+            n(self.repo, generation);
         }
         fail.hit(failpoint::PUSH_AFTER_LOCAL_COMMIT).await;
         Ok(Attempt::Done(HookResponse {
@@ -452,10 +483,7 @@ impl Controller {
                     message: None,
                 })
                 .collect(),
-            messages: vec![format!(
-                "rustgit: accepted as generation {} (request {})",
-                entry.generation, req.id
-            )],
+            messages,
         }))
     }
 
@@ -603,6 +631,26 @@ fn parse_commands(
             })
         })
         .collect()
+}
+
+/// The branch that becomes the default after a push into an empty
+/// repository whose default branch the push did not create: `main`, then
+/// `master`, then the first pushed branch by name.
+fn adopted_default_branch(base: &RefState, next: &RefState) -> Option<RefName> {
+    if !base.refs.is_empty()
+        || next
+            .head
+            .as_ref()
+            .is_some_and(|h| next.refs.contains_key(h))
+    {
+        return None;
+    }
+    let branches: Vec<&RefName> = next.refs.keys().filter(|r| r.is_branch()).collect();
+    ["refs/heads/main", "refs/heads/master"]
+        .iter()
+        .find_map(|p| branches.iter().find(|b| b.as_str() == *p))
+        .or(branches.first())
+        .map(|b| (*b).clone())
 }
 
 fn reject_all(names: &[String], reason: &str) -> HookResponse {

@@ -309,6 +309,71 @@ async fn repositories_in_the_storage_catalog_are_created_deleted_and_reused() {
     assert_eq!(names, vec!["team/app"]);
 }
 
+/// With `catalog.create_on_push`, a push to a missing name creates the
+/// repository if the user may write to that name. The first push chooses the
+/// default branch when it does not contain `main`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_push_creates_a_missing_repository() {
+    let env = Env::new();
+    let server = env
+        .start_with(
+            |cfg| {
+                cfg.repos.clear();
+                cfg.catalog.kind = CatalogKind::Storage;
+                cfg.catalog.cache_secs = 0;
+                cfg.catalog.create_on_push = Some(Access::Write);
+            },
+            "create-on-push",
+        )
+        .await;
+    let catalog = Catalog::new(env.storage.clone(), std::time::Duration::ZERO);
+    let url = |user: &str| server.url_for(user, "team/new");
+
+    // Reads never create; neither do users without write access.
+    let bob = env.client("bob");
+    let err = bob.fails(&bob.home, &["ls-remote", &url("bob")]).await;
+    assert!(err.contains("not found"), "{err}");
+    let carol = env.client("carol");
+    let c = carol.init(&url("carol"), "work").await;
+    carol.commit(&c, &[("f", b"carol")], "carol").await;
+    let err = carol.fails(&c, &["push", "origin", "HEAD:trunk"]).await;
+    assert!(err.contains("not found"), "{err}");
+    assert!(catalog.record("team/new").await.unwrap().is_none());
+
+    let b = bob.init(&url("bob"), "work").await;
+    let first = bob.commit(&b, &[("f", b"1")], "one").await;
+    let out = bob.run(&b, &["push", "origin", "HEAD:trunk"]).await;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.contains("default branch is now trunk"), "{stderr}");
+    let (record, _) = catalog.record("team/new").await.unwrap().unwrap();
+    assert_eq!(record.state, RepoState::Active);
+    assert_eq!(record.default_branch, "trunk");
+    assert_eq!(
+        stored_refs(&env.storage, record.repository).await["refs/heads/trunk"],
+        first
+    );
+
+    // A clone checks out the pushed branch; later pushes change nothing else.
+    let alice = env.client("alice");
+    let a = alice.clone(&url("alice"), "clone").await;
+    assert_eq!(alice.rev(&a, "HEAD").await, first);
+    assert_eq!(
+        alice.ok(&a, &["symbolic-ref", "--short", "HEAD"]).await,
+        "trunk"
+    );
+    alice.commit(&a, &[("f", b"2")], "two").await;
+    alice
+        .ok(&a, &["push", "--quiet", "origin", "trunk", "HEAD:main"])
+        .await;
+    let (again, _) = catalog.record("team/new").await.unwrap().unwrap();
+    assert_eq!(
+        (again.repository, again.default_branch.as_str()),
+        (record.repository, "trunk")
+    );
+    assert_eq!(server.metric("repositories_created_on_push"), 1);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tls_clients_connect_and_plain_http_is_refused() {
     let env = Env::new();
