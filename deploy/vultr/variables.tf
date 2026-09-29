@@ -55,7 +55,7 @@ variable "registry_name" {
 }
 
 variable "admin_cidrs" {
-  description = "Addresses allowed to connect with SSH, for example [\"203.0.113.7/32\"]."
+  description = "Addresses allowed to connect with SSH: [\"0.0.0.0/0\"] for every address, or for example [\"203.0.113.7/32\"]. Servers accept only keys (rollout.sh)."
   type        = list(string)
 }
 

@@ -112,10 +112,21 @@ only if cache rebuilds show up as a cost.
   Password hashes come from `rustgit hash-password`.
 - **More servers:** raise `server_count`, `./tf apply`, then
   `./rollout.sh <current tag>`.
-- **Another admin address:** add it to `admin_cidrs` and `./tf apply`.
-  This is SSH access to the servers; the API key works from anywhere.
+- **SSH addresses:** `admin_cidrs` is `["0.0.0.0/0"]`, SSH from every
+  address. `rollout.sh` turns off password logins on each server, so only
+  the deploy key works. To limit SSH instead, list addresses there and run
+  `./tf apply`.
 - **Certificate:** run `./cert.sh` every month. It renews when fewer than
   30 days are left.
+
+## Host settings
+
+`rollout.sh` also makes two host settings that cloud-init does not, on
+every rollout: key-only SSH (`/etc/ssh/sshd_config.d/00-rustgit.conf`),
+and a ufw rule that lets the interface's container reach rustgit through
+the Docker bridge. The Debian image enables ufw with incoming connections
+denied; the load balancer's traffic is forwarded to the containers and
+does not need a rule.
 
 ## Stopping and timeouts
 

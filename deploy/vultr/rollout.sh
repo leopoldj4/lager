@@ -26,6 +26,18 @@ ssh_opts=(-i ~/.ssh/rustgit_ed25519 -o StrictHostKeyChecking=accept-new
 mkdir -p .secrets
 run() { ssh "${ssh_opts[@]}" "root@$1" "${@:2}"; }
 
+# Host settings that cloud-init does not make, repeated on every rollout.
+# The Debian image enables ufw (incoming: deny): the management interface
+# reaches rustgit through the Docker bridge, which counts as incoming. SSH
+# is open to every address (admin_cidrs), so only keys are accepted.
+prepare() {
+  run "$1" 'ufw allow in on docker0 to any port 8080 proto tcp \
+      comment "rustgit-web to rustgit" >/dev/null &&
+    printf "PasswordAuthentication no\nKbdInteractiveAuthentication no\n" \
+      > /etc/ssh/sshd_config.d/00-rustgit.conf &&
+    sshd -t && systemctl reload ssh'
+}
+
 # Waits until a command succeeds on the server, or stops the rollout.
 healthy() {
   local ip=$1 check=$2 unit=$3
@@ -77,6 +89,7 @@ WantedBy=multi-user.target'
   for ip in $ips; do
     echo "== $ip: $image"
     run "$ip" 'cloud-init status --wait >/dev/null'
+    prepare "$ip"
     run "$ip" 'install -d -m 0700 /etc/rustgit-web && umask 077 &&
       cat > /etc/rustgit-web/web.env.new &&
       mv /etc/rustgit-web/web.env.new /etc/rustgit-web/web.env' <<<"$env"
@@ -97,6 +110,7 @@ for ip in $ips; do
   echo "== $ip: $image"
   # Wait for cloud-init on new servers.
   run "$ip" 'cloud-init status --wait >/dev/null'
+  prepare "$ip"
   run "$ip" 'umask 077; cat > /etc/rustgit/rustgit.toml.new &&
     chown 10001:10001 /etc/rustgit/rustgit.toml.new &&
     chmod 0400 /etc/rustgit/rustgit.toml.new &&

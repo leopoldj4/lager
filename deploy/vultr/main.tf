@@ -35,7 +35,8 @@ resource "vultr_ssh_key" "deploy" {
   ssh_key = trimspace(file(pathexpand(var.ssh_public_key_file)))
 }
 
-# Public interfaces accept only SSH from the admin addresses. The load
+# Public interfaces accept only SSH from the admin addresses (possibly
+# every address; the servers accept only keys). The load
 # balancer reaches ports 8080 (rustgit) and 3000 (management interface)
 # through the VPC.
 resource "vultr_firewall_group" "servers" {
