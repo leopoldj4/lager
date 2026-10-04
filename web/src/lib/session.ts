@@ -69,5 +69,3 @@ export async function createSession(session: Session) {
 export async function deleteSession() {
   (await cookies()).delete(COOKIE);
 }
-
-export const SESSION_COOKIE = COOKIE;
