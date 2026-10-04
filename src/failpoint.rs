@@ -20,14 +20,6 @@ pub const PUSH_AFTER_ENTRY: &str = "push.after-entry";
 pub const PUSH_AFTER_PREPARE: &str = "push.after-prepare";
 pub const PUSH_AFTER_CAS: &str = "push.after-cas";
 pub const PUSH_AFTER_LOCAL_COMMIT: &str = "push.after-local-commit";
-pub const PUSH_POINTS: &[&str] = &[
-    PUSH_BEFORE_UPLOAD,
-    PUSH_AFTER_UPLOAD,
-    PUSH_AFTER_ENTRY,
-    PUSH_AFTER_PREPARE,
-    PUSH_AFTER_CAS,
-    PUSH_AFTER_LOCAL_COMMIT,
-];
 
 /// Cache reconstruction, before the new cache replaces the old one.
 pub const REBUILD_BEFORE_REPLACE: &str = "rebuild.before-replace";

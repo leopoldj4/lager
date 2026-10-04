@@ -262,7 +262,6 @@ impl Drop for CacheInstance {
 pub struct ReadView {
     pub dir: PathBuf,
     pub generation: u64,
-    pub refs: RefState,
     _cache: Arc<CacheInstance>,
 }
 
@@ -471,7 +470,6 @@ impl Controller {
         let view = Arc::new(ReadView {
             dir,
             generation: known.head.generation,
-            refs: known.refs.clone(),
             _cache: cache,
         });
         st.view = Some(view.clone());

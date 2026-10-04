@@ -89,10 +89,6 @@ impl Git {
         c
     }
 
-    pub fn hooks_dir(&self) -> &Path {
-        &self.hooks_dir
-    }
-
     /// A Git command with a checked environment.
     pub fn command(&self) -> Command {
         let mut c = Command::new(&self.binary);
