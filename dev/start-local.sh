@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Local mode (IMPLEMENTATION_PLAN.md, Stage 1): one rustgit server and one
-# local S3-compatible service (SeaweedFS), with development credentials.
+# Local mode (IMPLEMENTATION_PLAN.md, Stage 1): one rustgit server, one
+# local S3-compatible service (SeaweedFS), and PostgreSQL for managed users,
+# with development credentials.
 #
-#   nix run .#local            # pinned SeaweedFS, Git, and rustgit
-#   dev/start-local.sh         # uses weed, git, and rustgit from PATH
+#   nix run .#local            # pinned SeaweedFS, PostgreSQL, Git, and rustgit
+#   dev/start-local.sh         # uses weed, initdb, pg_ctl, git, and rustgit from PATH
 #
-# Storage data and caches use separate directories under $RUSTGIT_LOCAL_DIR
-# (default: ./.local). Stored data is kept between runs. Remove the cache
-# directory at any time: the server recovers from storage.
+# Storage data, database, and caches use separate directories under
+# $RUSTGIT_LOCAL_DIR (default: ./.local). Stored data is kept between runs.
+# Remove the cache directory at any time: the server recovers from storage.
 set -euo pipefail
 
 root="${RUSTGIT_LOCAL_DIR:-$PWD/.local}"
@@ -15,6 +16,8 @@ storage_dir="$root/storage"
 cache_dir="$root/cache"
 listen="${RUSTGIT_LISTEN:-127.0.0.1:8080}"
 s3_port="${RUSTGIT_S3_PORT:-8333}"
+pg_port="${RUSTGIT_PG_PORT:-5433}"
+pg_dir="$root/postgres"
 weed="${WEED:-weed}"
 rustgit="${RUSTGIT:-rustgit}"
 mkdir -p "$storage_dir" "$cache_dir"
@@ -51,6 +54,9 @@ kind = "storage"                  # repositories and managed users in storage
 cache_secs = 1
 create_on_push = "write"          # git push to a new name creates the repository
 
+[database]                        # users managed through the admin API
+url = "postgres://rustgit@127.0.0.1:$pg_port/rustgit"
+
 [[users]]
 name = "dev"
 password = "dev"
@@ -68,10 +74,20 @@ weed_pid=$!
 server_pid=""
 cleanup() {
   kill ${server_pid:+"$server_pid"} "$weed_pid" 2>/dev/null || true
+  pg_ctl -D "$pg_dir" -m fast stop >/dev/null 2>&1 || true
   wait 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+
+# PostgreSQL on the loopback address only, without a password, and without
+# a Unix socket. rustgit creates its tables when it starts.
+if [[ ! -f "$pg_dir/PG_VERSION" ]]; then
+  initdb -D "$pg_dir" -U rustgit --auth=trust >"$root/postgres-init.log"
+fi
+pg_ctl -D "$pg_dir" -l "$root/postgres.log" -w \
+  -o "-h 127.0.0.1 -p $pg_port -k ''" start >/dev/null
+createdb -h 127.0.0.1 -p "$pg_port" -U rustgit rustgit 2>/dev/null || true
 
 # Wait until the storage service answers.
 for _ in $(seq 60); do
