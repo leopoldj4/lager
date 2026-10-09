@@ -11,9 +11,10 @@ changes of a repository.
 
 ## Local start
 
-One server, a local S3-compatible service (SeaweedFS), and development
-credentials. Storage data and caches live in separate directories under
-`./.local`; stored data is kept between runs.
+One server, a local S3-compatible service (SeaweedFS), PostgreSQL for
+managed users, and development credentials. Storage data, the database,
+and caches live in separate directories under `./.local`; stored data is
+kept between runs.
 
 ```bash
 nix run .#local
@@ -23,8 +24,8 @@ nix run .#local
 git clone http://dev:dev@127.0.0.1:8080/demo.git
 ```
 
-Without Nix, `dev/start-local.sh` uses `weed`, `git`, and `rustgit` from
-`PATH`. Git 2.45 or later is required.
+Without Nix, `dev/start-local.sh` uses `weed`, `initdb`, `pg_ctl`,
+`createdb`, `git`, and `rustgit` from `PATH`. Git 2.45 or later is required.
 
 ## Commands
 
@@ -32,6 +33,9 @@ Without Nix, `dev/start-local.sh` uses `weed`, `git`, and `rustgit` from
 rustgit [-c rustgit.toml] serve
 rustgit login <url> [--user <name>]          # asks for what the URL lacks
 rustgit logout
+rustgit token create <name> [--access repo=level]... [--expires-days N]
+rustgit token list
+rustgit token delete <id>
 rustgit repo create <name> [--default-branch main]
 rustgit repo delete <name>
 rustgit repo set-default-branch <name> <branch>
@@ -46,8 +50,10 @@ rustgit hash-password < password.txt         # for password_hash
 After `rustgit login https://git.example.com`, the `repo` commands go
 through that server's admin API with your rustgit user name and password
 (which needs `"*" = "admin"`), so they need no configuration file or storage
-keys. `login` checks the credentials first and keeps them in
-`~/.config/rustgit/login.toml`, readable only by you. With `-c` (or
+keys. `login` checks the credentials first, creates a personal access token,
+and keeps that in `~/.config/rustgit/login.toml`, readable only by you;
+`logout` deletes the token. Users in the server's configuration file have no
+tokens, so their password is kept instead. With `-c` (or
 `RUSTGIT_CONFIG`), commands use the storage service directly, as before.
 See [decision 6](docs/decisions/0006-command-line-login.md).
 
@@ -85,9 +91,14 @@ secret_access_key = "..."          # restrict to the prefix
 kind = "storage"                   # repository names in the storage catalog
 create_on_push = "write"           # a push to a missing name creates it
 
-[identity]                         # or [[users]] with password_hash
-url = "https://id.example.com/git/check"
-token = "..."
+[database]                         # users managed through the admin API
+url = "postgres://rustgit:...@db.example.com/rustgit?sslmode=verify-full"
+# max_connections = 8
+# timeout_secs = 5
+
+# [identity]                       # instead of [database]: an external service
+# url = "https://id.example.com/git/check"
+# token = "..."
 
 [limits]
 max_receive_bytes = 2147483648
@@ -165,9 +176,16 @@ permission-rule version that log entries record.
 - `POST /_rustgit/snapshot?repo=<name>` and `POST /_rustgit/rebuild?repo=<name>`
   (admin access): create a snapshot, or rebuild the local cache from storage.
 - `/_rustgit/api/`: JSON for user management and the repository list, for
-  users with `"*" = "admin"`. With `catalog.kind = "storage"`, users created
-  there are kept in storage and need no configuration change; users in the
-  file take precedence. See [decision 4](docs/decisions/0004-users-in-storage.md).
+  users with `"*" = "admin"`. With `[database]`, users created there are
+  kept in PostgreSQL and need no configuration change; users in the file
+  take precedence, so keep one admin there. The server creates and updates
+  its tables when it starts. See [decision 8](docs/decisions/0008-users-in-postgres.md).
+- Personal access tokens (`rgpat_…`) work in place of the password for Git
+  and the API, for database users: `git clone https://alice:rgpat_…@git.example.com/org/app.git`.
+  `rustgit token create` makes one, optionally limited to some repositories
+  (`--access org/app=read`) and with an expiry. A token never has more access
+  than its user and cannot create other tokens. See
+  [decision 9](docs/decisions/0009-personal-access-tokens.md).
 - Every response has an `x-rustgit-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: rustgit: accepted ...` line. Logs never contain credentials or
