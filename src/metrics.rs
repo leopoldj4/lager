@@ -61,25 +61,25 @@ impl Metrics {
             cpu_seconds(libc::RUSAGE_SELF),
             cpu_seconds(libc::RUSAGE_CHILDREN),
         );
-        out.push_str(&format!("rustgit_process_cpu_seconds_total {own}\n"));
-        out.push_str(&format!("rustgit_git_cpu_seconds_total {git}\n"));
+        out.push_str(&format!("worktree_process_cpu_seconds_total {own}\n"));
+        out.push_str(&format!("worktree_git_cpu_seconds_total {git}\n"));
         for (k, v) in self.counters.lock().unwrap().iter() {
-            out.push_str(&format!("rustgit_{k}_total {v}\n"));
+            out.push_str(&format!("worktree_{k}_total {v}\n"));
         }
         let steps: Vec<&'static str> = self.timings.lock().unwrap().keys().copied().collect();
         for step in steps {
             if let Some((p50, p95, p99, n)) = self.percentiles(step) {
                 out.push_str(&format!(
-                    "rustgit_step_seconds{{step=\"{step}\",quantile=\"0.5\"}} {p50}\n"
+                    "worktree_step_seconds{{step=\"{step}\",quantile=\"0.5\"}} {p50}\n"
                 ));
                 out.push_str(&format!(
-                    "rustgit_step_seconds{{step=\"{step}\",quantile=\"0.95\"}} {p95}\n"
+                    "worktree_step_seconds{{step=\"{step}\",quantile=\"0.95\"}} {p95}\n"
                 ));
                 out.push_str(&format!(
-                    "rustgit_step_seconds{{step=\"{step}\",quantile=\"0.99\"}} {p99}\n"
+                    "worktree_step_seconds{{step=\"{step}\",quantile=\"0.99\"}} {p99}\n"
                 ));
                 out.push_str(&format!(
-                    "rustgit_step_seconds_count{{step=\"{step}\"}} {n}\n"
+                    "worktree_step_seconds_count{{step=\"{step}\"}} {n}\n"
                 ));
             }
         }

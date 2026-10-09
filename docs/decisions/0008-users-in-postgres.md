@@ -1,6 +1,6 @@
 # 8. Users in PostgreSQL behind an identity provider trait
 
-Status: accepted; users are managed with `rustgit user` instead of the
+Status: accepted; users are managed with `worktree user` instead of the
 admin API since [decision 10](0010-no-admin-api.md). Date: October 9, 2026.
 
 ## Context
@@ -32,14 +32,14 @@ changed configuration file. The server builds one provider at start:
 
 **PostgreSQL.** `[database]` takes a connection URL (TLS through
 `sslmode`), `max_connections` (8), and `timeout_secs` (5) for a connection.
-Two tables: `rustgit_users` (name, salted password hash in the format of
+Two tables: `worktree_users` (name, salted password hash in the format of
 decision 3, created and updated times, `updated_by`) and
-`rustgit_user_access` (user, repository name or `*`, level). Deleting a user
+`worktree_user_access` (user, repository name or `*`, level). Deleting a user
 deletes the row and, through the foreign key, its access. Changes run in a
 transaction; an update locks the user row.
 
 **Schema changes.** The SQL lives in the program as an ordered list and
-`rustgit_schema` records the applied versions. At start the server takes an
+`worktree_schema` records the applied versions. At start the server takes an
 advisory lock, applies missing versions, and refuses to start against a
 newer schema or an unreachable database. Applied entries are never edited.
 

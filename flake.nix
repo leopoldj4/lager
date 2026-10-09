@@ -1,5 +1,5 @@
 {
-  description = "rustgit: a Git server in Rust backed by S3-compatible storage";
+  description = "worktree: a Git server in Rust backed by S3-compatible storage";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -51,16 +51,16 @@
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-        rustgit = craneLib.buildPackage (
+        worktree = craneLib.buildPackage (
           commonArgs
           // {
             inherit cargoArtifacts;
             doCheck = false;
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
             postInstall = ''
-              wrapProgram $out/bin/rustgit --prefix PATH : ${lib.makeBinPath [ git ]}
+              wrapProgram $out/bin/worktree --prefix PATH : ${lib.makeBinPath [ git ]}
             '';
-            meta.mainProgram = "rustgit";
+            meta.mainProgram = "worktree";
           }
         );
         # Local mode: the pinned SeaweedFS as the S3-compatible service,
@@ -68,9 +68,9 @@
         # Storage data, database, and caches live in separate directories
         # under ./.local.
         local = pkgs.writeShellApplication {
-          name = "rustgit-local";
+          name = "worktree-local";
           runtimeInputs = [
-            rustgit
+            worktree
             pkgs.seaweedfs
             pkgs.postgresql
             git
@@ -81,50 +81,50 @@
         };
         # Container image (Linux only). `nix build .#docker` gives a script
         # that streams the image: `./result | docker load`. tini is PID 1
-        # because Git starts processes that rustgit does not reap when they
+        # because Git starts processes that worktree does not reap when they
         # are orphaned; it forwards SIGTERM for the clean stop.
         docker = pkgs.dockerTools.streamLayeredImage {
-          name = "rustgit";
+          name = "worktree";
           contents = [ pkgs.dockerTools.caCertificates ];
           fakeRootCommands = ''
-            mkdir -p etc tmp var/cache/rustgit var/empty
+            mkdir -p etc tmp var/cache/worktree var/empty
             chmod 1777 tmp
-            chown 10001:10001 var/cache/rustgit
+            chown 10001:10001 var/cache/worktree
             echo 'root:x:0:0::/var/empty:/bin/false' > etc/passwd
-            echo 'rustgit:x:10001:10001::/var/empty:/bin/false' >> etc/passwd
+            echo 'worktree:x:10001:10001::/var/empty:/bin/false' >> etc/passwd
             echo 'root:x:0:' > etc/group
-            echo 'rustgit:x:10001:' >> etc/group
+            echo 'worktree:x:10001:' >> etc/group
           '';
           config = {
             Entrypoint = [
               "${pkgs.tini}/bin/tini"
               "--"
-              "${rustgit}/bin/rustgit"
+              "${worktree}/bin/worktree"
             ];
             Cmd = [
               "-c"
-              "/etc/rustgit/rustgit.toml"
+              "/etc/worktree/worktree.toml"
               "serve"
             ];
             User = "10001:10001";
             Env = [ "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt" ];
             ExposedPorts."8080/tcp" = { };
-            Volumes."/var/cache/rustgit" = { };
+            Volumes."/var/cache/worktree" = { };
           };
         };
       in
       {
         packages = {
-          default = rustgit;
+          default = worktree;
           inherit local;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux { inherit docker; };
 
-        apps.default = flake-utils.lib.mkApp { drv = rustgit; };
+        apps.default = flake-utils.lib.mkApp { drv = worktree; };
         apps.local = flake-utils.lib.mkApp { drv = local; };
 
         checks = {
-          inherit rustgit;
+          inherit worktree;
           clippy = craneLib.cargoClippy (
             commonArgs
             // {

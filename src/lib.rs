@@ -1,4 +1,4 @@
-//! rustgit: a Git server that keeps repositories in S3-compatible storage.
+//! worktree: a Git server that keeps repositories in S3-compatible storage.
 //!
 //! See IMPLEMENTATION_PLAN.md for the stages.
 

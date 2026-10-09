@@ -3,7 +3,7 @@
 //!
 //! An [`IdentityProvider`] checks a user name and password and answers with
 //! the user's access levels; a provider that manages users also lists and
-//! changes them for `rustgit user` and `rustgit token`. The server uses one
+//! changes them for `worktree user` and `worktree token`. The server uses one
 //! provider, built from
 //! the configuration by [`from_config`]:
 //!
@@ -234,7 +234,7 @@ pub trait IdentityProvider: Send + Sync {
 pub fn unmanaged() -> UserError {
     UserError::Unmanaged(
         "users come from the configuration file or the identity service; \
-         configure [database] without [identity] to manage them with rustgit user"
+         configure [database] without [identity] to manage them with worktree user"
             .into(),
     )
 }

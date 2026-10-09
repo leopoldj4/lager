@@ -19,8 +19,8 @@ use crate::config::RoutingConfig;
 use crate::http::AppState;
 use crate::model::RepoId;
 
-pub const FORWARDED_HEADER: &str = "x-rustgit-forwarded";
-const PEER_TOKEN_HEADER: &str = "x-rustgit-peer-token";
+pub const FORWARDED_HEADER: &str = "x-worktree-forwarded";
+const PEER_TOKEN_HEADER: &str = "x-worktree-peer-token";
 const DOWN_FOR: Duration = Duration::from_secs(10);
 
 pub struct Routing {
@@ -98,7 +98,7 @@ impl Routing {
             return;
         }
         for peer in self.cfg.servers.iter().filter(|p| p.id != self.self_id) {
-            let url = format!("{}/_rustgit/notify", peer.url.trim_end_matches('/'));
+            let url = format!("{}/_worktree/notify", peer.url.trim_end_matches('/'));
             let body = serde_json::to_vec(&Notification { repo, generation }).expect("serializes");
             let mut req = self
                 .client

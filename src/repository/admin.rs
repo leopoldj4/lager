@@ -95,7 +95,7 @@ pub async fn ensure_repository(
     if storage.load_head(repo).await?.is_some() {
         return Ok(false);
     }
-    match create_repository(storage, repo, default_branch, "rustgit").await {
+    match create_repository(storage, repo, default_branch, "worktree").await {
         Ok(_) => Ok(true),
         Err(AdminError::Exists) => Ok(false),
         Err(e) => Err(e),

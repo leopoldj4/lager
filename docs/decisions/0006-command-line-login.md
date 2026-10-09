@@ -5,9 +5,9 @@ September 29, 2026.
 
 ## Context
 
-`rustgit repo` commands read the server configuration and change storage
+`worktree repo` commands read the server configuration and change storage
 directly, so managing repositories from a laptop needed the storage keys
-there. Everyone who manages repositories already has a rustgit user.
+there. Everyone who manages repositories already has a worktree user.
 
 ## Decision
 
@@ -24,12 +24,12 @@ otherwise the answer is 409.
 `<name>` may contain `/`. The changes are those of the storage commands and
 share their code (`Catalog::create`, `set_default_branch`, `delete`).
 
-**Client.** `rustgit login <url>` asks for the user name and password (the
+**Client.** `worktree login <url>` asks for the user name and password (the
 password without echo; both from standard input when it is not a
 terminal), checks them with `GET me`, and only then writes
-`$XDG_CONFIG_HOME/rustgit/login.toml` (default `~/.config`) with mode 0600.
-`rustgit logout` removes it. Without `-c` or `RUSTGIT_CONFIG`, `repo`
-commands use the saved login if there is one, else `rustgit.toml` as
+`$XDG_CONFIG_HOME/worktree/login.toml` (default `~/.config`) with mode 0600.
+`worktree logout` removes it. Without `-c` or `WORKTREE_CONFIG`, `repo`
+commands use the saved login if there is one, else `worktree.toml` as
 before.
 
 ## Consequences

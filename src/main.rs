@@ -4,18 +4,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use rustgit::catalog::Catalog;
-use rustgit::config::{Access, CatalogKind, Config, validate_repo_name};
-use rustgit::identity::{self, NewToken, NewUser, UserChange};
-use rustgit::model::{RepoId, branch_ref};
-use rustgit::repository::admin;
-use rustgit::storage::Storage;
+use worktree::catalog::Catalog;
+use worktree::config::{Access, CatalogKind, Config, validate_repo_name};
+use worktree::identity::{self, NewToken, NewUser, UserChange};
+use worktree::model::{RepoId, branch_ref};
+use worktree::repository::admin;
+use worktree::storage::Storage;
 
 #[derive(Parser)]
-#[command(name = "rustgit", about = "Git server with S3-compatible storage")]
+#[command(name = "worktree", about = "Git server with S3-compatible storage")]
 struct Cli {
-    /// Server configuration [default: rustgit.toml].
-    #[arg(long, short, env = "RUSTGIT_CONFIG", global = true)]
+    /// Server configuration [default: worktree.toml].
+    #[arg(long, short, env = "WORKTREE_CONFIG", global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
@@ -148,7 +148,7 @@ fn main() {
     // Git runs this program as the proc-receive hook through a symlink.
     let argv0 = std::env::args_os().next().unwrap_or_default();
     if Path::new(&argv0).file_name().and_then(|f| f.to_str()) == Some("proc-receive") {
-        std::process::exit(rustgit::git::hook::run_proc_receive());
+        std::process::exit(worktree::git::hook::run_proc_receive());
     }
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -172,9 +172,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         std::io::stdin().read_line(&mut password)?;
         let password = password.trim_end_matches(['\r', '\n']);
         anyhow::ensure!(!password.is_empty(), "empty password");
-        let hash = rustgit::http::password::PasswordHash::new(
+        let hash = worktree::http::password::PasswordHash::new(
             password,
-            rustgit::http::password::DEFAULT_ITERATIONS,
+            worktree::http::password::DEFAULT_ITERATIONS,
         );
         println!("{hash}");
         return Ok(());
@@ -185,11 +185,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Token { cmd } => return token_cmd(&cfg, cmd).await,
         cmd => cmd,
     };
-    let storage = rustgit::server::storage_from_config(&cfg)?;
+    let storage = worktree::server::storage_from_config(&cfg)?;
     match cmd {
         Cmd::Serve => {
-            let server = rustgit::server::start(cfg, Some(config_path.clone()), storage).await?;
-            eprintln!("rustgit serving on {}", server.url());
+            let server = worktree::server::start(cfg, Some(config_path.clone()), storage).await?;
+            eprintln!("worktree serving on {}", server.url());
             use tokio::signal::unix::{SignalKind, signal};
             let mut term = signal(SignalKind::terminate())?;
             let mut int = signal(SignalKind::interrupt())?;
@@ -197,7 +197,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 _ = term.recv() => {}
                 _ = int.recv() => {}
             }
-            eprintln!("rustgit stopping; a second signal stops at once");
+            eprintln!("worktree stopping; a second signal stops at once");
             // Stopping at any point is safe: storage decides every push.
             tokio::select! {
                 _ = server.shutdown() => {}
@@ -209,8 +209,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Snapshot { name } => {
             let id = repo_id(&cfg, &storage, &name).await?;
             let svc = cli_services(&cfg, storage).await?;
-            let registry = rustgit::repository::Registry::new(svc)?;
-            let report = rustgit::maintenance::snapshot(&registry.controller(id), "cli").await?;
+            let registry = worktree::repository::Registry::new(svc)?;
+            let report = worktree::maintenance::snapshot(&registry.controller(id), "cli").await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::Cleanup {
@@ -221,20 +221,20 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             unsafe_short_retention,
         } => {
             let id = repo_id(&cfg, &storage, &name).await?;
-            let opts = rustgit::maintenance::CleanupOptions {
+            let opts = worktree::maintenance::CleanupOptions {
                 pack_retention: Duration::from_secs(pack_retention_hours * 3600),
                 record_retention: Duration::from_secs(record_retention_hours * 3600),
                 removal_window: Duration::from_secs(600),
-                clock_margin: rustgit::maintenance::CLOCK_MARGIN,
+                clock_margin: worktree::maintenance::CLOCK_MARGIN,
                 report_only: !delete,
             };
-            let min = rustgit::maintenance::CleanupOptions::minimum_retention(&cfg.limits);
+            let min = worktree::maintenance::CleanupOptions::minimum_retention(&cfg.limits);
             anyhow::ensure!(
                 unsafe_short_retention || opts.pack_retention.min(opts.record_retention) >= min,
                 "retention periods must be at least {} seconds",
                 min.as_secs()
             );
-            let report = rustgit::maintenance::cleanup(&storage, id, &opts).await?;
+            let report = worktree::maintenance::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::HashPassword | Cmd::User { .. } | Cmd::Token { .. } => {
@@ -243,7 +243,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Backup {
             cmd: BackupCmd::Export { name, out },
         } => {
-            let m = rustgit::backup::export(&storage, repo_id(&cfg, &storage, &name).await?, &out)
+            let m = worktree::backup::export(&storage, repo_id(&cfg, &storage, &name).await?, &out)
                 .await?;
             println!(
                 "exported generation {} ({} records, {} packs)",
@@ -255,7 +255,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Backup {
             cmd: BackupCmd::Import { dir, name },
         } => {
-            let head = rustgit::backup::import(&storage, &dir).await?;
+            let head = worktree::backup::import(&storage, &dir).await?;
             if let Some(name) = name {
                 validate_repo_name(&name)?;
                 anyhow::ensure!(
@@ -276,26 +276,26 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 
 async fn cli_services(
     cfg: &Config,
-    storage: rustgit::storage::Storage,
-) -> anyhow::Result<Arc<rustgit::repository::Services>> {
+    storage: worktree::storage::Storage,
+) -> anyhow::Result<Arc<worktree::repository::Services>> {
     let dir = cfg
         .server
         .cache_dir
         .join(format!("cli-{}", std::process::id()));
-    let git = rustgit::git::Git::new(
+    let git = worktree::git::Git::new(
         cfg.server.git_binary.clone(),
         &dir.join("work"),
         &std::env::current_exe()?,
     )?;
     std::fs::create_dir_all(&cfg.server.cache_dir)?;
-    Ok(Arc::new(rustgit::repository::Services {
+    Ok(Arc::new(worktree::repository::Services {
         storage,
         git,
         cache_root: dir,
         limits: cfg.limits.clone(),
         metrics: Default::default(),
         notifier: Default::default(),
-        disk: rustgit::http::DiskReservations::new(
+        disk: worktree::http::DiskReservations::new(
             &cfg.server.cache_dir,
             cfg.limits.min_free_disk_bytes,
         ),
@@ -335,7 +335,7 @@ async fn repo_cmd(
             if let Some(existing) = cfg.repos.iter().find(|r| r.name == name) {
                 // A reused name gets a new UUID. The old repository must be deleted.
                 match storage.load_head(existing.id).await? {
-                    Some((h, _)) if h.state == rustgit::model::RepoState::Deleted => {}
+                    Some((h, _)) if h.state == worktree::model::RepoState::Deleted => {}
                     None => {}
                     Some(_) => anyhow::bail!("repository {name} exists"),
                 }
@@ -385,7 +385,7 @@ async fn catalog_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
             name,
             default_branch,
         } => {
-            let mut settings = rustgit::config::RepoConfig::new(&name, RepoId::new());
+            let mut settings = worktree::config::RepoConfig::new(&name, RepoId::new());
             settings.default_branch = default_branch;
             let r = catalog.create(&settings, "cli").await?;
             println!("created {name} ({})", r.id);
@@ -407,7 +407,7 @@ async fn catalog_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
     Ok(())
 }
 
-const DEFAULT_CONFIG: &str = "rustgit.toml";
+const DEFAULT_CONFIG: &str = "worktree.toml";
 
 /// Who changed a user, as the database records it.
 fn operator() -> String {
@@ -455,9 +455,9 @@ fn new_password_hash() -> anyhow::Result<String> {
         );
     }
     identity::validate_password(&password)?;
-    Ok(rustgit::http::password::PasswordHash::new(
+    Ok(worktree::http::password::PasswordHash::new(
         &password,
-        rustgit::http::password::DEFAULT_ITERATIONS,
+        worktree::http::password::DEFAULT_ITERATIONS,
     )
     .to_string())
 }
@@ -565,7 +565,7 @@ async fn token_cmd(cfg: &Config, cmd: TokenCmd) -> anyhow::Result<()> {
 
 /// "3 days ago" or "in 3 days" for a time in milliseconds since 1970.
 fn relative(ms: u64) -> String {
-    let now = rustgit::model::now_ms();
+    let now = worktree::model::now_ms();
     let (d, future) = if ms > now {
         (ms - now, true)
     } else {

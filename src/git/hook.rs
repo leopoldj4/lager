@@ -1,6 +1,6 @@
 //! The `proc-receive` hook program and its messages to the controller.
 //!
-//! Git runs this program (a symlink named `proc-receive` to the rustgit
+//! Git runs this program (a symlink named `proc-receive` to the worktree
 //! binary) after it receives and checks the objects. The hook forwards the
 //! ref commands to the controller through a private Unix socket, with the
 //! access token of this operation, and relays the controller's decision to
@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use super::pktline;
 
-pub const ENV_SOCKET: &str = "RUSTGIT_HOOK_SOCKET";
-pub const ENV_TOKEN: &str = "RUSTGIT_HOOK_TOKEN";
+pub const ENV_SOCKET: &str = "WORKTREE_HOOK_SOCKET";
+pub const ENV_TOKEN: &str = "WORKTREE_HOOK_TOKEN";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HookRequest {
@@ -50,7 +50,7 @@ pub fn run_proc_receive() -> i32 {
     match proc_receive() {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("rustgit: proc-receive: {e}");
+            eprintln!("worktree: proc-receive: {e}");
             1
         }
     }

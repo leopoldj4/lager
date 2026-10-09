@@ -222,7 +222,7 @@ pub async fn auto_snapshot(
         if head.state != RepoState::Active || since < after_entries || !preferred(c.repo) {
             continue;
         }
-        match snapshot(&c, "rustgit-maintenance").await {
+        match snapshot(&c, "worktree-maintenance").await {
             Ok(r) => {
                 n += 1;
                 tracing::info!(repo = %c.repo, base = r.base_generation, "automatic snapshot");
@@ -465,7 +465,7 @@ async fn attach_fence(
         id: EntryId::new(),
         generation: head.generation + 1,
         request: RequestId::new(),
-        request_checksum: request_checksum("rustgit-cleanup", &[]),
+        request_checksum: request_checksum("worktree-cleanup", &[]),
         operation: Operation::Removal {
             packs,
             expires_at_ms,
@@ -473,7 +473,7 @@ async fn attach_fence(
         },
         refs: vec![],
         packs: vec![],
-        user: "rustgit-cleanup".into(),
+        user: "worktree-cleanup".into(),
         rules_version: 0,
         received_at_ms: now_ms(),
     };

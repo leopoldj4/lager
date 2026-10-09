@@ -288,12 +288,12 @@ pub struct IdentityConfig {
     pub ca_certificate: Option<PathBuf>,
 }
 
-/// PostgreSQL for users managed with `rustgit user` and `rustgit token`
+/// PostgreSQL for users managed with `worktree user` and `worktree token`
 /// (docs/decisions/0008-users-in-postgres.md).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
-    /// For example `postgres://rustgit:...@db.example.com/rustgit?sslmode=verify-full`.
+    /// For example `postgres://worktree:...@db.example.com/worktree?sslmode=verify-full`.
     pub url: String,
     #[serde(default = "default_database_connections")]
     pub max_connections: u32,
@@ -404,7 +404,7 @@ pub struct UserConfig {
     /// Unsalted SHA-256 of the password. Only on the loopback address.
     #[serde(default)]
     pub password_sha256: Option<String>,
-    /// Salted hash from `rustgit hash-password` (PBKDF2-HMAC-SHA256).
+    /// Salted hash from `worktree hash-password` (PBKDF2-HMAC-SHA256).
     #[serde(default)]
     pub password_hash: Option<String>,
     /// Repository name (or "*") to access level.
@@ -541,7 +541,7 @@ impl Config {
         use sha2::Digest;
         let digest = sha2::Sha256::digest(self.server.cache_dir.as_os_str().as_encoded_bytes());
         std::env::temp_dir()
-            .join(format!("rustgit-{}", &hex::encode(digest)[..16]))
+            .join(format!("worktree-{}", &hex::encode(digest)[..16]))
             .join("hook.sock")
     }
 }

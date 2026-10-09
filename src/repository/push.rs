@@ -441,7 +441,7 @@ impl Controller {
             tracing::warn!(repo = %self.repo, request = %req.id, error = %e, "receipt not stored; the history still holds the entry");
         }
         let mut messages = vec![format!(
-            "rustgit: accepted as generation {} (request {})",
+            "worktree: accepted as generation {} (request {})",
             entry.generation, req.id
         )];
         let mut generation = entry.generation;
@@ -457,7 +457,7 @@ impl Controller {
                 Ok(h) => {
                     generation = h.generation;
                     let short = branch.as_str().trim_start_matches("refs/heads/");
-                    messages.push(format!("rustgit: default branch is now {short}"));
+                    messages.push(format!("worktree: default branch is now {short}"));
                     if let Some(changed) = &op.default_branch_changed {
                         changed(self.repo, branch).await;
                     }

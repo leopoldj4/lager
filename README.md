@@ -1,4 +1,4 @@
-# rustgit
+# worktree
 
 A Git server in Rust that keeps repositories in an S3-compatible storage
 service. Clients use standard Git over smart HTTP. Any number of servers
@@ -25,33 +25,33 @@ git clone http://dev:dev@127.0.0.1:8080/demo.git
 ```
 
 Without Nix, `dev/start-local.sh` uses `weed`, `initdb`, `pg_ctl`,
-`createdb`, `git`, and `rustgit` from `PATH`. Git 2.45 or later is required.
+`createdb`, `git`, and `worktree` from `PATH`. Git 2.45 or later is required.
 
 ## Commands
 
 ```text
-rustgit [-c rustgit.toml] serve
-rustgit user create <name> [--access repo=level]...   # asks for the password
-rustgit user list
-rustgit user set-password <name>
-rustgit user set-access <name> [repo=level]...       # replaces all levels
-rustgit user delete <name>
-rustgit token create <user> <name> [--access repo=level]... [--expires-days N]
-rustgit token list <user>
-rustgit token delete <user> <id>
-rustgit repo create <name> [--default-branch main]
-rustgit repo delete <name>
-rustgit repo set-default-branch <name> <branch>
-rustgit repo list
-rustgit snapshot <name>                      # snapshot and combined pack
-rustgit cleanup <name> [--delete]            # report, or remove, obsolete data
-rustgit backup export <name> <dir>
-rustgit backup import <dir> [--name <name>]
-rustgit hash-password < password.txt         # for password_hash
+worktree [-c worktree.toml] serve
+worktree user create <name> [--access repo=level]...   # asks for the password
+worktree user list
+worktree user set-password <name>
+worktree user set-access <name> [repo=level]...       # replaces all levels
+worktree user delete <name>
+worktree token create <user> <name> [--access repo=level]... [--expires-days N]
+worktree token list <user>
+worktree token delete <user> <id>
+worktree repo create <name> [--default-branch main]
+worktree repo delete <name>
+worktree repo set-default-branch <name> <branch>
+worktree repo list
+worktree snapshot <name>                      # snapshot and combined pack
+worktree cleanup <name> [--delete]            # report, or remove, obsolete data
+worktree backup export <name> <dir>
+worktree backup import <dir> [--name <name>]
+worktree hash-password < password.txt         # for password_hash
 ```
 
-All commands read the server configuration (`-c`, `RUSTGIT_CONFIG`, or
-`./rustgit.toml`). `repo`, `snapshot`, `cleanup`, and `backup` use the
+All commands read the server configuration (`-c`, `WORKTREE_CONFIG`, or
+`./worktree.toml`). `repo`, `snapshot`, `cleanup`, and `backup` use the
 storage service directly; `user` and `token` use the database
 (`[database]`). The server has no management API
 ([decision 10](docs/decisions/0010-no-admin-api.md)).
@@ -63,7 +63,7 @@ creates and updates its tables when it starts. See
 
 Personal access tokens (`rgpat_…`) work in place of a database user's
 password: `git clone https://alice:rgpat_…@git.example.com/org/app.git`.
-`rustgit token create` prints one once, optionally limited to some
+`worktree token create` prints one once, optionally limited to some
 repositories (`--access org/app=read`) and with an expiry. A token never has
 more access than its user. See
 [decision 9](docs/decisions/0009-personal-access-tokens.md).
@@ -82,7 +82,7 @@ that terminates HTTPS:
 [server]
 listen = "0.0.0.0:8080"
 id = "git-1"                       # this server in [routing]
-cache_dir = "/var/cache/rustgit"   # local SSD; can be removed at any time
+cache_dir = "/var/cache/worktree"  # local SSD; can be removed at any time
 tls_terminated_upstream = true     # or tls_certificate / tls_private_key
 drain_delay_secs = 5               # on stop: health check fails first
 shutdown_timeout_secs = 180        # on stop: wait for running requests
@@ -96,14 +96,14 @@ region = "eu-central-1"
 bucket = "git-repositories"
 access_key_id = "..."
 secret_access_key = "..."          # restrict to the prefix
-# ca_certificate = "/etc/rustgit/storage-ca.pem"
+# ca_certificate = "/etc/worktree/storage-ca.pem"
 
 [catalog]
 kind = "storage"                   # repository names in the storage catalog
 create_on_push = "write"           # a push to a missing name creates it
 
-[database]                         # users managed with rustgit user / token
-url = "postgres://rustgit:...@db.example.com/rustgit?sslmode=verify-full"
+[database]                         # users managed with worktree user / token
+url = "postgres://worktree:...@db.example.com/worktree?sslmode=verify-full"
 # max_connections = 8
 # timeout_secs = 5
 
@@ -171,21 +171,21 @@ permission-rule version that log entries record.
 
 ## Operation
 
-- `GET /_rustgit/health`: the load balancer check. 503 while the storage
+- `GET /_worktree/health`: the load balancer check. 503 while the storage
   service does not answer (checked at most once per second) or while the
-  server stops. `GET /_rustgit/live` only shows that the process runs.
+  server stops. `GET /_worktree/live` only shows that the process runs.
 - On `SIGTERM` or `SIGINT` the server stops cleanly: the health check fails
   for `drain_delay_secs` while requests are still served, then the server
   accepts no new connections and waits up to `shutdown_timeout_secs` for
   running requests and pushes. Responses meanwhile carry
-  `x-rustgit-draining: 1`, and other servers stop forwarding to it. A
+  `x-worktree-draining: 1`, and other servers stop forwarding to it. A
   second signal stops at once, which is also safe. Allow the service
   manager enough time (for systemd, `TimeoutStopSec` above the sum).
-- `GET /_rustgit/metrics`: counters and median, 95th, and 99th percentile
+- `GET /_worktree/metrics`: counters and median, 95th, and 99th percentile
   delays per push step, in Prometheus text format.
-- Every response has an `x-rustgit-request-id` header. A push uses the same
+- Every response has an `x-worktree-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
-  `remote: rustgit: accepted ...` line. Logs never contain credentials or
+  `remote: worktree: accepted ...` line. Logs never contain credentials or
   repository contents.
 - If the storage service is unavailable, new reads and writes fail with 503.
   A push whose result is unknown says so; the client should fetch before it
@@ -200,10 +200,10 @@ streams the image:
 nix build .#docker && ./result | docker load
 ```
 
-The image holds only rustgit, the pinned Git, tini as PID 1, and CA
+The image holds only worktree, the pinned Git, tini as PID 1, and CA
 certificates. It runs as user 10001 and reads
-`/etc/rustgit/rustgit.toml`; mount the configuration as a secret, and the
-cache at `/var/cache/rustgit` on local disk. Set the container stop timeout
+`/etc/worktree/worktree.toml`; mount the configuration as a secret, and the
+cache at `/var/cache/worktree` on local disk. Set the container stop timeout
 above `drain_delay_secs` plus `shutdown_timeout_secs`, and keep
 `git_memory_bytes` times `max_git_processes` below the memory limit.
 
@@ -216,7 +216,7 @@ orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build 
 ```
 
 That builds for the Mac's architecture (arm64). For x86_64 servers, name
-the system: the same machine builds it with Rosetta. Only rustgit is compiled; everything else comes from the binary
+the system: the same machine builds it with Rosetta. Only worktree is compiled; everything else comes from the binary
 cache. The first build takes about ten minutes.
 
 ```bash
