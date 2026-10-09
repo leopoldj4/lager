@@ -5,7 +5,8 @@
 //! object reachable from the refs of the selected generation. Compaction
 //! never changes refs and never removes an accepted push: the snapshot is
 //! attached by a maintenance entry after the current latest entry, and all
-//! entries after its base remain part of recovery.
+//! entries after its base remain part of recovery. Attaching it removes the
+//! entries up to its base from the head's index.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -16,8 +17,8 @@ use serde::Serialize;
 use crate::config::Limits;
 use crate::metrics::StepTimer;
 use crate::model::{
-    EntryId, FORMAT_VERSION, Head, LogEntry, Oid, Operation, RepoId, RepoState, RequestId,
-    Snapshot, SnapshotId, now_ms, request_checksum,
+    EntryId, FORMAT_VERSION, Head, LOG_FORMAT_VERSION, LogEntry, Oid, Operation, RepoId, RepoState,
+    RequestId, Snapshot, SnapshotId, now_ms, request_checksum,
 };
 use crate::repository::push::{Fence, Resolution, fence_check, resolve_unknown_cas};
 use crate::repository::sync::load_entries;
@@ -80,7 +81,7 @@ pub async fn snapshot(c: &Controller, user: &str) -> Result<SnapshotReport, Repo
         repository: c.repo,
         incarnation: known.head.incarnation,
         id: SnapshotId::new(),
-        base_entry: known.head.latest_entry,
+        base_entry: known.entry,
         base_generation: known.head.generation,
         object_format: known.head.object_format,
         head: known
@@ -120,19 +121,27 @@ pub async fn snapshot(c: &Controller, user: &str) -> Result<SnapshotReport, Repo
                 ));
             }
         }
-        // The snapshot base must remain in the history of the new head.
-        let back = load_entries(&svc.storage, &head, Some(snap.base_generation)).await?;
-        if back.first().map(|e| e.id) != Some(snap.base_entry) {
+        // The index must still reach the snapshot base: a newer snapshot
+        // already folded the entries after it.
+        if head
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| s.base_generation > snap.base_generation)
+        {
+            return Err(RepoError::Internal(
+                "a newer snapshot is already attached".into(),
+            ));
+        }
+        if !head.contains(snap.base_generation, snap.base_entry) {
             return Err(RepoError::Internal(
                 "snapshot base is no longer in the history".into(),
             ));
         }
         let entry = LogEntry {
-            format: FORMAT_VERSION,
+            format: LOG_FORMAT_VERSION,
             repository: c.repo,
             incarnation: head.incarnation,
             id: EntryId::new(),
-            previous: Some(head.latest_entry),
             generation: head.generation + 1,
             request,
             request_checksum: request_checksum(user, &[]),
@@ -293,15 +302,15 @@ pub struct CleanupReport {
 /// removes it unless `report_only`.
 ///
 /// Required (never removed):
-/// - the head and every entry in the history;
+/// - the head and every entry in its index;
+/// - the entry of the latest removal fence;
 /// - the snapshot the head points to and its packs;
-/// - the packs of every entry after the snapshot base (all entries without a snapshot).
+/// - the packs of every entry in the index.
 ///
-/// Everything else is obsolete: superseded snapshots, packs that only
-/// entries at or before the snapshot base use, uploads of attempts that
-/// never became visible, and receipts. Obsolete data younger than its
-/// retention period is kept: active pushes and requests with unknown results
-/// use only younger uploads.
+/// Everything else is obsolete: superseded snapshots, entries and packs
+/// that a snapshot folded, uploads of attempts that never became visible,
+/// and receipts. Obsolete data younger than its retention period is kept:
+/// active pushes and requests with unknown results use only younger uploads.
 ///
 /// Removal protects operations with a fence. Before the first removal, a
 /// `Removal` entry that lists the packs to remove is attached with CAS:
@@ -364,22 +373,17 @@ async fn plan(
     let mut required: HashSet<String> = HashSet::new();
     required.insert(storage.head_key(repo));
 
-    // The complete history, ignoring the snapshot shortcut.
-    let mut history = Vec::new();
-    let mut next = Some(head.latest_entry);
-    while let Some(id) = next {
-        let e = storage.get_entry(repo, id).await?;
-        next = e.previous;
-        history.push(e);
-    }
-    let base_generation = head.snapshot.as_ref().map(|s| s.base_generation);
-    for e in &history {
+    for e in load_entries(storage, head, head.first_generation()).await? {
         required.insert(storage.entry_key(repo, e.id));
-        if head.state == RepoState::Active && base_generation.is_none_or(|g| e.generation > g) {
+        if head.state == RepoState::Active {
             for p in &e.packs {
                 required.insert(storage.pack_key(repo, &p.sha256));
             }
         }
+    }
+    // Pushes read the fence entry until a later fence replaces it.
+    if let Some(r) = &head.removal {
+        required.insert(storage.entry_key(repo, r.entry));
     }
     if let (Some(p), RepoState::Active) = (&head.snapshot, head.state) {
         let s = storage.get_snapshot(repo, p.id).await?;
@@ -423,14 +427,14 @@ fn classify(key: &str, opts: &CleanupOptions) -> (Duration, &'static str) {
     if key.contains("/packs/") {
         (
             opts.pack_retention,
-            "pack not needed by the snapshot or later entries",
+            "pack not needed by the snapshot or the index",
         )
     } else if key.contains("/snapshots/") {
         (opts.record_retention, "superseded snapshot")
     } else if key.contains("/entries/") {
         (
             opts.record_retention,
-            "entry of an attempt that never became visible",
+            "entry not in the index: never accepted, or folded into a snapshot",
         )
     } else if key.contains("/receipts/") {
         (
@@ -455,11 +459,10 @@ async fn attach_fence(
     reuse_after_ms: u64,
 ) -> Result<Option<u64>, RepoError> {
     let entry = LogEntry {
-        format: FORMAT_VERSION,
+        format: LOG_FORMAT_VERSION,
         repository: head.repository,
         incarnation: head.incarnation,
         id: EntryId::new(),
-        previous: Some(head.latest_entry),
         generation: head.generation + 1,
         request: RequestId::new(),
         request_checksum: request_checksum("rustgit-cleanup", &[]),

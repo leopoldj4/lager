@@ -12,8 +12,8 @@ use crate::failpoint;
 use crate::git::hook::{HookCommand, HookResponse, HookResult};
 use crate::metrics::StepTimer;
 use crate::model::{
-    EntryId, FORMAT_VERSION, Head, LogEntry, ObjectFormat, Oid, Operation, PackRef, Receipt,
-    RefName, RefState, RefUpdate, RepoState, RequestId, now_ms, request_checksum,
+    EntryId, FORMAT_VERSION, Head, LOG_FORMAT_VERSION, LogEntry, ObjectFormat, Oid, Operation,
+    PackRef, Receipt, RefName, RefState, RefUpdate, RepoState, RequestId, now_ms, request_checksum,
 };
 use crate::storage::{CasOutcome, ETag, Storage};
 
@@ -57,7 +57,9 @@ pub async fn resolve_unknown_cas(
     }
 }
 
-/// After a definite conflict: did an earlier attempt of ours succeed?
+/// After a definite conflict: did an earlier attempt of ours succeed? The
+/// current head's index answers this until a snapshot folds the attempted
+/// generation; the result then stays unknown.
 async fn find_in_history(
     storage: &Storage,
     new_head: &Head,
@@ -74,17 +76,18 @@ async fn find_in_history(
     if head.incarnation != new_head.incarnation || head.generation < new_head.generation {
         return Ok(Resolution::Rejected);
     }
-    let entries = super::sync::load_entries(storage, &head, Some(new_head.generation))
-        .await
-        .map_err(|e| e.to_string())?;
-    match entries.first() {
-        Some(e) if e.generation == new_head.generation => Ok(if e.id == entry {
-            Resolution::Accepted(None)
-        } else {
-            Resolution::Rejected
-        }),
-        _ => Err("history does not reach the attempted generation".into()),
+    if head.contains(new_head.generation, entry) {
+        return Ok(Resolution::Accepted(None));
     }
+    if head.entry_at(new_head.generation).is_some()
+        || head
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| s.base_generation == new_head.generation)
+    {
+        return Ok(Resolution::Rejected);
+    }
+    Err("a snapshot folded the attempted generation".into())
 }
 
 fn jitter(attempt: u32) -> Duration {
@@ -267,11 +270,11 @@ impl Controller {
 
         // Steps 10-12: a pack relative to the parent state, uploaded and checked.
         fail.hit(failpoint::PUSH_BEFORE_UPLOAD).await;
-        if pack.as_ref().map(|(e, _, _)| *e) != Some(base.head.latest_entry) {
+        if pack.as_ref().map(|(e, _, _)| *e) != Some(base.entry) {
             let p = self
                 .build_and_store_pack(dir, &base.refs, &req.updates)
                 .await?;
-            *pack = Some((base.head.latest_entry, p, now_ms()));
+            *pack = Some((base.entry, p, now_ms()));
         }
         let (packs, uploaded_at): (Vec<PackRef>, u64) = match pack.as_ref() {
             Some((_, p, at)) => (p.clone().into_iter().collect(), *at),
@@ -294,13 +297,13 @@ impl Controller {
         }
         fail.hit(failpoint::PUSH_AFTER_UPLOAD).await;
 
-        // Step 13: an entry that points to the observed previous entry.
+        // Step 13: an entry for the generation after the observed head. Only
+        // the head's index makes it part of the history.
         let entry = LogEntry {
-            format: FORMAT_VERSION,
+            format: LOG_FORMAT_VERSION,
             repository: self.repo,
             incarnation: head.incarnation,
             id: EntryId::new(),
-            previous: Some(base.head.latest_entry),
             generation: base.head.generation + 1,
             request: req.id,
             request_checksum: req.checksum.clone(),
@@ -418,6 +421,7 @@ impl Controller {
                         &mut st,
                         Known {
                             head: new_head.clone(),
+                            entry: entry.id,
                             etag: accepted_etag,
                             refs: next,
                         },

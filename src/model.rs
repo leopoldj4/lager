@@ -13,6 +13,10 @@ use uuid::Uuid;
 /// The only record format version this build reads and writes.
 pub const FORMAT_VERSION: u32 = 1;
 
+/// Format of heads and log entries. Version 2: the head is the index of the
+/// log, and entries carry no link to their predecessor.
+pub const LOG_FORMAT_VERSION: u32 = 2;
+
 macro_rules! uuid_id {
     ($(#[$m:meta])* $name:ident) => {
         $(#[$m])*
@@ -224,6 +228,8 @@ pub enum ModelError {
     UnsupportedFormat(u32),
     #[error("record belongs to another repository or lifetime")]
     WrongRepository,
+    #[error("head index does not match its generation")]
+    InvalidIndex,
 }
 
 /// One requested ref change. `None` means the ref is absent.
@@ -259,6 +265,11 @@ pub struct RemovalPointer {
 }
 
 /// `repos/<id>/head.json`. The only record that changes in place.
+///
+/// The head is the index of the log: `entries` lists, oldest first, every
+/// entry after the snapshot base (every entry without a snapshot). Only the
+/// index orders entries; an uploaded entry that the index does not list was
+/// never accepted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Head {
@@ -267,7 +278,7 @@ pub struct Head {
     pub incarnation: IncarnationId,
     pub revision: RevisionId,
     pub generation: u64,
-    pub latest_entry: EntryId,
+    pub entries: Vec<EntryId>,
     pub snapshot: Option<SnapshotPointer>,
     pub object_format: ObjectFormat,
     pub state: RepoState,
@@ -276,18 +287,51 @@ pub struct Head {
 }
 
 impl Head {
+    /// Generation of the first entry in the index.
+    pub fn first_generation(&self) -> u64 {
+        self.snapshot.as_ref().map_or(0, |s| s.base_generation + 1)
+    }
+
+    /// The entry of the current generation.
+    pub fn latest_entry(&self) -> EntryId {
+        *self
+            .entries
+            .last()
+            .expect("checked: the index is never empty")
+    }
+
+    /// The entry of `generation`, if the index still lists it.
+    pub fn entry_at(&self, generation: u64) -> Option<EntryId> {
+        let i = generation.checked_sub(self.first_generation())?;
+        self.entries.get(usize::try_from(i).ok()?).copied()
+    }
+
+    /// Whether `entry` is the accepted entry of `generation`. Also true for
+    /// the snapshot base, which the index no longer lists.
+    pub fn contains(&self, generation: u64, entry: EntryId) -> bool {
+        self.entry_at(generation) == Some(entry)
+            || self
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.base_generation == generation && s.base_entry == entry)
+    }
+
     /// The head that follows `self` after appending `entry`.
     pub fn advance(&self, entry: &LogEntry) -> Head {
         let mut next = self.clone();
         next.revision = RevisionId::new();
         next.generation = entry.generation;
-        next.latest_entry = entry.id;
+        next.entries.push(entry.id);
         match &entry.operation {
             Operation::Snapshot {
                 snapshot,
                 base_entry,
                 base_generation,
             } => {
+                // The snapshot replaces the entries up to its base. Callers
+                // never attach a base older than the current one.
+                let folded = (base_generation + 1).saturating_sub(self.first_generation());
+                next.entries.drain(..folded as usize);
                 next.snapshot = Some(SnapshotPointer {
                     id: *snapshot,
                     base_entry: *base_entry,
@@ -312,11 +356,15 @@ impl Head {
     }
 
     pub fn check(&self, repo: RepoId) -> Result<(), ModelError> {
-        if self.format != FORMAT_VERSION {
+        if self.format != LOG_FORMAT_VERSION {
             return Err(ModelError::UnsupportedFormat(self.format));
         }
         if self.repository != repo {
             return Err(ModelError::WrongRepository);
+        }
+        let first = self.first_generation();
+        if self.generation < first || self.entries.len() as u64 != self.generation - first + 1 {
+            return Err(ModelError::InvalidIndex);
         }
         Ok(())
     }
@@ -366,7 +414,6 @@ pub struct LogEntry {
     pub repository: RepoId,
     pub incarnation: IncarnationId,
     pub id: EntryId,
-    pub previous: Option<EntryId>,
     pub generation: u64,
     pub request: RequestId,
     pub request_checksum: String,
@@ -381,7 +428,7 @@ pub struct LogEntry {
 
 impl LogEntry {
     pub fn check(&self, repo: RepoId, incarnation: IncarnationId) -> Result<(), ModelError> {
-        if self.format != FORMAT_VERSION {
+        if self.format != LOG_FORMAT_VERSION {
             return Err(ModelError::UnsupportedFormat(self.format));
         }
         if self.repository != repo || self.incarnation != incarnation {
@@ -724,26 +771,110 @@ mod tests {
 
     #[test]
     fn records_with_unknown_format_are_rejected() {
-        let head = Head {
-            format: 2,
-            repository: RepoId::new(),
-            incarnation: IncarnationId::new(),
-            revision: RevisionId::new(),
-            generation: 0,
-            latest_entry: EntryId::new(),
-            snapshot: None,
-            object_format: ObjectFormat::Sha1,
-            state: RepoState::Active,
-            removal: None,
-        };
+        let mut head = new_head();
+        head.format = 1;
         assert_eq!(
             head.check(head.repository),
-            Err(ModelError::UnsupportedFormat(2))
+            Err(ModelError::UnsupportedFormat(1))
         );
         let json = serde_json::to_string(&head)
             .unwrap()
             .replace("\"state\"", "\"extra\":1,\"state\"");
         assert!(serde_json::from_str::<Head>(&json).is_err());
+    }
+
+    fn new_head() -> Head {
+        Head {
+            format: LOG_FORMAT_VERSION,
+            repository: RepoId::new(),
+            incarnation: IncarnationId::new(),
+            revision: RevisionId::new(),
+            generation: 0,
+            entries: vec![EntryId::new()],
+            snapshot: None,
+            object_format: ObjectFormat::Sha1,
+            state: RepoState::Active,
+            removal: None,
+        }
+    }
+
+    fn entry(head: &Head, operation: Operation) -> LogEntry {
+        LogEntry {
+            format: LOG_FORMAT_VERSION,
+            repository: head.repository,
+            incarnation: head.incarnation,
+            id: EntryId::new(),
+            generation: head.generation + 1,
+            request: RequestId::new(),
+            request_checksum: String::new(),
+            operation,
+            refs: vec![],
+            packs: vec![],
+            user: "u".into(),
+            rules_version: 0,
+            received_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn the_head_indexes_every_entry_after_the_snapshot_base() {
+        let mut head = new_head();
+        let first = head.latest_entry();
+        let mut ids = vec![first];
+        for _ in 0..3 {
+            let e = entry(&head, Operation::Push);
+            ids.push(e.id);
+            head = head.advance(&e);
+        }
+        assert_eq!(head.generation, 3);
+        assert_eq!(head.entries, ids);
+        assert_eq!(head.entry_at(0), Some(first));
+        assert_eq!(head.entry_at(4), None);
+        assert!(head.check(head.repository).is_ok());
+
+        // A snapshot of generation 2, attached as generation 4, keeps only
+        // the entries after its base: generations 3 and 4.
+        let snap = entry(
+            &head,
+            Operation::Snapshot {
+                snapshot: SnapshotId::new(),
+                base_entry: ids[2],
+                base_generation: 2,
+            },
+        );
+        let head = head.advance(&snap);
+        assert_eq!(head.first_generation(), 3);
+        assert_eq!(head.entries, vec![ids[3], snap.id]);
+        assert_eq!(head.latest_entry(), snap.id);
+        assert_eq!(head.entry_at(2), None);
+        assert!(head.contains(2, ids[2]));
+        assert!(!head.contains(1, ids[1]));
+        assert!(head.contains(3, ids[3]));
+        assert!(head.check(head.repository).is_ok());
+
+        // A snapshot of the latest generation leaves only its own entry.
+        let snap2 = entry(
+            &head,
+            Operation::Snapshot {
+                snapshot: SnapshotId::new(),
+                base_entry: snap.id,
+                base_generation: 4,
+            },
+        );
+        let head = head.advance(&snap2);
+        assert_eq!(head.entries, vec![snap2.id]);
+        assert_eq!(head.first_generation(), 5);
+        assert!(head.check(head.repository).is_ok());
+    }
+
+    #[test]
+    fn an_index_that_does_not_match_the_generation_is_rejected() {
+        let mut head = new_head();
+        head.generation = 1;
+        assert_eq!(head.check(head.repository), Err(ModelError::InvalidIndex));
+        head.generation = 0;
+        head.entries.clear();
+        assert_eq!(head.check(head.repository), Err(ModelError::InvalidIndex));
     }
 
     #[test]

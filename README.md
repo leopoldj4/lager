@@ -120,7 +120,7 @@ notify = true                      # tell other servers about pushes
 peer_token = "..."
 
 [maintenance]
-snapshot_after_entries = 200       # on the preferred server only
+snapshot_after_entries = 200       # the default; on the preferred server only
 ```
 
 With `catalog.kind = "config"` (the default), repositories are `[[repos]]`

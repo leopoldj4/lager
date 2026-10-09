@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use super::push::{Resolution, resolve_unknown_cas};
 use crate::model::{
-    EntryId, FORMAT_VERSION, Head, IncarnationId, LogEntry, ObjectFormat, Operation, RefName,
+    EntryId, Head, IncarnationId, LOG_FORMAT_VERSION, LogEntry, ObjectFormat, Operation, RefName,
     RepoId, RepoState, RequestId, RevisionId, now_ms, request_checksum,
 };
 use crate::storage::{CasOutcome, Storage, StorageError};
@@ -37,11 +37,10 @@ pub async fn create_repository(
 ) -> Result<Head, AdminError> {
     let incarnation = IncarnationId::new();
     let entry = LogEntry {
-        format: FORMAT_VERSION,
+        format: LOG_FORMAT_VERSION,
         repository: repo,
         incarnation,
         id: EntryId::new(),
-        previous: None,
         generation: 0,
         request: RequestId::new(),
         request_checksum: request_checksum(user, &[]),
@@ -56,12 +55,12 @@ pub async fn create_repository(
     };
     storage.put_entry(&entry).await?;
     let head = Head {
-        format: FORMAT_VERSION,
+        format: LOG_FORMAT_VERSION,
         repository: repo,
         incarnation,
         revision: RevisionId::new(),
         generation: 0,
-        latest_entry: entry.id,
+        entries: vec![entry.id],
         snapshot: None,
         object_format: ObjectFormat::Sha1,
         state: RepoState::Active,
@@ -119,11 +118,10 @@ pub async fn append_entry(
             return Err(AdminError::Deleted);
         }
         let entry = LogEntry {
-            format: FORMAT_VERSION,
+            format: LOG_FORMAT_VERSION,
             repository: repo,
             incarnation: head.incarnation,
             id: EntryId::new(),
-            previous: Some(head.latest_entry),
             generation: head.generation + 1,
             request,
             request_checksum: request_checksum(user, &[]),

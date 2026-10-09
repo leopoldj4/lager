@@ -1,11 +1,12 @@
 //! Bringing a cache to a storage generation, and rebuilding it.
 //!
-//! Accepted changes are found only by following the head and the
-//! previous-entry links, never by listing storage.
+//! Accepted changes are found only through the head's index, never by
+//! listing storage.
 
 use std::path::Path;
 use std::sync::Arc;
 
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use super::{CacheInstance, CacheState, Controller, Known, RepoError};
@@ -33,60 +34,51 @@ pub struct Chain {
     pub entries: Vec<LogEntry>,
 }
 
-/// Follows previous-entry links from the head's latest entry down to (but not
-/// including) `stop_generation`, or to the snapshot base, or to the first entry.
+/// Entries read from storage at the same time.
+const PARALLEL_READS: usize = 16;
+
+/// Loads the indexed entries from generation `from` to the head's generation,
+/// oldest first, and checks each against its place in the index. `from` must
+/// not precede the index.
 pub async fn load_entries(
     storage: &Storage,
     head: &Head,
-    stop_generation: Option<u64>,
+    from: u64,
 ) -> Result<Vec<LogEntry>, StorageError> {
-    let snapshot_base = head
-        .snapshot
-        .as_ref()
-        .map(|s| (s.base_generation, s.base_entry));
-    let mut out = Vec::new();
-    let mut next = Some(head.latest_entry);
-    let mut expected = head.generation;
-    while let Some(id) = next {
-        let e = storage.get_entry(head.repository, id).await?;
-        e.check(head.repository, head.incarnation)
-            .map_err(|m| StorageError::Corrupt(format!("entry {id}: {m}")))?;
-        if e.generation != expected {
-            return Err(StorageError::Corrupt(format!(
-                "entry {id}: generation {} != {expected}",
-                e.generation
-            )));
-        }
-        if Some(e.generation) == stop_generation {
-            out.push(e);
-            break;
-        }
-        if let Some((g, base)) = snapshot_base
-            && stop_generation.is_none()
-            && e.generation == g
-        {
-            if e.id != base {
+    let first = head.first_generation();
+    let skip = from.checked_sub(first).ok_or_else(|| {
+        StorageError::Corrupt(format!(
+            "generation {from} precedes the index (from {first})"
+        ))
+    })?;
+    let wanted: Vec<(u64, EntryId)> = head
+        .entries
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(skip as usize)
+        .map(|(i, id)| (first + i as u64, id))
+        .collect();
+    futures::stream::iter(wanted)
+        .map(|(generation, id)| async move {
+            let e = storage.get_entry(head.repository, id).await?;
+            e.check(head.repository, head.incarnation)
+                .map_err(|m| StorageError::Corrupt(format!("entry {id}: {m}")))?;
+            if e.generation != generation {
                 return Err(StorageError::Corrupt(format!(
-                    "snapshot base {base} is not in the history"
+                    "entry {id}: generation {} != {generation}",
+                    e.generation
                 )));
             }
-            break;
-        }
-        next = e.previous;
-        if next.is_none() && e.generation != 0 {
-            return Err(StorageError::Corrupt(format!(
-                "entry {id} has no previous entry"
-            )));
-        }
-        out.push(e);
-        expected = expected.wrapping_sub(1);
-    }
-    out.reverse();
-    Ok(out)
+            Ok(e)
+        })
+        .buffered(PARALLEL_READS)
+        .try_collect()
+        .await
 }
 
 pub async fn load_chain(storage: &Storage, head: &Head) -> Result<Chain, StorageError> {
-    let entries = load_entries(storage, head, None).await?;
+    let entries = load_entries(storage, head, head.first_generation()).await?;
     let snapshot = match &head.snapshot {
         Some(p) => {
             let s = storage.get_snapshot(head.repository, p.id).await?;
@@ -155,17 +147,12 @@ impl Controller {
         let _t = StepTimer::new(&self.svc.metrics, "cache_update");
         let known = st.known.clone().expect("checked by caller");
         let cache = st.cache.clone().expect("checked by caller");
-        let mut entries =
-            load_entries(&self.svc.storage, head, Some(known.head.generation)).await?;
-        let first = entries
-            .first()
-            .ok_or_else(|| RepoError::Internal("empty history".into()))?;
-        if first.generation != known.head.generation || first.id != known.head.latest_entry {
+        if !head.contains(known.head.generation, known.entry) {
             return Err(RepoError::Internal(
-                "cache is not on the storage history".into(),
+                "cache generation is not in the storage index".into(),
             ));
         }
-        entries.remove(0);
+        let entries = load_entries(&self.svc.storage, head, known.head.generation + 1).await?;
         let _space = self
             .svc
             .reserve_for_packs(entries.iter().flat_map(|e| e.packs.iter()))?;
@@ -188,6 +175,7 @@ impl Controller {
             st,
             Known {
                 head: head.clone(),
+                entry: head.latest_entry(),
                 etag: Some(etag.clone()),
                 refs,
             },
@@ -271,6 +259,7 @@ impl Controller {
             st,
             Known {
                 head: head.clone(),
+                entry: head.latest_entry(),
                 etag: Some(etag.clone()),
                 refs,
             },
@@ -327,7 +316,7 @@ impl Controller {
             head.repository,
             head.incarnation,
             head.generation,
-            head.latest_entry,
+            head.latest_entry(),
         )
         .await?;
         Ok(())
@@ -418,7 +407,6 @@ impl Controller {
         self.svc.git.check_connectivity(dir).await?;
         let mut marker_head = head.clone();
         marker_head.generation = m.generation;
-        marker_head.latest_entry = m.entry;
         if m.generation != head.generation {
             // Unknown revision of that older head: the next check differs and
             // updates the cache from the marker's generation.
@@ -427,6 +415,7 @@ impl Controller {
         }
         Ok(Known {
             head: marker_head,
+            entry: m.entry,
             etag: None,
             refs: state,
         })

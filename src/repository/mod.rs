@@ -274,7 +274,11 @@ impl Drop for ReadView {
 /// What the cache holds.
 #[derive(Clone, Debug)]
 pub struct Known {
+    /// The head of the cache's generation. Its index can be newer than that
+    /// generation for a cache from an earlier process; use `entry`.
     pub head: Head,
+    /// The entry of the cache's generation.
+    pub entry: crate::model::EntryId,
     /// `None` when the accepted head's ETag is not known.
     pub etag: Option<ETag>,
     pub refs: RefState,
@@ -506,6 +510,10 @@ impl Controller {
             } else if k.head.generation > head.generation {
                 // A newer local state from a concurrent operation.
                 return Ok(());
+            } else if !head.contains(k.head.generation, k.entry) {
+                // A snapshot folded the cache's generation out of the index.
+                tracing::info!(repo = %self.repo, generation = k.head.generation, "cache is behind the snapshot; rebuilding");
+                st.poison();
             } else {
                 match self.apply_new_entries(st, head, etag).await {
                     Ok(()) => return Ok(()),

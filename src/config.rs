@@ -338,6 +338,7 @@ impl Default for CatalogConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct MaintenanceConfig {
     /// Create a snapshot when this many entries follow the last snapshot.
+    /// The head's index lists those entries, so snapshots keep it short.
     /// 0 disables automatic snapshots. Only the preferred server for a
     /// repository starts them.
     pub snapshot_after_entries: u64,
@@ -347,7 +348,7 @@ pub struct MaintenanceConfig {
 impl Default for MaintenanceConfig {
     fn default() -> Self {
         Self {
-            snapshot_after_entries: 0,
+            snapshot_after_entries: 200,
             check_interval_secs: 60,
         }
     }
