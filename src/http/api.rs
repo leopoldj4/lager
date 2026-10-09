@@ -6,6 +6,10 @@
 //! identity provider manages them (`[database]`), and not those from the
 //! configuration file; repositories can be changed only with the storage
 //! catalog.
+//!
+//! Every database user manages its own personal access tokens under
+//! `tokens`; admins can list and delete any user's under `users/<name>/tokens`
+//! (docs/decisions/0009-personal-access-tokens.md).
 
 use std::collections::BTreeMap;
 
@@ -22,7 +26,7 @@ use super::password::{DEFAULT_ITERATIONS, PasswordHash};
 use super::{AppInner, AppState};
 use crate::catalog::{Catalog, CatalogError};
 use crate::config::{Access, RepoConfig};
-use crate::identity::{self, UserChange, UserError};
+use crate::identity::{self, TokenId, UserChange, UserError};
 use crate::model::{RepoId, RepoState};
 use crate::repository::admin::AdminError;
 
@@ -40,6 +44,13 @@ pub fn router() -> Router<AppState> {
             "/users/{name}",
             axum::routing::patch(update_user).delete(delete_user),
         )
+        .route("/users/{name}/tokens", get(user_tokens))
+        .route(
+            "/users/{name}/tokens/{id}",
+            axum::routing::delete(delete_user_token),
+        )
+        .route("/tokens", get(own_tokens).post(create_token))
+        .route("/tokens/{id}", axum::routing::delete(delete_own_token))
 }
 
 fn error(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -101,6 +112,7 @@ async fn me(State(s): State<AppState>, headers: HeaderMap) -> Response {
         Ok(who) => Json(serde_json::json!({
             "name": who.name(),
             "admin": who.is_global_admin(),
+            "token": who.token(),
         }))
         .into_response(),
         Err(r) => r,
@@ -313,7 +325,9 @@ fn user_error(e: UserError) -> Response {
         UserError::Exists(_) | UserError::Unmanaged(_) => {
             error(StatusCode::CONFLICT, e.to_string())
         }
-        UserError::NotFound(_) => error(StatusCode::NOT_FOUND, e.to_string()),
+        UserError::NotFound(_) | UserError::TokenNotFound(_) => {
+            error(StatusCode::NOT_FOUND, e.to_string())
+        }
         UserError::Invalid(_) => error(StatusCode::BAD_REQUEST, e.to_string()),
         UserError::Unavailable(m) => {
             tracing::warn!(error = %m, "user store unavailable");
@@ -455,5 +469,109 @@ async fn delete_user(
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => user_error(e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewTokenRequest {
+    name: String,
+    /// Leave out for the user's access.
+    #[serde(default)]
+    access: Option<BTreeMap<String, Access>>,
+    #[serde(default)]
+    expires_days: Option<u32>,
+}
+
+/// Creates a token for the caller. Needs the password: a token, perhaps
+/// limited to reading one repository, must not create a broader one.
+async fn create_token(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(new): Json<NewTokenRequest>,
+) -> Response {
+    let who = match identify(&s, &headers).await {
+        Ok(w) => w,
+        Err(r) => return r,
+    };
+    if who.token().is_some() {
+        return error(
+            StatusCode::FORBIDDEN,
+            "a token cannot create tokens; sign in with your password",
+        );
+    }
+    let new = identity::NewToken {
+        name: new.name,
+        access: new.access,
+        expires_days: new.expires_days,
+    };
+    if let Err(e) = identity::validate_token(&new) {
+        return user_error(e);
+    }
+    match s.directory.identities().create_token(who.name(), new).await {
+        Ok((t, secret)) => {
+            tracing::info!(user = %who.name(), token = t.id, "created token");
+            let mut v = serde_json::to_value(&t).expect("serializes");
+            v["token"] = secret.into();
+            (StatusCode::CREATED, Json(v)).into_response()
+        }
+        Err(e) => user_error(e),
+    }
+}
+
+async fn tokens_of(s: &AppInner, user: &str) -> Response {
+    match s.directory.identities().tokens(user).await {
+        Ok(t) => Json(t).into_response(),
+        Err(e) => user_error(e),
+    }
+}
+
+async fn delete_token_of(s: &AppInner, who: &Identity, user: &str, id: TokenId) -> Response {
+    match s.directory.identities().delete_token(user, id).await {
+        Ok(()) => {
+            tracing::info!(user = %user, token = id, by = %who.name(), "deleted token");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => user_error(e),
+    }
+}
+
+async fn own_tokens(State(s): State<AppState>, headers: HeaderMap) -> Response {
+    match identify(&s, &headers).await {
+        Ok(who) => tokens_of(&s, who.name()).await,
+        Err(r) => r,
+    }
+}
+
+async fn delete_own_token(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<TokenId>,
+) -> Response {
+    match identify(&s, &headers).await {
+        Ok(who) => delete_token_of(&s, &who, who.name(), id).await,
+        Err(r) => r,
+    }
+}
+
+async fn user_tokens(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    match admin(&s, &headers).await {
+        Ok(_) => tokens_of(&s, &name).await,
+        Err(r) => r,
+    }
+}
+
+async fn delete_user_token(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path((name, id)): Path<(String, TokenId)>,
+) -> Response {
+    match admin(&s, &headers).await {
+        Ok(who) => delete_token_of(&s, &who, &name, id).await,
+        Err(r) => r,
     }
 }

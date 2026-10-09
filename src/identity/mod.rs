@@ -10,6 +10,10 @@
 //! - Otherwise users in the configuration file ([`file`]), then, with
 //!   `[database]`, users in PostgreSQL ([`postgres`]). File users take
 //!   precedence, so the file always keeps a way in.
+//!
+//! Database users can also sign in with personal access tokens
+//! (docs/decisions/0009-personal-access-tokens.md): the token takes the
+//! place of the password, and can limit the user's access further.
 
 pub mod file;
 pub mod postgres;
@@ -35,8 +39,12 @@ pub enum Identity {
     User {
         name: String,
         access: BTreeMap<String, Access>,
+        /// The personal access token used instead of the password.
+        token: Option<TokenId>,
     },
 }
+
+pub type TokenId = i64;
 
 impl Identity {
     pub fn name(&self) -> &str {
@@ -55,6 +63,14 @@ impl Identity {
                 .or_else(|| access.get("*"))
                 .copied()
                 .unwrap_or(Access::None),
+        }
+    }
+
+    /// The token this identity signed in with, if any.
+    pub fn token(&self) -> Option<TokenId> {
+        match self {
+            Identity::Anonymous => None,
+            Identity::User { token, .. } => *token,
         }
     }
 
@@ -82,6 +98,8 @@ pub enum UserError {
     Exists(String),
     #[error("user {0} not found")]
     NotFound(String),
+    #[error("token {0} not found")]
+    TokenNotFound(TokenId),
     #[error("{0}")]
     Invalid(String),
     /// The user cannot be changed through this server.
@@ -125,6 +143,51 @@ pub struct UserChange {
     pub access: Option<BTreeMap<String, Access>>,
 }
 
+/// Prefix of every personal access token, so that scanners and people can
+/// recognize one.
+pub const TOKEN_PREFIX: &str = "rgpat_";
+
+/// A personal access token as the admin API shows it. The token itself is
+/// shown once, when it is created, and never stored.
+#[derive(Clone, Debug, Serialize)]
+pub struct Token {
+    pub id: TokenId,
+    pub name: String,
+    /// `None`: the user's access. Otherwise at most these levels, and never
+    /// more than the user has.
+    pub access: Option<BTreeMap<String, Access>>,
+    pub created_ms: u64,
+    pub expires_ms: Option<u64>,
+    /// Updated at most once a minute.
+    pub last_used_ms: Option<u64>,
+}
+
+pub struct NewToken {
+    pub name: String,
+    pub access: Option<BTreeMap<String, Access>>,
+    pub expires_days: Option<u32>,
+}
+
+/// The lower of two access levels for every repository: a token never
+/// grants more than its user has. Repositories that neither map names fall
+/// back to the lower `"*"` level, as [`Identity::access`] does.
+pub fn restrict(
+    user: &BTreeMap<String, Access>,
+    token: &BTreeMap<String, Access>,
+) -> BTreeMap<String, Access> {
+    let level = |m: &BTreeMap<String, Access>, k: &str| {
+        m.get(k)
+            .or_else(|| m.get("*"))
+            .copied()
+            .unwrap_or(Access::None)
+    };
+    user.keys()
+        .chain(token.keys())
+        .chain(std::iter::once(&"*".to_string()))
+        .map(|k| (k.clone(), level(user, k).min(level(token, k))))
+        .collect()
+}
+
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
     /// Checks a user name and password. `Ok(None)`: no user with this name
@@ -152,6 +215,25 @@ pub trait IdentityProvider: Send + Sync {
     }
 
     async fn delete(&self, _name: &str, _by: &str) -> Result<(), UserError> {
+        Err(unmanaged())
+    }
+
+    /// Creates a personal access token for a user. Answers with the token,
+    /// which is not kept.
+    async fn create_token(
+        &self,
+        _user: &str,
+        _new: NewToken,
+    ) -> Result<(Token, String), UserError> {
+        Err(unmanaged())
+    }
+
+    /// A user's tokens, oldest first, without expired ones.
+    async fn tokens(&self, _user: &str) -> Result<Vec<Token>, UserError> {
+        Ok(vec![])
+    }
+
+    async fn delete_token(&self, _user: &str, _id: TokenId) -> Result<(), UserError> {
         Err(unmanaged())
     }
 
@@ -250,6 +332,21 @@ impl IdentityProvider for Layered {
         self.changeable(name)?.delete(name, by).await
     }
 
+    async fn create_token(&self, user: &str, new: NewToken) -> Result<(Token, String), UserError> {
+        self.changeable(user)?.create_token(user, new).await
+    }
+
+    async fn tokens(&self, user: &str) -> Result<Vec<Token>, UserError> {
+        match self.changeable(user) {
+            Ok(s) => s.tokens(user).await,
+            Err(_) => Ok(vec![]),
+        }
+    }
+
+    async fn delete_token(&self, user: &str, id: TokenId) -> Result<(), UserError> {
+        self.changeable(user)?.delete_token(user, id).await
+    }
+
     fn reload(&self, cfg: &Config) {
         self.file.reload(cfg);
     }
@@ -273,6 +370,12 @@ pub fn validate_user_name(name: &str) -> Result<(), UserError> {
 }
 
 pub fn validate_password(password: &str) -> Result<(), UserError> {
+    // Such a password would be taken for a token.
+    if password.starts_with(TOKEN_PREFIX) {
+        return Err(UserError::Invalid(format!(
+            "passwords cannot start with {TOKEN_PREFIX}"
+        )));
+    }
     if password.chars().count() < MIN_PASSWORD_CHARS {
         return Err(UserError::Invalid(format!(
             "passwords need at least {MIN_PASSWORD_CHARS} characters"
@@ -286,6 +389,32 @@ pub fn validate_access(access: &BTreeMap<String, Access>) -> Result<(), UserErro
         if name != "*" {
             validate_repo_name(name).map_err(|e| UserError::Invalid(e.to_string()))?;
         }
+    }
+    Ok(())
+}
+
+/// Token names are labels for people, such as "CI for org/app".
+pub fn validate_token(new: &NewToken) -> Result<(), UserError> {
+    let chars = new.name.chars().count();
+    if !(1..=100).contains(&chars) || new.name.chars().any(char::is_control) {
+        return Err(UserError::Invalid(
+            "token names need 1 to 100 characters and no control characters".into(),
+        ));
+    }
+    if let Some(access) = &new.access {
+        if access.is_empty() {
+            return Err(UserError::Invalid(
+                "a token's access needs at least one repository or \"*\"; \
+                 leave it out for the user's access"
+                    .into(),
+            ));
+        }
+        validate_access(access)?;
+    }
+    if new.expires_days.is_some_and(|d| !(1..=3650).contains(&d)) {
+        return Err(UserError::Invalid(
+            "expires_days must be between 1 and 3650".into(),
+        ));
     }
     Ok(())
 }

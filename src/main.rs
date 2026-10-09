@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use rustgit::catalog::Catalog;
-use rustgit::client::{self, Client, Login};
+use rustgit::client::{self, Client, ClientError, Login};
 use rustgit::config::{CatalogKind, Config, validate_repo_name};
 use rustgit::model::{RepoId, branch_ref};
 use rustgit::repository::admin;
@@ -33,8 +33,15 @@ enum Cmd {
         #[arg(long, short)]
         user: Option<String>,
     },
-    /// Remove the credentials that `rustgit login` kept.
+    /// Remove the credentials that `rustgit login` kept, and delete the
+    /// token it created on the server.
     Logout,
+    /// Personal access tokens for Git and other programs, on the server of
+    /// `rustgit login`.
+    Token {
+        #[command(subcommand)]
+        cmd: TokenCmd,
+    },
     /// Repository management: through the server after `rustgit login`,
     /// or directly in storage with a server configuration.
     Repo {
@@ -86,6 +93,25 @@ enum RepoCmd {
 }
 
 #[derive(Subcommand)]
+enum TokenCmd {
+    /// Create a token and print it once. Asks for your password.
+    Create {
+        /// What the token is for, such as "CI for org/app".
+        name: String,
+        /// Limit the token to a level for a repository (or "*"), such as
+        /// org/app=read. Repeatable. Without it, the token has your access.
+        #[arg(long, value_name = "REPO=LEVEL")]
+        access: Vec<String>,
+        #[arg(long)]
+        expires_days: Option<u32>,
+    },
+    /// List your tokens.
+    List,
+    /// Delete a token. Git and programs that use it stop working.
+    Delete { id: i64 },
+}
+
+#[derive(Subcommand)]
 enum BackupCmd {
     Export {
         name: String,
@@ -122,7 +148,8 @@ fn main() {
 async fn run(cli: Cli) -> anyhow::Result<()> {
     let cmd = match cli.cmd {
         Cmd::Login { url, user } => return login(&url, user).await,
-        Cmd::Logout => return logout(),
+        Cmd::Logout => return logout().await,
+        Cmd::Token { cmd } => return token_cmd(cmd).await,
         Cmd::Repo { cmd } if cli.config.is_none() => {
             if let Some(login) = saved_login()? {
                 return remote_repo_cmd(login, cmd).await;
@@ -202,7 +229,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let report = rustgit::maintenance::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        Cmd::HashPassword | Cmd::Login { .. } | Cmd::Logout => {
+        Cmd::HashPassword | Cmd::Login { .. } | Cmd::Logout | Cmd::Token { .. } => {
             unreachable!("handled before the configuration loads")
         }
         Cmd::Backup {
@@ -382,7 +409,8 @@ fn saved_login() -> anyhow::Result<Option<Login>> {
     Login::load(&login_path()?)
 }
 
-/// Checks the credentials with the server before keeping them.
+/// Checks the credentials with the server, then keeps a new personal
+/// access token in place of the password where the server has tokens.
 async fn login(url: &str, user: Option<String>) -> anyhow::Result<()> {
     let (url, url_user, url_password) = client::parse_server_url(url)?;
     let user = match user.or(url_user) {
@@ -391,33 +419,156 @@ async fn login(url: &str, user: Option<String>) -> anyhow::Result<()> {
     };
     let password = match url_password {
         Some(p) => p,
-        None => client::prompt("Password: ", true)?,
+        None => client::prompt("Password or token: ", true)?,
     };
     let client = Client::new(Login {
         url,
         user,
         password,
+        created_token: None,
     })?;
     let me = client.me().await?;
+    let mut login = client.login().clone();
+    if me.token.is_none() {
+        let name = format!("rustgit login on {}", client::hostname());
+        match client.create_token(&name, None, None).await {
+            Ok(t) => {
+                login.password = t.token;
+                login.created_token = Some(t.id);
+            }
+            // Users in the server's configuration file, a server without a
+            // database, or an older server.
+            Err(ClientError::Server {
+                status: 404 | 409, ..
+            }) => {
+                eprintln!(
+                    "the server has no tokens for {}; keeping the password instead",
+                    me.name
+                );
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
     let path = login_path()?;
-    client.login().save(&path)?;
-    println!("logged in to {} as {}", client.login().url, me.name);
+    login.save(&path)?;
+    println!("logged in to {} as {}", login.url, me.name);
     if !me.admin {
         println!("repository commands need admin access to every repository (\"*\" = \"admin\")");
     }
     Ok(())
 }
 
-fn logout() -> anyhow::Result<()> {
+async fn logout() -> anyhow::Result<()> {
     let path = login_path()?;
-    match Login::load(&path)? {
-        Some(l) => {
-            std::fs::remove_file(&path)?;
-            println!("logged out of {}", l.url);
+    let Some(l) = Login::load(&path)? else {
+        println!("not logged in");
+        return Ok(());
+    };
+    if let Some(id) = l.created_token {
+        match Client::new(l.clone())?.delete_token(id).await {
+            // Already deleted, or the user is gone.
+            Ok(())
+            | Err(ClientError::Unauthorized(_) | ClientError::Server { status: 404, .. }) => {}
+            Err(e) => {
+                eprintln!("warning: token {id} not deleted on the server ({e}); delete it there")
+            }
         }
-        None => println!("not logged in"),
+    }
+    std::fs::remove_file(&path)?;
+    println!("logged out of {}", l.url);
+    Ok(())
+}
+
+async fn token_cmd(cmd: TokenCmd) -> anyhow::Result<()> {
+    let login = saved_login()?
+        .ok_or_else(|| anyhow::anyhow!("not logged in; run rustgit login <url> first"))?;
+    match cmd {
+        TokenCmd::Create {
+            name,
+            access,
+            expires_days,
+        } => {
+            let mut levels = std::collections::BTreeMap::new();
+            for a in &access {
+                let (repo, level) = a
+                    .rsplit_once('=')
+                    .ok_or_else(|| anyhow::anyhow!("--access {a:?}: use REPO=LEVEL"))?;
+                levels.insert(repo.to_string(), level.to_string());
+            }
+            // A token cannot create tokens.
+            let password = client::prompt(&format!("Password for {}: ", login.user), true)?;
+            let client = Client::new(Login {
+                password,
+                created_token: None,
+                ..login
+            })?;
+            let levels = (!levels.is_empty()).then_some(&levels);
+            let t = client.create_token(&name, levels, expires_days).await?;
+            eprintln!("created token {}; it is shown only now:", t.id);
+            println!("{}", t.token);
+        }
+        TokenCmd::List => {
+            let own = login.created_token;
+            for t in Client::new(login)?.tokens().await? {
+                let access = match &t.access {
+                    None => "user's access".to_string(),
+                    Some(m) => m
+                        .iter()
+                        .map(|(r, l)| format!("{r}={l}"))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                };
+                let expires = t
+                    .expires_ms
+                    .map_or("no expiry".into(), |ms| format!("expires {}", relative(ms)));
+                let used = t
+                    .last_used_ms
+                    .map_or("never used".into(), |ms| format!("used {}", relative(ms)));
+                let mark = if Some(t.id) == own {
+                    " (this login)"
+                } else {
+                    ""
+                };
+                println!(
+                    "{}\t{}{mark}\t{access}\tcreated {}\t{expires}\t{used}",
+                    t.id,
+                    t.name,
+                    relative(t.created_ms)
+                );
+            }
+        }
+        TokenCmd::Delete { id } => {
+            let own = login.created_token == Some(id);
+            Client::new(login)?.delete_token(id).await?;
+            println!("deleted token {id}");
+            if own {
+                println!("it was this login's token; run rustgit login again");
+            }
+        }
     }
     Ok(())
+}
+
+/// "3 days ago" or "in 3 days" for a time in milliseconds since 1970.
+fn relative(ms: u64) -> String {
+    let now = rustgit::model::now_ms();
+    let (d, future) = if ms > now {
+        (ms - now, true)
+    } else {
+        (now - ms, false)
+    };
+    let s = d / 1000;
+    let amount = match s {
+        0..60 => format!("{s} s"),
+        60..3600 => format!("{} min", s / 60),
+        3600..86400 => format!("{} h", s / 3600),
+        _ => format!("{} days", (s + 43200) / 86400),
+    };
+    if future {
+        format!("in {amount}")
+    } else {
+        format!("{amount} ago")
+    }
 }
 
 async fn remote_repo_cmd(login: Login, cmd: RepoCmd) -> anyhow::Result<()> {
