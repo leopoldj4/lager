@@ -1,9 +1,10 @@
 //! Backup and recovery commands.
 //!
-//! An export copies every stored record of a repository's history and every
-//! pack that its recovery needs to a local directory. An import writes the
-//! immutable records first and creates the head last, with a conditional
-//! request, so an import never overwrites an existing repository.
+//! An export copies the snapshot, every entry in the head's index, the
+//! receipts, and every pack that recovery needs to a local directory. An
+//! import writes the immutable records first and creates the head last, with
+//! a conditional request, so an import never overwrites an existing
+//! repository.
 
 use std::path::Path;
 
@@ -52,7 +53,7 @@ pub async fn export(storage: &Storage, repo: RepoId, dir: &Path) -> Result<Manif
     let mut records = Vec::new();
     let mut packs: Vec<PackRef> = Vec::new();
 
-    // The recovery chain must be complete.
+    // The indexed history must be complete.
     let chain = load_chain(storage, &head).await?;
     chain_state(&chain).map_err(BackupError::Invalid)?;
     if let Some(s) = &chain.snapshot {
@@ -67,16 +68,25 @@ pub async fn export(storage: &Storage, repo: RepoId, dir: &Path) -> Result<Manif
     }
     for e in &chain.entries {
         packs.extend(e.packs.iter().cloned());
-    }
-    // The complete operation history, including entries before the snapshot.
-    let mut next = Some(head.latest_entry);
-    while let Some(id) = next {
-        let key = storage.entry_key(repo, id);
-        let raw = storage.get_raw(&key).await?;
-        let e = storage.get_entry(repo, id).await?;
-        tokio::fs::write(dir.join(rel(storage, repo, &key)), raw).await?;
+        let key = storage.entry_key(repo, e.id);
+        tokio::fs::write(
+            dir.join(rel(storage, repo, &key)),
+            storage.get_raw(&key).await?,
+        )
+        .await?;
         records.push(rel(storage, repo, &key));
-        next = e.previous;
+    }
+    // Pushes read the latest removal fence.
+    if let Some(r) = &head.removal
+        && !chain.entries.iter().any(|e| e.id == r.entry)
+    {
+        let key = storage.entry_key(repo, r.entry);
+        tokio::fs::write(
+            dir.join(rel(storage, repo, &key)),
+            storage.get_raw(&key).await?,
+        )
+        .await?;
+        records.push(rel(storage, repo, &key));
     }
     let receipts_prefix = format!("{}receipts/", storage.repo_prefix(repo));
     for obj in storage.list_repo(repo).await? {
@@ -152,7 +162,7 @@ pub async fn import(storage: &Storage, dir: &Path) -> Result<Head, BackupError> 
             .put_raw_create(&format!("{}{r}", storage.repo_prefix(repo)), data.into())
             .await?;
     }
-    // The records must form a complete chain before the head makes them visible.
+    // The records must complete the index before the head makes them visible.
     let chain = load_chain(storage, &head).await?;
     chain_state(&chain).map_err(BackupError::Invalid)?;
     match storage.create_head(&head).await {

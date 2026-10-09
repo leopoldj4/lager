@@ -83,6 +83,7 @@ provider can run other software (Vultr's Performance tier is on `ewr2`).
 | Check | Tests |
 |---|---|
 | Snapshots restore the same state as the complete log | `stage3_maintenance::a_snapshot_restores_the_same_state_as_the_complete_log` |
+| A cache behind the log index catches up; one behind a snapshot rebuilds | `stage3_maintenance::a_cache_behind_the_index_catches_up_and_one_behind_a_snapshot_rebuilds`, [decision 7](decisions/0007-head-is-the-log-index.md) |
 | Compaction cannot remove a push that another server accepts | `stage3_maintenance::a_push_that_overlaps_a_snapshot_is_retained`, `maintenance_faults::competing_compactors_keep_every_accepted_push` |
 | Old read views remain usable until their readers finish | `stage3_maintenance::old_read_views_remain_usable_until_their_readers_finish`, `reads::a_cache_replacement_lets_active_readers_finish` |
 | Data removal cannot break active requests or recovery | `stage3_maintenance::data_removal_does_not_break_an_active_push`, `stage3_maintenance::data_removal_reports_first_and_keeps_recovery_possible`, `maintenance_faults::the_removal_fence_stops_a_delayed_push_from_using_removed_data` |
