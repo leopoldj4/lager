@@ -2,6 +2,7 @@
 //! server URL and credentials, and repository commands then go through the
 //! server instead of the storage service, so no storage keys are needed.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,7 +15,11 @@ pub struct Login {
     /// Without credentials or a trailing `/`.
     pub url: String,
     pub user: String,
+    /// A personal access token, or the password where the server has none.
     pub password: String,
+    /// The token that `rustgit login` created; `rustgit logout` deletes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_token: Option<i64>,
 }
 
 impl Login {
@@ -37,7 +42,8 @@ impl Login {
         }
     }
 
-    /// Writes the file readable only by its owner: it holds the password.
+    /// Writes the file readable only by its owner: it holds the token or
+    /// password.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         use std::io::Write;
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -92,6 +98,26 @@ pub fn parse_server_url(url: &str) -> anyhow::Result<(String, Option<String>, Op
 pub struct Me {
     pub name: String,
     pub admin: bool,
+    /// The token these credentials are, if any.
+    #[serde(default)]
+    pub token: Option<i64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Token {
+    pub id: i64,
+    pub name: String,
+    pub access: Option<BTreeMap<String, String>>,
+    pub created_ms: u64,
+    pub expires_ms: Option<u64>,
+    pub last_used_ms: Option<u64>,
+}
+
+/// A new token and its secret, which the server shows only once.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CreatedToken {
+    pub id: i64,
+    pub token: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -105,7 +131,7 @@ pub struct Repo {
 /// An error answer of the server, or a failed request.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
-    #[error("wrong user name or password for {0}")]
+    #[error("wrong user name, password, or token for {0}")]
     Unauthorized(String),
     #[error("{message} (HTTP {status})")]
     Server { status: u16, message: String },
@@ -207,6 +233,32 @@ impl Client {
         self.call_some(reqwest::Method::GET, "me", None).await
     }
 
+    /// Needs the password, not a token.
+    pub async fn create_token(
+        &self,
+        name: &str,
+        access: Option<&BTreeMap<String, String>>,
+        expires_days: Option<u32>,
+    ) -> Result<CreatedToken, ClientError> {
+        let body = serde_json::json!({
+            "name": name,
+            "access": access,
+            "expires_days": expires_days,
+        });
+        self.call_some(reqwest::Method::POST, "tokens", Some(body))
+            .await
+    }
+
+    pub async fn tokens(&self) -> Result<Vec<Token>, ClientError> {
+        self.call_some(reqwest::Method::GET, "tokens", None).await
+    }
+
+    pub async fn delete_token(&self, id: i64) -> Result<(), ClientError> {
+        self.call::<serde_json::Value>(reqwest::Method::DELETE, &format!("tokens/{id}"), None)
+            .await
+            .map(|_| ())
+    }
+
     pub async fn repos(&self) -> Result<Vec<Repo>, ClientError> {
         self.call_some(reqwest::Method::GET, "repos", None).await
     }
@@ -267,5 +319,17 @@ fn echo_off() -> Option<libc::termios> {
         t.c_lflag &= !libc::ECHO;
         t.c_lflag |= libc::ECHONL;
         (libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t) == 0).then_some(saved)
+    }
+}
+
+/// This computer's name, for the names of tokens that `rustgit login` creates.
+pub fn hostname() -> String {
+    let mut buf = [0u8; 256];
+    // SAFETY: `buf` is valid for its length; the result ends at a NUL byte.
+    let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    match std::str::from_utf8(&buf[..end]) {
+        Ok(h) if ok && !h.is_empty() => h.to_string(),
+        _ => "unknown host".into(),
     }
 }

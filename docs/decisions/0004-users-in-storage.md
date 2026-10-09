@@ -1,6 +1,7 @@
 # 4. Users in storage and the admin API
 
-Status: accepted. Date: September 28, 2026.
+Status: accepted; the user store is superseded by
+[decision 8](0008-users-in-postgres.md). Date: September 28, 2026.
 
 ## Context
 
