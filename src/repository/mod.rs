@@ -418,21 +418,6 @@ impl Controller {
         st.known.as_ref().map(|k| k.head.clone())
     }
 
-    /// Blocks the current cache and rebuilds it from storage. Readers and
-    /// pushes that hold the old cache finish with it; its files are removed
-    /// after the last of them.
-    pub async fn rebuild_cache(&self) -> Result<u64, RepoError> {
-        let _w = self.write_op.lock().await;
-        {
-            let mut st = self.state.lock().await;
-            st.poison();
-            st.leftover_checked = true;
-        }
-        *self.last_etag.lock().unwrap() = None;
-        let st = self.sync_to_storage().await?;
-        Ok(st.known.as_ref().map(|k| k.head.generation).unwrap_or(0))
-    }
-
     /// Returns a read view that includes every push accepted before the call.
     pub async fn prepare_read(&self) -> Result<Arc<ReadView>, RepoError> {
         let mut st = self.sync_to_storage().await?;

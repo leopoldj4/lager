@@ -61,9 +61,6 @@ pub struct ServerConfig {
     /// terminates HTTPS in front of this server.
     #[serde(default)]
     pub tls_terminated_upstream: bool,
-    /// Allow maintenance requests (snapshot) through HTTP for admin users.
-    #[serde(default = "yes")]
-    pub admin_api: bool,
     /// On stop, the health check fails for this long before the server stops
     /// accepting connections, so that a load balancer can remove it first.
     #[serde(default = "default_drain_delay")]
@@ -291,7 +288,7 @@ pub struct IdentityConfig {
     pub ca_certificate: Option<PathBuf>,
 }
 
-/// PostgreSQL for users managed through the admin API
+/// PostgreSQL for users managed with `rustgit user` and `rustgit token`
 /// (docs/decisions/0008-users-in-postgres.md).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -366,8 +363,35 @@ pub enum Access {
     Write,
     /// Write plus force pushes (non-fast-forward branch updates, tag moves).
     Force,
-    /// Force plus maintenance and repository management.
-    Admin,
+}
+
+impl Access {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Access::None => "none",
+            Access::Read => "read",
+            Access::Write => "write",
+            Access::Force => "force",
+        }
+    }
+}
+
+impl std::str::FromStr for Access {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(match s {
+            "none" => Access::None,
+            "read" => Access::Read,
+            "write" => Access::Write,
+            "force" => Access::Force,
+            _ => {
+                return Err(format!(
+                    "unknown access level {s:?}: use none, read, write, or force"
+                ));
+            }
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

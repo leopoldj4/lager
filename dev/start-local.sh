@@ -54,13 +54,13 @@ kind = "storage"                  # repositories and managed users in storage
 cache_secs = 1
 create_on_push = "write"          # git push to a new name creates the repository
 
-[database]                        # users managed through the admin API
+[database]                        # users for rustgit user / rustgit token
 url = "postgres://rustgit@127.0.0.1:$pg_port/rustgit"
 
 [[users]]
 name = "dev"
 password = "dev"
-access = { "*" = "admin" }
+access = { "*" = "force" }
 EOF
 fi
 

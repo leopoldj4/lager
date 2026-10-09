@@ -3,7 +3,8 @@
 //!
 //! An [`IdentityProvider`] checks a user name and password and answers with
 //! the user's access levels; a provider that manages users also lists and
-//! changes them for the admin API. The server uses one provider, built from
+//! changes them for `rustgit user` and `rustgit token`. The server uses one
+//! provider, built from
 //! the configuration by [`from_config`]:
 //!
 //! - `[identity]`: an external service decides alone ([`service`]).
@@ -24,7 +25,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::config::{Access, Config, validate_repo_name};
@@ -39,8 +39,6 @@ pub enum Identity {
     User {
         name: String,
         access: BTreeMap<String, Access>,
-        /// The personal access token used instead of the password.
-        token: Option<TokenId>,
     },
 }
 
@@ -65,23 +63,6 @@ impl Identity {
                 .unwrap_or(Access::None),
         }
     }
-
-    /// The token this identity signed in with, if any.
-    pub fn token(&self) -> Option<TokenId> {
-        match self {
-            Identity::Anonymous => None,
-            Identity::User { token, .. } => *token,
-        }
-    }
-
-    /// Admin access to every repository: needed for user and repository
-    /// management.
-    pub fn is_global_admin(&self) -> bool {
-        match self {
-            Identity::Anonymous => false,
-            Identity::User { access, .. } => access.get("*") == Some(&Access::Admin),
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -102,23 +83,31 @@ pub enum UserError {
     TokenNotFound(TokenId),
     #[error("{0}")]
     Invalid(String),
-    /// The user cannot be changed through this server.
+    /// The user cannot be changed here.
     #[error("{0}")]
     Unmanaged(String),
     #[error("user store unavailable: {0}")]
     Unavailable(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UserSource {
-    /// `[[users]]` in the configuration file; read-only through the API.
+    /// `[[users]]` in the configuration file; changed only there.
     Config,
     Database,
 }
 
-/// A user as the admin API shows it. Never contains a password hash.
-#[derive(Clone, Debug, Serialize)]
+impl UserSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UserSource::Config => "config",
+            UserSource::Database => "database",
+        }
+    }
+}
+
+/// A user without its password hash.
+#[derive(Clone, Debug)]
 pub struct User {
     pub name: String,
     /// Repository name (or "*") to access level.
@@ -147,9 +136,9 @@ pub struct UserChange {
 /// recognize one.
 pub const TOKEN_PREFIX: &str = "rgpat_";
 
-/// A personal access token as the admin API shows it. The token itself is
-/// shown once, when it is created, and never stored.
-#[derive(Clone, Debug, Serialize)]
+/// A personal access token without its secret. The token itself is shown
+/// once, when it is created, and never stored.
+#[derive(Clone, Debug)]
 pub struct Token {
     pub id: TokenId,
     pub name: String,
@@ -245,7 +234,7 @@ pub trait IdentityProvider: Send + Sync {
 pub fn unmanaged() -> UserError {
     UserError::Unmanaged(
         "users come from the configuration file or the identity service; \
-         configure [database] without [identity] to manage them here"
+         configure [database] without [identity] to manage them with rustgit user"
             .into(),
     )
 }
