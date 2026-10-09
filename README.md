@@ -24,8 +24,8 @@ nix run .#local
 git clone http://dev:dev@127.0.0.1:8080/demo.git
 ```
 
-Without Nix, `dev/start-local.sh` uses `weed`, `initdb`, `pg_ctl`,
-`createdb`, `git`, and `worktree` from `PATH`. Git 2.45 or later is required.
+The script is defined in `flake.nix` (`packages.local`). Git 2.45 or later
+is required.
 
 ## Commands
 
