@@ -87,10 +87,6 @@ impl ObjectStoreBackend {
         Self { store }
     }
 
-    pub fn in_memory() -> Self {
-        Self::new(Arc::new(object_store::memory::InMemory::new()))
-    }
-
     /// An S3-compatible service. Conditional puts use `If-Match` and
     /// `If-None-Match`. Client retries are disabled so that a lost response
     /// reaches the caller as an unknown result instead of a false conflict.

@@ -11,7 +11,6 @@
 //! Only `head.json` changes in place, and only with CAS.
 
 pub mod backend;
-pub mod provider_check;
 
 use std::path::Path;
 use std::sync::Arc;

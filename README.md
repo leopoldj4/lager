@@ -40,7 +40,6 @@ rustgit snapshot <name>                      # snapshot and combined pack
 rustgit cleanup <name> [--delete]            # report, or remove, obsolete data
 rustgit backup export <name> <dir>
 rustgit backup import <dir> [--name <name>]
-rustgit check-storage                        # test the storage requirements
 rustgit hash-password < password.txt         # for password_hash
 ```
 
@@ -56,9 +55,6 @@ See [decision 6](docs/decisions/0006-command-line-login.md).
 and review it. Packs and records have separate retention periods
 (`--pack-retention-hours`, `--record-retention-hours`); see
 [decision 2](docs/decisions/0002-data-removal-fence.md).
-
-Run `check-storage` against each provider before use and before each
-release: S3 compatibility alone does not guarantee conditional writes.
 
 ## Configuration
 
@@ -205,8 +201,7 @@ orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build 
 ```
 
 That builds for the Mac's architecture (arm64). For x86_64 servers, name
-the system: the same machine builds it with Rosetta, and runs the tests
-too. Only rustgit is compiled; everything else comes from the binary
+the system: the same machine builds it with Rosetta. Only rustgit is compiled; everything else comes from the binary
 cache. The first build takes about ten minutes.
 
 ```bash

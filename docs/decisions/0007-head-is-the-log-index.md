@@ -53,13 +53,3 @@ Heads and log entries change to format 2 (`LOG_FORMAT_VERSION`): the head
 replaces `latest_entry` with `entries`, and entries drop `previous`. Other
 records keep format 1. Format 1 heads are refused: there is no deployed data
 to keep.
-
-## Evidence
-
-| Requirement | Test |
-|---|---|
-| The index lists the entries after the snapshot base; a snapshot shortens it | `model::tests::the_head_indexes_every_entry_after_the_snapshot_base` |
-| An index that does not match the generation is refused | `model::tests::an_index_that_does_not_match_the_generation_is_rejected` |
-| A cache behind the index catches up; one behind a snapshot rebuilds | `stage3_maintenance::a_cache_behind_the_index_catches_up_and_one_behind_a_snapshot_rebuilds` |
-| Competing compactions keep every push; an older snapshot is refused | `maintenance_faults::competing_compactors_keep_every_accepted_push` |
-| Folded entries become removal candidates after the record retention | `maintenance_faults::packs_and_records_have_separate_retention_periods` |

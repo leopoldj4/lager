@@ -74,24 +74,12 @@ pub struct ServerConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
-    #[serde(default)]
-    pub kind: StorageKind,
     /// Key prefix inside the bucket.
     #[serde(default)]
     pub prefix: String,
     #[serde(default = "yes")]
     pub verify_uploads: bool,
-    #[serde(default)]
-    pub s3: Option<S3Config>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum StorageKind {
-    #[default]
-    S3,
-    /// In-process storage. Only for controlled tests: data is lost at exit.
-    Memory,
+    pub s3: S3Config,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -479,12 +467,6 @@ impl Config {
             anyhow::ensure!(
                 self.catalog.create_on_push.is_none(),
                 "catalog.create_on_push needs catalog.kind = \"storage\""
-            );
-        }
-        if self.storage.kind == StorageKind::S3 {
-            anyhow::ensure!(
-                self.storage.s3.is_some(),
-                "storage.s3 is required for kind = \"s3\""
             );
         }
         let tls = self.server.tls_certificate.is_some() && self.server.tls_private_key.is_some();

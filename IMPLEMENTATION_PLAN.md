@@ -89,30 +89,6 @@ Require documented storage guarantees from each provider. A local test cannot pr
 - Access checks prevent another customer's data from becoming visible.
 - Measurements meet the agreed capacity, delay, and recovery requirements.
 
-## Tests for every stage
-
-Each test must check a stated requirement and an exact expected result. Do not add tests that only check startup or a successful response.
-
-Name each test for the behavior it checks. For push and clone tests, compare refs and file contents. For failure tests, check the final stored state and the client result.
-
-Use standard Git clients for protocol tests. Use controlled storage failures for request-order tests. Keep provider tests separate from simulated tests.
-
-| Test group | Required cases |
-|---|---|
-| Git objects | Thin packs, loose objects, missing dependencies, damaged packs, empty receives. |
-| Refs | Create, delete, recreate, tags, force push, duplicate commands, conflicting names, default branch. |
-| Transactions | Atomic and ordinary pushes, rejected changes, simultaneous writes. |
-| HTTP protocol | Ref advertisements, content types, requests without saved sessions, progress messages, final results, disconnects. |
-| Request results | Lost responses, delayed requests, reused identifiers with different contents. |
-| Server failure | Stop before and after upload, ref preparation, CAS, local installation, and success response. |
-| Reads | Old cache, long fetch, overlapping push, cache replacement, partial local change. |
-| Maintenance | Competing compactors, new pushes, interrupted uploads, damaged snapshots, missing packs. |
-| Limits | Full disk, slow clients, too many processes, repeated retries, canceled requests. |
-| Access | Invalid paths, unsafe Git configuration, forbidden refs, rejected-push objects. |
-| Repository lifetime | Empty repository, deletion during push, reused name, complete cache loss. |
-
-Check recorded request histories against the transaction rules. Include unknown results as unknown operations. Do not count a timeout as a definite failure.
-
 ## Later extensions
 
 Keep SSH, Git LFS, partial clone, user hooks, SHA-256, and the management API as later work.
@@ -120,5 +96,3 @@ Keep SSH, Git LFS, partial clone, user hooks, SHA-256, and the management API as
 Keep transactions across repositories, the user interface, and pull requests as later work. User hooks need process isolation. Partial clone needs object-access rules.
 
 Consider push groups and early change notifications when measurements show a benefit. Writes across regions need storage guarantees that preserve the same transaction rules.
-
-Start with Stage 1. Use its storage and Git tests to resolve the two main implementation uncertainties.
