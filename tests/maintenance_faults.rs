@@ -24,8 +24,9 @@ async fn push_n(client: &Client, dir: &std::path::Path, n: usize, tag: &str) -> 
     last
 }
 
-/// Two servers compact the same repository while a client pushes. Both
-/// compactions finish, no push is lost, and recovery matches the log.
+/// Two servers compact the same repository while a client pushes. A
+/// compaction either attaches its snapshot or finds a newer one attached; no
+/// push is lost, and recovery matches the log.
 #[tokio::test(flavor = "multi_thread")]
 async fn competing_compactors_keep_every_accepted_push() {
     let env = Env::new();
@@ -43,15 +44,26 @@ async fn competing_compactors_keep_every_accepted_push() {
         snapshot(&c1, "m1"),
         push_n(&alice, &a, 2, "during"),
     );
-    let (r0, r1) = (r0.unwrap(), r1.unwrap());
-    assert_ne!(r0.generation, r1.generation, "each attached its own entry");
-    let snapshots = env
-        .history()
-        .await
-        .iter()
-        .filter(|e| matches!(e.operation, Operation::Snapshot { .. }))
-        .count();
-    assert_eq!(snapshots, 2);
+    let attached: Vec<_> = [r0, r1]
+        .into_iter()
+        .filter_map(|r| match r {
+            Ok(r) => Some(r),
+            Err(e) => {
+                assert!(e.to_string().contains("newer snapshot"), "{e}");
+                None
+            }
+        })
+        .collect();
+    assert!(!attached.is_empty());
+    if let [a, b] = &attached[..] {
+        assert_ne!(a.generation, b.generation, "each attached its own entry");
+    }
+    let newest = attached.iter().map(|r| r.base_generation).max().unwrap();
+    assert_eq!(
+        env.head().await.snapshot.unwrap().base_generation,
+        newest,
+        "the newest snapshot is attached"
+    );
     assert_eq!(env.stored_refs().await["refs/heads/main"], pushed);
     check_history(&env, &[(pushed.clone(), PushResult::Accepted)]).await;
 
@@ -263,13 +275,18 @@ async fn packs_and_records_have_separate_retention_periods() {
         ..opts
     };
     let report = cleanup(&env.storage, env.repo, &opts).await.unwrap();
-    assert!(
+    let count = |kind: &str| {
         report
             .candidates
             .iter()
-            .all(|c| c.key.contains("/receipts/"))
-    );
-    assert_eq!(report.candidates.len(), 3);
+            .filter(|c| c.key.contains(kind))
+            .count()
+    };
+    // The receipts, and the entries that the snapshot folded: the creation
+    // entry and the three pushes.
+    assert_eq!(count("/receipts/"), 3);
+    assert_eq!(count("/entries/"), 4);
+    assert_eq!(report.candidates.len(), 7);
 }
 
 /// Only the preferred server of a repository starts automatic snapshots.

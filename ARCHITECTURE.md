@@ -142,12 +142,12 @@ Save these fields:
 | Incarnation UUID | Identifies this repository lifetime. |
 | Revision UUID | Changes for every head update, even if the refs do not change. |
 | Generation | Orders all push and maintenance changes. |
-| Latest entry | Points to the latest log entry. |
+| Entries | Lists every entry after the snapshot base, oldest first. The last one is the latest entry. |
 | Snapshot | Points to an optional snapshot and its base entry. |
 | Object format | Identifies SHA-1 or a later supported format. |
 | State | Identifies an active or deleted repository. |
 
-Keep the head small. Do not add a complete history or ref table to it.
+The head is the index of the log. Only the index orders entries. Keep the head small: it lists only the entries after the snapshot base, and snapshots keep that list short. Do not add a ref table to it.
 
 Create the head with a conditional request. After creation, use only CAS to change it. Mark deletion with a tombstone. Do not delete the head to reset its history.
 
@@ -158,7 +158,7 @@ If a user creates another repository with the same name, assign a new repository
 A log entry contains these data:
 
 - Format version, repository UUID, and incarnation UUID.
-- Entry UUID, previous entry UUID, and generation.
+- Entry UUID and generation.
 - Request UUID and checksum of the request contents.
 - Operation type: push, snapshot, default-branch change, or deletion.
 - Each ref name, expected old OID, and new OID.
@@ -169,9 +169,11 @@ Use an explicit absent value for ref creation and deletion inside Rust. Convert 
 
 Save the default branch explicitly. Use sequence numbers for order. Use time values only for the operation history.
 
-Follow the head and previous-entry links to find accepted changes. Do not use a storage listing for this purpose. An uploaded entry alone does not make a change visible.
+Read the head's index to find accepted changes. Read the listed entries in parallel. Do not use a storage listing for this purpose. An uploaded entry alone does not make a change visible.
 
-A snapshot contains all refs, Git `HEAD`, the object format, the base entry, and the required packs. Recovery also needs each accepted change after that base entry.
+A snapshot contains all refs, Git `HEAD`, the object format, the base entry, and the required packs. Recovery also needs each accepted change after that base entry. Attaching a snapshot removes the entries up to its base from the index. Those entries are no longer part of the history, and data removal can delete them.
+
+A cache whose generation is still in the index applies the later entries. A cache whose generation a snapshot removed from the index is rebuilt from the snapshot.
 
 Keep request results long enough to resolve requests with unknown results. If older log entries are removed, retain the necessary receipts separately.
 
@@ -191,7 +193,7 @@ The controller permits one local write operation at a time. Its read/write lock 
 10. Create packs that the server can use during recovery.
 11. Upload the packs.
 12. Check upload completion and file checksums.
-13. Upload a log entry that points to the observed previous entry.
+13. Upload a log entry for the generation after the observed head.
 14. Prepare the local ref transaction with the expected old OIDs.
 15. Keep the ref locks until the transaction ends.
 16. Change the repository head with CAS.
@@ -297,9 +299,9 @@ Compaction changes the storage arrangement. It must not change refs or remove an
 4. Check the files.
 5. Upload the files without changes to existing files.
 6. Create a maintenance entry after the current latest entry.
-7. Use CAS to attach that entry and snapshot to the head.
+7. Use CAS to attach that entry and snapshot to the head. The new head's index starts after the snapshot base.
 
-If a push changes the head, read the new head before a retry. Confirm that the snapshot base remains in its history. Retain every accepted change after the snapshot base. Never replace newer refs with snapshot refs.
+If a push changes the head, read the new head before a retry. Confirm that the snapshot base remains in its index. Do not attach a snapshot whose base is older than the attached one. Retain every accepted change after the snapshot base. Never replace newer refs with snapshot refs.
 
 More than one server can attempt compaction. CAS prevents two changes to the same observed head. Prefer one server for this work to reduce duplicate work.
 

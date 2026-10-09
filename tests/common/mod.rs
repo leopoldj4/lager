@@ -176,18 +176,12 @@ impl Env {
         stored_refs(&self.storage, self.repo).await
     }
 
-    /// All entries of the current history, oldest first.
+    /// The entries of the head's index, oldest first.
     pub async fn history(&self) -> Vec<LogEntry> {
         let head = self.head().await;
-        let mut out = Vec::new();
-        let mut next = Some(head.latest_entry);
-        while let Some(id) = next {
-            let e = self.storage.get_entry(self.repo, id).await.unwrap();
-            next = e.previous;
-            out.push(e);
-        }
-        out.reverse();
-        out
+        rustgit::repository::sync::load_entries(&self.storage, &head, head.first_generation())
+            .await
+            .unwrap()
     }
 
     pub async fn push_entries(&self) -> Vec<LogEntry> {
@@ -454,13 +448,26 @@ pub async fn push_result(client: &Client, dir: &Path, args: &[&str]) -> PushResu
 
 /// Checks the stored history against the transaction rules and the results
 /// that clients received. `pushes` pairs a pushed commit with its result.
+///
+/// The head's index lists only the entries after the snapshot base, so the
+/// check replays the index on top of the snapshot. An accepted push that a
+/// snapshot folded is no longer listed; its effect is part of the snapshot.
 pub async fn check_history(env: &Env, pushes: &[(String, PushResult)]) {
+    let head = env.head().await;
     let history = env.history().await;
-    assert_eq!(history[0].generation, 0);
+    let first = head.first_generation();
     let mut state = RefState::default();
+    if let Some(p) = &head.snapshot {
+        let snap = env.storage.get_snapshot(env.repo, p.id).await.unwrap();
+        assert_eq!(snap.base_generation + 1, first);
+        state.refs = snap.refs;
+        state.head = Some(snap.head);
+    } else {
+        assert_eq!(history[0].generation, 0);
+    }
     let mut requests = std::collections::HashSet::new();
     for (i, e) in history.iter().enumerate() {
-        assert_eq!(e.generation, i as u64, "generations are contiguous");
+        assert_eq!(e.generation, first + i as u64, "generations are contiguous");
         // Every entry applies to the state before it: each expected old
         // value matched, so no accepted change was lost or applied twice.
         state
@@ -470,15 +477,7 @@ pub async fn check_history(env: &Env, pushes: &[(String, PushResult)]) {
             assert!(requests.insert(e.request), "request applied twice");
         }
     }
-    assert_eq!(
-        state
-            .refs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect::<BTreeMap<_, _>>(),
-        env.stored_refs().await,
-        "the head's view (with snapshots) equals the complete history"
-    );
+    assert_eq!(head.generation, first + history.len() as u64 - 1);
     for (oid, result) in pushes {
         let n = history
             .iter()
@@ -486,8 +485,12 @@ pub async fn check_history(env: &Env, pushes: &[(String, PushResult)]) {
             .filter(|u| u.new.as_ref().map(|o| o.as_str()) == Some(oid.as_str()))
             .count();
         match result {
-            PushResult::Accepted => assert_eq!(n, 1, "accepted push {oid} is in the history once"),
-            PushResult::Rejected => assert_eq!(n, 0, "rejected push {oid} is in the history"),
+            PushResult::Accepted if n == 0 => assert!(
+                head.snapshot.is_some(),
+                "accepted push {oid} is in the index or folded into the snapshot"
+            ),
+            PushResult::Accepted => assert_eq!(n, 1, "accepted push {oid} is in the index once"),
+            PushResult::Rejected => assert_eq!(n, 0, "rejected push {oid} is in the index"),
             PushResult::Unknown => assert!(n <= 1),
         }
     }

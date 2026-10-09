@@ -323,7 +323,7 @@ impl Storage {
 
     pub async fn get_entry(&self, repo: RepoId, id: EntryId) -> Result<LogEntry, StorageError> {
         let e: LogEntry = self.get_record(&self.entry_key(repo, id)).await?;
-        if e.format != crate::model::FORMAT_VERSION {
+        if e.format != crate::model::LOG_FORMAT_VERSION {
             return Err(StorageError::Corrupt(format!(
                 "entry {id}: unsupported format {}",
                 e.format
