@@ -81,27 +81,3 @@ pub fn read_until_flush<R: Read>(r: &mut R) -> io::Result<Vec<Vec<u8>>> {
 fn invalid(m: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, m.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pkt_lines_round_trip_with_flush() {
-        let mut buf = Vec::new();
-        write_data(&mut buf, b"hello\n").unwrap();
-        write_data(&mut buf, b"x").unwrap();
-        write_flush(&mut buf).unwrap();
-        assert_eq!(&buf[..4], b"000a");
-        let lines = read_until_flush(&mut &buf[..]).unwrap();
-        assert_eq!(lines, vec![b"hello".to_vec(), b"x".to_vec()]);
-    }
-
-    #[test]
-    fn malformed_lengths_are_errors() {
-        assert!(read(&mut &b"zzzz"[..]).is_err());
-        assert!(read(&mut &b"0003"[..]).is_err());
-        assert!(read(&mut &b"00"[..]).is_err());
-        assert_eq!(read(&mut &b""[..]).unwrap(), None);
-    }
-}

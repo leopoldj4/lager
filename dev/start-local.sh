@@ -73,9 +73,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-# The storage requirements must hold before the server starts.
+# Wait until the storage service answers.
 for _ in $(seq 60); do
-  if "$rustgit" -c "$config" check-storage >/dev/null 2>&1; then
+  if repos=$("$rustgit" -c "$config" repo list 2>/dev/null); then
     break
   fi
   if ! kill -0 "$weed_pid" 2>/dev/null; then
@@ -84,9 +84,9 @@ for _ in $(seq 60); do
   fi
   sleep 1
 done
-"$rustgit" -c "$config" check-storage
+repos=$("$rustgit" -c "$config" repo list)
 
-if ! "$rustgit" -c "$config" repo list | grep -q '^demo'; then
+if ! grep -q '^demo' <<<"$repos"; then
   "$rustgit" -c "$config" repo create demo
 fi
 

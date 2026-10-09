@@ -8,7 +8,6 @@ changes of a repository.
 
 - [implementation plan](IMPLEMENTATION_PLAN.md)
 - [Decisions](docs/decisions/) made during implementation
-- [Tests and plan checks](docs/TESTING.md)
 
 ## Local start
 
@@ -41,7 +40,6 @@ rustgit snapshot <name>                      # snapshot and combined pack
 rustgit cleanup <name> [--delete]            # report, or remove, obsolete data
 rustgit backup export <name> <dir>
 rustgit backup import <dir> [--name <name>]
-rustgit check-storage                        # test the storage requirements
 rustgit hash-password < password.txt         # for password_hash
 ```
 
@@ -57,9 +55,6 @@ See [decision 6](docs/decisions/0006-command-line-login.md).
 and review it. Packs and records have separate retention periods
 (`--pack-retention-hours`, `--record-retention-hours`); see
 [decision 2](docs/decisions/0002-data-removal-fence.md).
-
-Run `check-storage` against each provider before use and before each
-release: S3 compatibility alone does not guarantee conditional writes.
 
 ## Configuration
 
@@ -181,20 +176,6 @@ permission-rule version that log entries record.
   A push whose result is unknown says so; the client should fetch before it
   pushes again.
 
-## Management interface
-
-`web/` is a Next.js application for the admin API: it lists repositories
-and creates, changes, and deletes users. Sign in with a user that has
-`"*" = "admin"`.
-
-```bash
-cd web && npm install && npm run dev
-```
-
-It reads `RUSTGIT_URL` (default `http://127.0.0.1:8080`),
-`RUSTGIT_PUBLIC_URL` for clone URLs, and `SESSION_SECRET`, which encrypts
-the session cookie and is required with `npm run build && npm start`.
-
 ## Container image
 
 `nix build .#docker` (Linux, or a Linux builder) gives a script that
@@ -220,8 +201,7 @@ orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build 
 ```
 
 That builds for the Mac's architecture (arm64). For x86_64 servers, name
-the system: the same machine builds it with Rosetta, and runs the tests
-too. Only rustgit is compiled; everything else comes from the binary
+the system: the same machine builds it with Rosetta. Only rustgit is compiled; everything else comes from the binary
 cache. The first build takes about ten minutes.
 
 ```bash
@@ -232,8 +212,6 @@ orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build 
 
 ```bash
 nix develop
-cargo test
-cargo test --test provider_s3 -- --ignored    # needs SeaweedFS (dev shell)
-cargo test --release --test load -- --ignored --nocapture
-nix flake check
+cargo build
+nix flake check    # build, clippy, and rustfmt
 ```

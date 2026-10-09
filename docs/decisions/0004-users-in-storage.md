@@ -63,7 +63,3 @@ cookie, and calls the API from the server side only.
 - A deleted or changed user can keep its previous access on other servers
   for up to `catalog.cache_secs`.
 - Failed sign-ins are not rate-limited, for Git requests or the API alike.
-
-## Evidence
-
-`admin_api::*`, `users::tests::*`.

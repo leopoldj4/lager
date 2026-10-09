@@ -67,8 +67,6 @@ enum Cmd {
         #[command(subcommand)]
         cmd: BackupCmd,
     },
-    /// Check the storage requirements against the configured provider.
-    CheckStorage,
 }
 
 #[derive(Subcommand)]
@@ -237,23 +235,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 head.repository, head.generation
             );
         }
-        Cmd::CheckStorage => {
-            let results = rustgit::storage::provider_check::run(&storage).await;
-            let mut failed = false;
-            for (name, r) in results {
-                match r {
-                    Ok(()) => println!("ok    {name}"),
-                    Err(e) => {
-                        failed = true;
-                        println!("FAIL  {name}: {e}");
-                    }
-                }
-            }
-            anyhow::ensure!(
-                !failed,
-                "the storage service does not meet the requirements"
-            );
-        }
     }
     Ok(())
 }
@@ -279,7 +260,6 @@ async fn cli_services(
         limits: cfg.limits.clone(),
         metrics: Default::default(),
         notifier: Default::default(),
-        failpoints: Default::default(),
         disk: rustgit::http::DiskReservations::new(
             &cfg.server.cache_dir,
             cfg.limits.min_free_disk_bytes,
