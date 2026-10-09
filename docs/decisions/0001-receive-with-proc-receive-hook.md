@@ -6,7 +6,7 @@ Status: accepted. Date: September 27, 2026.
 
 The design (ARCHITECTURE.md §7) requires that Rust, not Git, decides every
 ref change and every push success response. Stage 1 (IMPLEMENTATION_PLAN.md
-steps 5-7) requires a test of Git's `proc-receive` hook before further
+steps 5-7) requires a look at Git's `proc-receive` hook before further
 server work. If the hook cannot give this control, the server must
 implement the receive protocol in Rust.
 

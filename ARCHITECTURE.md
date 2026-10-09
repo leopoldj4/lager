@@ -2,7 +2,7 @@
 
 Status: proposed design. Date: September 27, 2026.
 
-The server does not exist yet. The design includes requirements for implementation and tests.
+The server does not exist yet. The design includes requirements for the implementation.
 
 Use the [implementation plan](IMPLEMENTATION_PLAN.md) to build the server.
 
@@ -109,7 +109,7 @@ Require these operations from every storage service:
 4. Store complete files without subsequent changes to those files.
 5. Report a conditional-write conflict separately from a connection failure.
 
-Test each provider. Also require the provider's documented guarantees for these operations. S3 compatibility alone is insufficient.
+Require the provider's documented guarantees for these operations. S3 compatibility alone is insufficient.
 
 AWS specifies `If-Match` and `If-None-Match` for conditional writes. These operations provide the reference behavior for the interface. See [S3 conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html).
 
@@ -244,7 +244,7 @@ Standard Git does not supply a common request UUID across separate pushes. Do no
 
 ## 7. Git processes
 
-Use a tested upstream Git version. Use `git upload-pack` for reads. First test `git receive-pack` with a Rust `proc-receive` hook for writes.
+Use a fixed upstream Git version. Use `git upload-pack` for reads. For writes, first examine `git receive-pack` with a Rust `proc-receive` hook.
 
 The hook sends commands to the controller through a private Unix socket. Use a separate access token for each operation. Send all supported ref changes through this path. Do not permit uncontrolled ref updates.
 
@@ -254,7 +254,7 @@ Use `git update-ref --stdin` for prepare, commit, and abort commands. Hold the c
 
 Do not use `post-receive` to decide whether storage accepts a push. That hook runs too late. Do not make the storage change inside `pre-receive`. Git can still reject the push after that hook.
 
-Test the order of quarantine operations. Git moves received objects out of quarantine after successful `pre-receive` completion. See [git-receive-pack](https://git-scm.com/docs/git-receive-pack).
+Confirm the order of quarantine operations. Git moves received objects out of quarantine after successful `pre-receive` completion. See [git-receive-pack](https://git-scm.com/docs/git-receive-pack).
 
 Small pushes can produce loose objects instead of packs. Thin packs can depend on existing objects. Capture all received objects. Convert loose objects to packs. Include the necessary delta bases.
 
@@ -262,7 +262,7 @@ Git's `index-pack --fix-thin` can add delta bases. It does not include every ref
 
 Initially, keep all accepted object data. Disable automatic Git object removal. Disable user hooks.
 
-Test that the hook method controls every accepted change and success response. If it cannot, implement the receive protocol in Rust. Continue to use Git for pack processing. Record this decision before further server work.
+Confirm that the hook method controls every accepted change and success response. If it cannot, implement the receive protocol in Rust. Continue to use Git for pack processing. Record this decision before further server work.
 
 ## 8. Read and recovery procedure
 
@@ -305,11 +305,11 @@ If a push changes the head, read the new head before a retry. Confirm that the s
 
 More than one server can attempt compaction. CAS prevents two changes to the same observed head. Prefer one server for this work to reduce duplicate work.
 
-Keep old stored data initially. Add deletion only after its tests pass.
+Keep old stored data initially. Add deletion only after report-only runs show the correct data.
 
 The deletion rules must protect active reads, active writes, and requests with unknown results. Object age alone does not prove that deletion is safe.
 
-Before deletion, record which operations still need the data. Prevent expired operations from later accepting changes that need deleted data. Test this protection across all servers.
+Before deletion, record which operations still need the data. Prevent expired operations from later accepting changes that need deleted data. Apply this protection on all servers.
 
 First run deletion in report-only mode. Review the proposed removals before automatic deletion.
 
@@ -329,9 +329,9 @@ Start with one Cargo project and these modules. Separate crates only when necess
 | `maintenance` | Snapshots, compaction, and safe data removal. |
 | `routing` | Server selection and notification. |
 
-Use [Tokio](https://docs.rs/tokio/latest/tokio/process/struct.Command.html) for asynchronous work and process control. Use [Axum](https://docs.rs/axum/latest/axum/) for HTTP. Test [object_store](https://docs.rs/object_store/latest/object_store/enum.PutMode.html) as the S3 interface library.
+Use [Tokio](https://docs.rs/tokio/latest/tokio/process/struct.Command.html) for asynchronous work and process control. Use [Axum](https://docs.rs/axum/latest/axum/) for HTTP. Use [object_store](https://docs.rs/object_store/latest/object_store/enum.PutMode.html) as the S3 interface library.
 
-Select fixed tool and library versions after the initial tests. Preserve provider errors and ETags. Never simulate CAS with a separate read followed by an unconditional write.
+Select fixed tool and library versions. Preserve provider errors and ETags. Never simulate CAS with a separate read followed by an unconditional write.
 
 Keep the storage interface small:
 
@@ -373,11 +373,11 @@ Measure push time by operation step. Record median delay and the 95th and 99th p
 
 Measure CAS conflicts, unknown results, recovery work, cache use, read capacity, CPU use, and storage cost. Keep request identifiers in diagnostic records. Do not create a separate metric series for every repository.
 
-Test empty-cache recovery separately from reads with a current cache. Test reads and pushes together. Measure delay and capacity as servers are added.
+Measure empty-cache recovery separately from reads with a current cache. Measure reads and pushes together. Measure delay and capacity as servers are added.
 
 A busy repository still depends on CAS response time, Git work, and upload capacity. Later, combine several ordered transactions in one CAS where measurements justify this change. Define conflict behavior before this addition.
 
-Add production identity checks, the repository catalog, backup procedures, and recovery tools before production use. Test recovery into an empty independent system.
+Add production identity checks, the repository catalog, backup procedures, and recovery tools before production use. Confirm recovery into an empty independent system.
 
 Writes across regions need the same storage guarantees. An asynchronously copied bucket does not provide those guarantees by itself.
 
