@@ -100,6 +100,47 @@ async fn a_snapshot_restores_the_same_state_as_the_complete_log() {
     bob.ok(&b, &["fsck", "--full", "--strict"]).await;
 }
 
+/// A server whose cache is behind applies the entries that the head's index
+/// lists. Once a snapshot folds the cache's generation out of the index,
+/// the server rebuilds from the snapshot instead.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cache_behind_the_index_catches_up_and_one_behind_a_snapshot_rebuilds() {
+    let env = Env::new();
+    let reader = env.start().await;
+    let writer = env.start().await;
+    let alice = env.client("alice");
+    let bob = env.client("bob");
+    let a = alice.init(&writer.url(), "work").await;
+    alice.commit(&a, &[("f", b"0")], "0").await;
+    alice.ok(&a, &["push", "--quiet", "origin", "main"]).await;
+    let b = bob.clone(&reader.url_as("bob"), "copy").await;
+    assert_eq!(reader.metric("cache_rebuilds"), 1);
+
+    // Three pushes on the other server: the reader applies them from the index.
+    let tip = push_commits(&alice, &a, 3, "indexed").await;
+    bob.ok(&b, &["pull", "--quiet"]).await;
+    assert_eq!(bob.rev(&b, "HEAD").await, tip);
+    assert_eq!(reader.metric("entries_applied"), 3);
+    assert_eq!(reader.metric("cache_rebuilds"), 1);
+
+    // More pushes and a snapshot of the newest generation: the reader's
+    // generation is no longer in the index.
+    let tip = push_commits(&alice, &a, 2, "folded").await;
+    let controller = writer.running.registry().controller(env.repo);
+    let report = rustgit::maintenance::snapshot(&controller, "test")
+        .await
+        .unwrap();
+    let head = env.head().await;
+    assert_eq!(head.entries.len(), 1, "only the snapshot entry is indexed");
+    assert_eq!(head.first_generation(), report.base_generation + 1);
+    bob.ok(&b, &["pull", "--quiet"]).await;
+    assert_eq!(bob.rev(&b, "HEAD").await, tip);
+    assert_eq!(reader.metric("cache_rebuilds"), 2);
+    assert_eq!(reader.metric("cache_update_failures"), 0);
+    bob.ok(&b, &["fsck", "--full", "--strict"]).await;
+    check_history(&env, &[(tip, PushResult::Accepted)]).await;
+}
+
 /// The snapshot's CAS loses against a push on another server. The snapshot
 /// is attached after the push, and the push is retained.
 #[tokio::test(flavor = "multi_thread")]
