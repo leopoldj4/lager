@@ -88,6 +88,7 @@ impl IdentityProvider for IdentityService {
         let id = Identity::User {
             name: answer.user,
             access: answer.access,
+            token: None,
         };
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|_, (at, _)| at.elapsed() < ttl);

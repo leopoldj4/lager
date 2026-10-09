@@ -1,6 +1,7 @@
 # 6. Command-line login and repository changes through the API
 
-Status: accepted. Date: September 29, 2026.
+Status: accepted; `login` keeps a token instead of the password since
+[decision 9](0009-personal-access-tokens.md). Date: September 29, 2026.
 
 ## Context
 

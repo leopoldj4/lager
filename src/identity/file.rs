@@ -61,6 +61,7 @@ impl IdentityProvider for FileUsers {
             Ok(Some(Identity::User {
                 name: u.name,
                 access: u.access,
+                token: None,
             }))
         } else {
             Err(AuthError::BadCredentials)

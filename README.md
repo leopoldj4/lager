@@ -33,6 +33,9 @@ Without Nix, `dev/start-local.sh` uses `weed`, `initdb`, `pg_ctl`,
 rustgit [-c rustgit.toml] serve
 rustgit login <url> [--user <name>]          # asks for what the URL lacks
 rustgit logout
+rustgit token create <name> [--access repo=level]... [--expires-days N]
+rustgit token list
+rustgit token delete <id>
 rustgit repo create <name> [--default-branch main]
 rustgit repo delete <name>
 rustgit repo set-default-branch <name> <branch>
@@ -47,8 +50,10 @@ rustgit hash-password < password.txt         # for password_hash
 After `rustgit login https://git.example.com`, the `repo` commands go
 through that server's admin API with your rustgit user name and password
 (which needs `"*" = "admin"`), so they need no configuration file or storage
-keys. `login` checks the credentials first and keeps them in
-`~/.config/rustgit/login.toml`, readable only by you. With `-c` (or
+keys. `login` checks the credentials first, creates a personal access token,
+and keeps that in `~/.config/rustgit/login.toml`, readable only by you;
+`logout` deletes the token. Users in the server's configuration file have no
+tokens, so their password is kept instead. With `-c` (or
 `RUSTGIT_CONFIG`), commands use the storage service directly, as before.
 See [decision 6](docs/decisions/0006-command-line-login.md).
 
@@ -175,6 +180,12 @@ permission-rule version that log entries record.
   kept in PostgreSQL and need no configuration change; users in the file
   take precedence, so keep one admin there. The server creates and updates
   its tables when it starts. See [decision 8](docs/decisions/0008-users-in-postgres.md).
+- Personal access tokens (`rgpat_…`) work in place of the password for Git
+  and the API, for database users: `git clone https://alice:rgpat_…@git.example.com/org/app.git`.
+  `rustgit token create` makes one, optionally limited to some repositories
+  (`--access org/app=read`) and with an expiry. A token never has more access
+  than its user and cannot create other tokens. See
+  [decision 9](docs/decisions/0009-personal-access-tokens.md).
 - Every response has an `x-rustgit-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: rustgit: accepted ...` line. Logs never contain credentials or
