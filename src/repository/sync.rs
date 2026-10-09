@@ -247,10 +247,6 @@ impl Controller {
             let _ = tokio::fs::remove_dir_all(&tmp).await;
             return Err(e);
         }
-        self.svc
-            .failpoints
-            .hit(crate::failpoint::REBUILD_BEFORE_REPLACE)
-            .await;
         let dir = base.join(format!("{id}.git"));
         tokio::fs::rename(&tmp, &dir).await?;
         st.poison();

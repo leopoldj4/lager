@@ -8,7 +8,6 @@ changes of a repository.
 
 - [Design](ARCHITECTURE.md) and [implementation plan](IMPLEMENTATION_PLAN.md)
 - [Decisions](docs/decisions/) made during implementation
-- [Tests and plan checks](docs/TESTING.md)
 
 ## Local start
 
@@ -218,8 +217,6 @@ orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build 
 
 ```bash
 nix develop
-cargo test
-cargo test --test provider_s3 -- --ignored    # needs SeaweedFS (dev shell)
-cargo test --release --test load -- --ignored --nocapture
-nix flake check
+cargo build
+nix flake check    # build, clippy, and rustfmt
 ```

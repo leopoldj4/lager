@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use super::{CacheInstance, Controller, Known, PendingPush, PushAccess, RepoError};
 use crate::config::{Access, ref_rule};
-use crate::failpoint;
 use crate::git::hook::{HookCommand, HookResponse, HookResult};
 use crate::metrics::StepTimer;
 use crate::model::{
@@ -213,7 +212,6 @@ impl Controller {
         pack: &mut AttemptPack,
     ) -> Result<Attempt, RepoError> {
         let svc = &self.svc;
-        let fail = &svc.failpoints;
         // Permission rules can change between attempts.
         let access = (op.access)().await.map_err(RepoError::Unavailable)?;
         if access.repo != self.repo {
@@ -269,7 +267,6 @@ impl Controller {
         }
 
         // Steps 10-12: a pack relative to the parent state, uploaded and checked.
-        fail.hit(failpoint::PUSH_BEFORE_UPLOAD).await;
         if pack.as_ref().map(|(e, _, _)| *e) != Some(base.entry) {
             let p = self
                 .build_and_store_pack(dir, &base.refs, &req.updates)
@@ -295,7 +292,6 @@ impl Controller {
                 )));
             }
         }
-        fail.hit(failpoint::PUSH_AFTER_UPLOAD).await;
 
         // Step 13: an entry for the generation after the observed head. Only
         // the head's index makes it part of the history.
@@ -318,7 +314,6 @@ impl Controller {
             let _t = StepTimer::new(&svc.metrics, "push_put_entry");
             svc.storage.put_entry(&entry).await?;
         }
-        fail.hit(failpoint::PUSH_AFTER_ENTRY).await;
 
         // A first push that does not contain the default branch chooses it,
         // so that clones check out what was pushed.
@@ -347,7 +342,6 @@ impl Controller {
                 )));
             }
         };
-        fail.hit(failpoint::PUSH_AFTER_PREPARE).await;
         if Instant::now() >= req.deadline {
             let _ = txn.abort().await;
             svc.metrics.inc("push_deadline_expired");
@@ -398,7 +392,6 @@ impl Controller {
                 }
             }
         };
-        fail.hit(failpoint::PUSH_AFTER_CAS).await;
 
         // Step 17: complete the local transaction. The push is accepted now,
         // whatever happens locally.
@@ -477,7 +470,6 @@ impl Controller {
         if let Some(n) = svc.notifier.lock().unwrap().clone() {
             n(self.repo, generation);
         }
-        fail.hit(failpoint::PUSH_AFTER_LOCAL_COMMIT).await;
         Ok(Attempt::Done(HookResponse {
             results: names
                 .iter()

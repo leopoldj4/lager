@@ -71,7 +71,6 @@ pub struct Services {
     pub limits: Limits,
     pub metrics: Arc<Metrics>,
     pub notifier: StdMutex<Option<Notifier>>,
-    pub failpoints: Arc<crate::failpoint::Failpoints>,
     /// Disk space for receipts and cache reconstruction.
     pub disk: Arc<crate::http::DiskReservations>,
 }

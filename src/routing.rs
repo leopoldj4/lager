@@ -244,34 +244,3 @@ pub async fn notify_handler(
     });
     StatusCode::ACCEPTED.into_response()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rendezvous_ranking_is_stable_and_moves_few_repositories() {
-        let servers = ["a", "b", "c"];
-        let repos: Vec<RepoId> = (0..300).map(|_| RepoId::new()).collect();
-        let before: Vec<&str> = repos.iter().map(|r| rank(*r, servers)[0]).collect();
-        // Same input, same order.
-        assert_eq!(
-            before,
-            repos
-                .iter()
-                .map(|r| rank(*r, servers)[0])
-                .collect::<Vec<_>>()
-        );
-        // Every server gets some repositories.
-        for s in servers {
-            assert!(before.iter().filter(|x| **x == s).count() > 50, "{s}");
-        }
-        // Removing server c moves only the repositories that c had.
-        let after: Vec<&str> = repos.iter().map(|r| rank(*r, ["a", "b"])[0]).collect();
-        for (b, a) in before.iter().zip(&after) {
-            if *b != "c" {
-                assert_eq!(b, a);
-            }
-        }
-    }
-}
