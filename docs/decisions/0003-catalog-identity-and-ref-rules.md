@@ -36,7 +36,3 @@ fast-forward updates (`update`), non-fast-forward updates and tag moves
 a rule, the defaults are write, force, and write. The push procedure reads
 the rules again before each attempt, and the log entry records the rule
 version.
-
-## Evidence
-
-`production_access::*`, `http::access::tests::*`, `http::password::tests::*`.

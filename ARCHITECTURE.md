@@ -322,13 +322,12 @@ Start with one Cargo project and these modules. Separate crates only when necess
 | Module | Work |
 |---|---|
 | `model` | Identifiers, record formats, ref checks, and transaction rules. |
-| `storage` | S3 requests, conditional writes, checksums, and storage tests. |
+| `storage` | S3 requests, conditional writes, and checksums. |
 | `git` | Git processes, hooks, quarantine, packs, and ref transactions. |
 | `repository` | Controllers, caches, recovery, request results, and locks. |
 | `http` | Git HTTP requests, identity checks, permissions, and resource limits. |
 | `maintenance` | Snapshots, compaction, and safe data removal. |
 | `routing` | Server selection and notification. |
-| `tests` | Real Git clients, controlled failures, and several-server tests. |
 
 Use [Tokio](https://docs.rs/tokio/latest/tokio/process/struct.Command.html) for asynchronous work and process control. Use [Axum](https://docs.rs/axum/latest/axum/) for HTTP. Test [object_store](https://docs.rs/object_store/latest/object_store/enum.PutMode.html) as the S3 interface library.
 
@@ -354,7 +353,7 @@ Before an accepted CAS, cancellation can abort the operation. After an accepted 
 
 ## 11. Configuration and operation
 
-Local mode uses one server, a local S3 service, and explicit development credentials. Keep storage and cache files in separate directories. Use a simulated storage service only for controlled tests.
+Local mode uses one server, a local S3 service, and explicit development credentials. Keep storage and cache files in separate directories.
 
 Production mode uses several Linux servers with local SSDs and a load balancer. Configure the storage endpoint, signing region, bucket, key prefix, credentials, TLS trust, and address format.
 
@@ -396,8 +395,6 @@ Writes across regions need the same storage guarantees. An asynchronously copied
 | Push overlaps compaction | Retain the push and all later accepted changes. |
 | Push overlaps repository deletion | Do not restore the deleted repository. |
 | All caches are lost | Restore all retained accepted changes from storage. |
-
-These requirements need tests. They are not results from an implemented server.
 
 ## Language reference
 

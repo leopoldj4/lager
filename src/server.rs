@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 
 use crate::catalog::Catalog;
-use crate::config::{CatalogKind, Config, StorageKind};
+use crate::config::{CatalogKind, Config};
 use crate::git::Git;
 use crate::git::hook::{HookRequest, HookResponse, HookResult};
 use crate::http::access::Directory;
@@ -24,14 +24,9 @@ use crate::repository::{Registry, Services};
 use crate::storage::{ObjectStoreBackend, Storage};
 use crate::users::UserStore;
 
-/// Storage from the configuration. `memory` storage is new and empty.
+/// Storage from the configuration.
 pub fn storage_from_config(cfg: &Config) -> anyhow::Result<Storage> {
-    let backend: Arc<dyn crate::storage::Backend> = match cfg.storage.kind {
-        StorageKind::Memory => Arc::new(ObjectStoreBackend::in_memory()),
-        StorageKind::S3 => Arc::new(ObjectStoreBackend::s3(
-            cfg.storage.s3.as_ref().expect("validated"),
-        )?),
-    };
+    let backend = Arc::new(ObjectStoreBackend::s3(&cfg.storage.s3)?);
     Ok(Storage::new(backend, &cfg.storage.prefix)
         .with_upload_verification(cfg.storage.verify_uploads)
         .with_upload_limit(cfg.limits.max_concurrent_uploads))

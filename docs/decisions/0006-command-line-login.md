@@ -35,11 +35,5 @@ before.
 
 - The password is kept in plain text in a file only the user can read, as
   Git's `credential-store` does. The server has no tokens to use instead.
-- Other storage commands (`snapshot`, `cleanup`, `backup`,
-  `check-storage`) still need the configuration.
-
-## Evidence
-
-`admin_api::repositories_are_created_changed_and_deleted_through_the_api`,
-`admin_api::the_command_line_client_logs_in_and_manages_repositories`,
-`client::tests::*`.
+- Other storage commands (`snapshot`, `cleanup`, `backup`) still need the
+  configuration.

@@ -67,8 +67,6 @@ enum Cmd {
         #[command(subcommand)]
         cmd: BackupCmd,
     },
-    /// Check the storage requirements against the configured provider.
-    CheckStorage,
 }
 
 #[derive(Subcommand)]
@@ -235,23 +233,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             println!(
                 "imported repository {} at generation {}",
                 head.repository, head.generation
-            );
-        }
-        Cmd::CheckStorage => {
-            let results = rustgit::storage::provider_check::run(&storage).await;
-            let mut failed = false;
-            for (name, r) in results {
-                match r {
-                    Ok(()) => println!("ok    {name}"),
-                    Err(e) => {
-                        failed = true;
-                        println!("FAIL  {name}: {e}");
-                    }
-                }
-            }
-            anyhow::ensure!(
-                !failed,
-                "the storage service does not meet the requirements"
             );
         }
     }

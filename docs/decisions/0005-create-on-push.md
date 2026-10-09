@@ -36,7 +36,3 @@ clones check out what was pushed.
   `rustgit repo delete`.
 - If the default-branch change fails, the push still counts; the server
   logs a warning and `rustgit repo set-default-branch` fixes it.
-
-## Evidence
-
-`production_access::a_push_creates_a_missing_repository`.
