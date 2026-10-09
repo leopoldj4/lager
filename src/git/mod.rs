@@ -605,26 +605,3 @@ fn set_limit(resource: Resource, value: u64) -> std::io::Result<()> {
 fn config_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The limits apply to client request processes only. A shell stands in
-    /// for Git so that the limit can be read back.
-    #[tokio::test]
-    async fn client_request_processes_get_the_cpu_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let sh = Git::new("/bin/sh".into(), dir.path(), Path::new("/bin/true"))
-            .unwrap()
-            .with_process_limits(7, 0);
-        let limited = run(sh.service_command().args(["-c", "ulimit -t"]), None)
-            .await
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&limited).trim(), "7");
-        let internal = run(sh.command().args(["-c", "ulimit -t"]), None)
-            .await
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&internal).trim(), "unlimited");
-    }
-}

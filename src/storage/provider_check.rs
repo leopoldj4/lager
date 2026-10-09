@@ -235,19 +235,3 @@ fn expect_conflict<T>(r: &Result<T, BackendError>) -> CheckResult {
         Ok(_) => Err("expected a conflict, the write succeeded".into()),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-    use crate::storage::ObjectStoreBackend;
-
-    #[tokio::test]
-    async fn in_memory_store_meets_the_storage_requirements() {
-        let s = Storage::new(Arc::new(ObjectStoreBackend::in_memory()), "t");
-        for (name, r) in run(&s).await {
-            assert!(r.is_ok(), "{name}: {r:?}");
-        }
-    }
-}

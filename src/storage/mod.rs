@@ -11,7 +11,6 @@
 //! Only `head.json` changes in place, and only with CAS.
 
 pub mod backend;
-pub mod fault;
 pub mod provider_check;
 
 use std::path::Path;
@@ -519,7 +518,7 @@ impl Storage {
         }
     }
 
-    /// Reads raw bytes of any stored object (backup and tests).
+    /// Reads raw bytes of any stored object (backup).
     pub async fn get_raw(&self, key: &str) -> Result<Bytes, StorageError> {
         self.backend
             .get(key, None)

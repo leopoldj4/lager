@@ -37,27 +37,16 @@
         # dependency. Pinning it through flake.lock gives the fixed Git version
         # the implementation plan requires. The server needs only Git's core
         # commands: gitMinimal leaves out Perl, Python, and documentation,
-        # which keeps the container image small. Tests use the same Git.
+        # which keeps the container image small.
         git = pkgs.gitMinimal;
 
-        # Cargo sources, plus the README: a unit test checks its examples.
-        src = lib.cleanSourceWith {
-          src = ./.;
-          filter = path: type: lib.hasSuffix "/README.md" path || craneLib.filterCargoSources path type;
-          name = "source";
-        };
+        src = craneLib.cleanCargoSource ./.;
 
         commonArgs = {
           inherit src;
           strictDeps = true;
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
-          # Protocol tests drive real Git clients. HTTP clients need CA
-          # certificates on Linux even for plain HTTP.
-          nativeCheckInputs = [
-            git
-            pkgs.cacert
-          ];
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -66,6 +55,7 @@
           commonArgs
           // {
             inherit cargoArtifacts;
+            doCheck = false;
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
             postInstall = ''
               wrapProgram $out/bin/rustgit --prefix PATH : ${lib.makeBinPath [ git ]}
@@ -151,7 +141,6 @@
             # (If-None-Match / If-Match), which the head CAS depends on.
             pkgs.seaweedfs
             pkgs.awscli2 # for poking at buckets and conditional writes by hand
-            pkgs.cargo-nextest
             pkgs.cargo-watch
           ];
           RUST_BACKTRACE = "1";

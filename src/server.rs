@@ -167,7 +167,6 @@ pub async fn start_with_listener(
         limits: cfg.limits.clone(),
         metrics,
         notifier: Mutex::new(None),
-        failpoints: Arc::new(crate::failpoint::Failpoints::from_env()),
         disk: DiskReservations::new(&cache_root, cfg.limits.min_free_disk_bytes),
     });
     let registry = Registry::new(svc.clone())?;
