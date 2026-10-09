@@ -11,8 +11,8 @@ The stages change the work order. They do not remove functions from the design.
 1. Create one Cargo project with the modules in the design.
 2. Select fixed versions of Git and the Rust libraries.
 3. Connect the storage module to a local S3-compatible service.
-4. Test conditional creation, CAS, current reads, and lost responses.
-5. Test Git's `proc-receive` hook before further server work.
+4. Confirm conditional creation, CAS, current reads, and lost-response handling.
+5. Examine Git's `proc-receive` hook before further server work.
 6. Confirm that Rust controls ref changes and success responses.
 7. If the hook cannot provide this control, implement the receive protocol in Rust.
 8. Add the repository head, packs, log entries, and recovery.
@@ -22,7 +22,7 @@ The stages change the work order. They do not remove functions from the design.
 12. Add limited buffers, disk checks, and process cleanup.
 13. Provide a local start command.
 
-Keep all accepted stored data during this stage. Use separate directories for storage data and caches. Use a fixed version of the tested S3 service in the local setup.
+Keep all accepted stored data during this stage. Use separate directories for storage data and caches. Use a fixed version of the S3 service in the local setup.
 
 **Complete this stage when these checks pass:**
 
@@ -41,15 +41,15 @@ Keep all accepted stored data during this stage. Use separate directories for st
 **Build**
 
 1. Run three server processes with separate caches and shared storage.
-2. Test the storage requirements against an intended hosted S3 provider.
+2. Confirm the storage requirements with an intended hosted S3 provider.
 3. Check the storage head before each Git read request.
 4. Add recovery for missing caches and unknown request results.
-5. Send requests to different servers during tests.
-6. Add preferred server selection after those tests pass.
+5. Send requests to different servers.
+6. Add preferred server selection after requests work on every server.
 7. Prevent duplicate cache reconstruction on each server.
 8. Record request order and results for automatic checks.
 
-Require documented storage guarantees from each provider. A local test cannot prove another provider's behavior.
+Require documented storage guarantees from each provider. A local service cannot show another provider's behavior.
 
 **Complete this stage when these checks pass:**
 
@@ -74,9 +74,9 @@ Require documented storage guarantees from each provider. A local test cannot pr
 6. Add backup and recovery commands.
 7. Define rules for safe removal of obsolete stored data.
 8. Protect active operations and unknown request results before data removal.
-9. Test data removal in report-only mode first.
-10. Test small, medium, and large repositories under combined read and write loads.
-11. Repeat provider tests before each release.
+9. Run data removal in report-only mode first.
+10. Measure small, medium, and large repositories under combined read and write loads.
+11. Confirm the provider guarantees again before each release.
 
 **Complete this stage when these checks pass:**
 
