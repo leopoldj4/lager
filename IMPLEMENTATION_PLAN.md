@@ -1,4 +1,4 @@
-# Rust Git server implementation plan
+# worktree implementation plan
 
 Build the server in three stages. Keep one Rust program for local and production use. Use the [design](ARCHITECTURE.md) for storage rules, request procedures, and technical terms.
 

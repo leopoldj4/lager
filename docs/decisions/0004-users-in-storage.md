@@ -34,7 +34,7 @@ that makes a change applies it to its next request; other servers apply it
 within that time. The cache of verified hashes is keyed by the credentials
 and the hash, so a new password is checked again at once.
 
-**Admin API.** JSON under `/_rustgit/api/`, enabled with `server.admin_api`
+**Admin API.** JSON under `/_worktree/api/`, enabled with `server.admin_api`
 (the default, as for the maintenance endpoints):
 
 | Request | Answer |
@@ -52,7 +52,7 @@ passwords need at least 12 characters; access keys are `*` or valid
 repository names. Hashing runs off the request threads.
 
 **Management interface.** `web/` is a Next.js application that signs in
-with rustgit credentials, keeps them in an encrypted, httpOnly session
+with worktree credentials, keeps them in an encrypted, httpOnly session
 cookie, and calls the API from the server side only.
 
 ## Consequences

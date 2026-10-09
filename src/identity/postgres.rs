@@ -1,11 +1,11 @@
-//! Users in PostgreSQL (`[database]`), managed with `rustgit user` and
-//! `rustgit token`.
+//! Users in PostgreSQL (`[database]`), managed with `worktree user` and
+//! `worktree token`.
 //!
-//! `rustgit_users` holds one row per user with a salted password hash;
-//! `rustgit_user_access` holds its access levels. Every lookup reads the
+//! `worktree_users` holds one row per user with a salted password hash;
+//! `worktree_user_access` holds its access levels. Every lookup reads the
 //! database, so a change applies to the next request on every server.
-//! `rustgit_tokens` holds personal access tokens as SHA-256 digests, and
-//! `rustgit_token_access` the levels a token is limited to.
+//! `worktree_tokens` holds personal access tokens as SHA-256 digests, and
+//! `worktree_token_access` the levels a token is limited to.
 //! The schema is brought up to date when the server starts.
 
 use std::collections::BTreeMap;
@@ -24,27 +24,27 @@ use super::{
 };
 use crate::config::{Access, DatabaseConfig};
 
-/// Schema changes, applied in order and recorded in `rustgit_schema`.
+/// Schema changes, applied in order and recorded in `worktree_schema`.
 /// Never edit an applied entry; append a new one.
 const MIGRATIONS: &[&str] = &[r#"
-CREATE TABLE rustgit_users (
+CREATE TABLE worktree_users (
     name text PRIMARY KEY,
     password_hash text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     updated_by text NOT NULL
 );
-CREATE TABLE rustgit_user_access (
-    user_name text NOT NULL REFERENCES rustgit_users (name) ON DELETE CASCADE,
+CREATE TABLE worktree_user_access (
+    user_name text NOT NULL REFERENCES worktree_users (name) ON DELETE CASCADE,
     -- A repository name or '*'.
     repository text NOT NULL,
     level text NOT NULL CHECK (level IN ('none', 'read', 'write', 'force')),
     PRIMARY KEY (user_name, repository)
 );
-CREATE INDEX rustgit_user_access_repository ON rustgit_user_access (repository);
-CREATE TABLE rustgit_tokens (
+CREATE INDEX worktree_user_access_repository ON worktree_user_access (repository);
+CREATE TABLE worktree_tokens (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_name text NOT NULL REFERENCES rustgit_users (name) ON DELETE CASCADE,
+    user_name text NOT NULL REFERENCES worktree_users (name) ON DELETE CASCADE,
     name text NOT NULL,
     -- SHA-256 of the whole token. The token itself is never stored.
     token_sha256 bytea NOT NULL UNIQUE,
@@ -52,11 +52,11 @@ CREATE TABLE rustgit_tokens (
     expires_at timestamptz,
     last_used_at timestamptz
 );
-CREATE INDEX rustgit_tokens_user ON rustgit_tokens (user_name);
+CREATE INDEX worktree_tokens_user ON worktree_tokens (user_name);
 -- Without rows here a token has its user's access; with rows, at most these
 -- levels and never more than the user has.
-CREATE TABLE rustgit_token_access (
-    token_id bigint NOT NULL REFERENCES rustgit_tokens (id) ON DELETE CASCADE,
+CREATE TABLE worktree_token_access (
+    token_id bigint NOT NULL REFERENCES worktree_tokens (id) ON DELETE CASCADE,
     repository text NOT NULL,
     level text NOT NULL CHECK (level IN ('none', 'read', 'write', 'force')),
     PRIMARY KEY (token_id, repository)
@@ -74,15 +74,15 @@ const SELECT_TOKEN_ACCESS: &str = "
 WITH t AS (
     SELECT id, user_name,
            last_used_at IS NULL OR last_used_at < now() - interval '1 minute' AS stale
-    FROM rustgit_tokens
+    FROM worktree_tokens
     WHERE token_sha256 = $1 AND user_name = $2
       AND (expires_at IS NULL OR expires_at > now())
 )
 SELECT t.id, t.stale, false, a.repository, a.level
-FROM t LEFT JOIN rustgit_user_access a ON a.user_name = t.user_name
+FROM t LEFT JOIN worktree_user_access a ON a.user_name = t.user_name
 UNION ALL
 SELECT t.id, t.stale, true, a.repository, a.level
-FROM t JOIN rustgit_token_access a ON a.token_id = t.id";
+FROM t JOIN worktree_token_access a ON a.token_id = t.id";
 
 /// Token id, used recently, a level of the token (not the user), repository,
 /// level.
@@ -97,8 +97,8 @@ SELECT t.id,
        (extract(epoch FROM t.last_used_at) * 1000)::bigint,
        a.repository,
        a.level
-FROM rustgit_tokens t
-LEFT JOIN rustgit_token_access a ON a.token_id = t.id
+FROM worktree_tokens t
+LEFT JOIN worktree_token_access a ON a.token_id = t.id
 WHERE t.user_name = $1
   AND ($2::bigint IS NULL OR t.id = $2)
   AND (t.expires_at IS NULL OR t.expires_at > now())
@@ -125,8 +125,8 @@ SELECT u.name,
        u.updated_by,
        a.repository,
        a.level
-FROM rustgit_users u
-LEFT JOIN rustgit_user_access a ON a.user_name = u.name
+FROM worktree_users u
+LEFT JOIN worktree_user_access a ON a.user_name = u.name
 WHERE $1::text IS NULL OR u.name = $1
 ORDER BY u.name";
 
@@ -193,10 +193,11 @@ impl PgUsers {
             // Off the request: a lost update only makes the time older.
             let pool = self.pool.clone();
             tokio::spawn(async move {
-                let r = sqlx::query("UPDATE rustgit_tokens SET last_used_at = now() WHERE id = $1")
-                    .bind(id)
-                    .execute(&pool)
-                    .await;
+                let r =
+                    sqlx::query("UPDATE worktree_tokens SET last_used_at = now() WHERE id = $1")
+                        .bind(id)
+                        .execute(&pool)
+                        .await;
                 if let Err(e) = r {
                     tracing::warn!(token = id, error = %e, "token use not recorded");
                 }
@@ -222,14 +223,14 @@ async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
         .execute(&mut *tx)
         .await?;
     sqlx::raw_sql(
-        "CREATE TABLE IF NOT EXISTS rustgit_schema (
+        "CREATE TABLE IF NOT EXISTS worktree_schema (
              version integer PRIMARY KEY,
              applied_at timestamptz NOT NULL DEFAULT now()
          )",
     )
     .execute(&mut *tx)
     .await?;
-    let current: i32 = sqlx::query_scalar("SELECT coalesce(max(version), 0) FROM rustgit_schema")
+    let current: i32 = sqlx::query_scalar("SELECT coalesce(max(version), 0) FROM worktree_schema")
         .fetch_one(&mut *tx)
         .await?;
     let known = MIGRATIONS.len() as i32;
@@ -239,7 +240,7 @@ async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
     );
     for (version, &sql) in (1..).zip(MIGRATIONS).skip(current as usize) {
         sqlx::raw_sql(sql).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO rustgit_schema (version) VALUES ($1)")
+        sqlx::query("INSERT INTO worktree_schema (version) VALUES ($1)")
             .bind(version)
             .execute(&mut *tx)
             .await?;
@@ -261,8 +262,8 @@ impl IdentityProvider for PgUsers {
         }
         let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
             "SELECT u.password_hash, a.repository, a.level
-             FROM rustgit_users u
-             LEFT JOIN rustgit_user_access a ON a.user_name = u.name
+             FROM worktree_users u
+             LEFT JOIN worktree_user_access a ON a.user_name = u.name
              WHERE u.name = $1",
         )
         .bind(user)
@@ -302,7 +303,7 @@ impl IdentityProvider for PgUsers {
         let mut conn = self.conn().await?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
         let inserted = sqlx::query(
-            "INSERT INTO rustgit_users (name, password_hash, updated_by)
+            "INSERT INTO worktree_users (name, password_hash, updated_by)
              VALUES ($1, $2, $3)
              ON CONFLICT (name) DO NOTHING",
         )
@@ -326,7 +327,7 @@ impl IdentityProvider for PgUsers {
         let mut tx = conn.begin().await.map_err(unavailable)?;
         // Also locks the row until the end of the change.
         let updated = sqlx::query(
-            "UPDATE rustgit_users
+            "UPDATE worktree_users
              SET password_hash = coalesce($2, password_hash),
                  updated_at = now(),
                  updated_by = $3
@@ -342,7 +343,7 @@ impl IdentityProvider for PgUsers {
             return Err(UserError::NotFound(name.into()));
         }
         if let Some(access) = &change.access {
-            sqlx::query("DELETE FROM rustgit_user_access WHERE user_name = $1")
+            sqlx::query("DELETE FROM worktree_user_access WHERE user_name = $1")
                 .bind(name)
                 .execute(&mut *tx)
                 .await
@@ -355,7 +356,7 @@ impl IdentityProvider for PgUsers {
     }
 
     async fn delete(&self, name: &str, _by: &str) -> Result<(), UserError> {
-        let deleted = sqlx::query("DELETE FROM rustgit_users WHERE name = $1")
+        let deleted = sqlx::query("DELETE FROM worktree_users WHERE name = $1")
             .bind(name)
             .execute(&self.pool)
             .await
@@ -374,13 +375,13 @@ impl IdentityProvider for PgUsers {
         let digest = Sha256::digest(secret.as_bytes()).to_vec();
         let mut conn = self.conn().await?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
-        sqlx::query("DELETE FROM rustgit_tokens WHERE user_name = $1 AND expires_at <= now()")
+        sqlx::query("DELETE FROM worktree_tokens WHERE user_name = $1 AND expires_at <= now()")
             .bind(user)
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
         let count: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM rustgit_tokens WHERE user_name = $1")
+            sqlx::query_scalar("SELECT count(*) FROM worktree_tokens WHERE user_name = $1")
                 .bind(user)
                 .fetch_one(&mut *tx)
                 .await
@@ -391,9 +392,9 @@ impl IdentityProvider for PgUsers {
             )));
         }
         let id: Option<TokenId> = sqlx::query_scalar(
-            "INSERT INTO rustgit_tokens (user_name, name, token_sha256, expires_at)
+            "INSERT INTO worktree_tokens (user_name, name, token_sha256, expires_at)
              SELECT name, $2, $3, now() + make_interval(days => $4)
-             FROM rustgit_users WHERE name = $1
+             FROM worktree_users WHERE name = $1
              RETURNING id",
         )
         .bind(user)
@@ -409,7 +410,7 @@ impl IdentityProvider for PgUsers {
         if let Some(access) = &new.access {
             let (repos, levels) = columns(access);
             sqlx::query(
-                "INSERT INTO rustgit_token_access (token_id, repository, level)
+                "INSERT INTO worktree_token_access (token_id, repository, level)
                  SELECT $1, r, l FROM unnest($2::text[], $3::text[]) AS t (r, l)",
             )
             .bind(id)
@@ -432,7 +433,7 @@ impl IdentityProvider for PgUsers {
     }
 
     async fn delete_token(&self, user: &str, id: TokenId) -> Result<(), UserError> {
-        let deleted = sqlx::query("DELETE FROM rustgit_tokens WHERE id = $1 AND user_name = $2")
+        let deleted = sqlx::query("DELETE FROM worktree_tokens WHERE id = $1 AND user_name = $2")
             .bind(id)
             .bind(user)
             .execute(&self.pool)
@@ -484,7 +485,7 @@ async fn set_access(
 ) -> Result<(), UserError> {
     let (repos, levels) = columns(access);
     sqlx::query(
-        "INSERT INTO rustgit_user_access (user_name, repository, level)
+        "INSERT INTO worktree_user_access (user_name, repository, level)
          SELECT $1, r, l FROM unnest($2::text[], $3::text[]) AS t (r, l)",
     )
     .bind(name)

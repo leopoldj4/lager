@@ -1,4 +1,4 @@
-# Rust Git server design
+# worktree design
 
 Status: proposed design. Date: September 27, 2026.
 

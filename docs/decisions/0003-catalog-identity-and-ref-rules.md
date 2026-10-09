@@ -25,7 +25,7 @@ only refuse a request, never serve a deleted repository.
 **Identity.** Development credentials (`password`, `password_sha256`) are
 accepted only when the server listens on the loopback address. Elsewhere,
 users need `password_hash` (PBKDF2-HMAC-SHA256 with a random salt, made by
-`rustgit hash-password`), or an external identity service (`[identity]`)
+`worktree hash-password`), or an external identity service (`[identity]`)
 that returns the user and their access levels. Verified credentials are
 reused for a short time, keyed by a digest of the credentials.
 

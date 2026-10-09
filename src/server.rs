@@ -267,7 +267,7 @@ pub async fn start_with_listener(
     let stop = stop_http.subscribe();
     let http =
         tokio::spawn(async move { serve_http(listener, app, tls, idle_timeout, stop).await });
-    tracing::info!(%addr, "rustgit listening");
+    tracing::info!(%addr, "worktree listening");
     Ok(RunningServer {
         addr,
         state,

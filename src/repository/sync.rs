@@ -25,7 +25,7 @@ struct Marker {
     entry: EntryId,
 }
 
-const MARKER: &str = "rustgit-state.json";
+const MARKER: &str = "worktree-state.json";
 
 /// The records needed to reconstruct one head.
 pub struct Chain {

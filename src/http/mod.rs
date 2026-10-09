@@ -29,10 +29,10 @@ use crate::git::hook;
 use crate::model::RequestId;
 use crate::repository::{PendingPush, PushAccess, Registry, RepoError};
 
-pub const REQUEST_ID_HEADER: &str = "x-rustgit-request-id";
+pub const REQUEST_ID_HEADER: &str = "x-worktree-request-id";
 /// Set on every response while the server stops. Other servers then stop
 /// sending it requests.
-pub const DRAINING_HEADER: &str = "x-rustgit-draining";
+pub const DRAINING_HEADER: &str = "x-worktree-draining";
 
 pub struct AppInner {
     pub registry: Arc<Registry>,
@@ -49,17 +49,17 @@ pub type AppState = Arc<AppInner>;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/_rustgit/health", get(ready))
-        .route("/_rustgit/live", get(|| async { "ok\n" }))
-        .route("/_rustgit/metrics", get(metrics))
-        .route("/_rustgit/notify", post(crate::routing::notify_handler))
+        .route("/_worktree/health", get(ready))
+        .route("/_worktree/live", get(|| async { "ok\n" }))
+        .route("/_worktree/metrics", get(metrics))
+        .route("/_worktree/notify", post(crate::routing::notify_handler))
         .fallback(git_handler)
         .layer(middleware::from_fn_with_state(state.clone(), request_id))
         .with_state(state)
 }
 
 /// Readiness for a load balancer: 503 while the storage service does not
-/// answer or while the server stops. `/_rustgit/live` only shows that the
+/// answer or while the server stops. `/_worktree/live` only shows that the
 /// process runs.
 async fn ready(State(s): State<AppState>) -> Response {
     use health::NotReady;
@@ -128,19 +128,19 @@ async fn metrics(State(s): State<AppState>) -> Response {
             st.downloaded_bytes.load(Relaxed),
         ),
     ] {
-        text.push_str(&format!("rustgit_{name} {v}\n"));
+        text.push_str(&format!("worktree_{name} {v}\n"));
     }
     let mut caches = 0;
     for c in s.registry.controllers() {
         caches += c.cached_generation().await.is_some() as u64;
     }
-    text.push_str(&format!("rustgit_caches {caches}\n"));
+    text.push_str(&format!("worktree_caches {caches}\n"));
     text.push_str(&format!(
-        "rustgit_draining {}\n",
+        "worktree_draining {}\n",
         s.health.is_draining() as u8
     ));
     text.push_str(&format!(
-        "rustgit_git_processes_in_use {}\n",
+        "worktree_git_processes_in_use {}\n",
         svc.limits.max_git_processes - s.processes.available_permits()
     ));
     (
@@ -224,7 +224,7 @@ fn unauthorized() -> Response {
     let mut r = plain(StatusCode::UNAUTHORIZED, "authentication required");
     r.headers_mut().insert(
         header::WWW_AUTHENTICATE,
-        HeaderValue::from_static("Basic realm=\"rustgit\""),
+        HeaderValue::from_static("Basic realm=\"worktree\""),
     );
     r
 }

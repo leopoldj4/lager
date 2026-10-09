@@ -18,7 +18,7 @@ refs:
 - Each cache repository sets `receive.procReceiveRefs = refs/`. Git does not
   change any ref itself. It reports success for a ref only when the hook
   reports `ok` for it.
-- The hook is the `rustgit` binary, started through a symlink named
+- The hook is the `worktree` binary, started through a symlink named
   `proc-receive`. It sends the commands to the controller through a private
   Unix socket, with an access token for each push that works once. The
   controller runs the complete push procedure, including the head CAS, and
