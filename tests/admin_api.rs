@@ -1,5 +1,5 @@
-//! The admin API behind the management interface: users in storage and the
-//! repository list (docs/decisions/0004-users-in-storage.md).
+//! The admin API: users in storage and the repository list
+//! (docs/decisions/0004-users-in-storage.md).
 
 mod common;
 

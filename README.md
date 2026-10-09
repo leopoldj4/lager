@@ -181,20 +181,6 @@ permission-rule version that log entries record.
   A push whose result is unknown says so; the client should fetch before it
   pushes again.
 
-## Management interface
-
-`web/` is a Next.js application for the admin API: it lists repositories
-and creates, changes, and deletes users. Sign in with a user that has
-`"*" = "admin"`.
-
-```bash
-cd web && npm install && npm run dev
-```
-
-It reads `RUSTGIT_URL` (default `http://127.0.0.1:8080`),
-`RUSTGIT_PUBLIC_URL` for clone URLs, and `SESSION_SECRET`, which encrypts
-the session cookie and is required with `npm run build && npm start`.
-
 ## Container image
 
 `nix build .#docker` (Linux, or a Linux builder) gives a script that
