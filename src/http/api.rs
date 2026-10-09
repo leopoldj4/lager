@@ -1,10 +1,11 @@
-//! Admin API: JSON under `/_rustgit/api/` for user management
-//! (docs/decisions/0004-users-in-storage.md).
+//! Admin API: JSON under `/_rustgit/api/` for user and repository management
+//! (docs/decisions/0004-users-in-storage.md, 0006, 0008).
 //!
 //! `me` answers every authenticated user; everything else needs admin access
-//! to every repository (`"*" = "admin"`). Users from the configuration file
-//! are listed but cannot be changed here; repositories can be changed only
-//! with the storage catalog.
+//! to every repository (`"*" = "admin"`). Users can be changed only when the
+//! identity provider manages them (`[database]`), and not those from the
+//! configuration file; repositories can be changed only with the storage
+//! catalog.
 
 use std::collections::BTreeMap;
 
@@ -21,9 +22,9 @@ use super::password::{DEFAULT_ITERATIONS, PasswordHash};
 use super::{AppInner, AppState};
 use crate::catalog::{Catalog, CatalogError};
 use crate::config::{Access, RepoConfig};
+use crate::identity::{self, UserChange, UserError};
 use crate::model::{RepoId, RepoState};
 use crate::repository::admin::AdminError;
-use crate::users::{UserError, UserRecord, validate_password};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -74,10 +75,10 @@ async fn identify(s: &AppInner, headers: &HeaderMap) -> Result<Identity, Respons
         }
         Ok(i) => Ok(i),
         Err(AuthError::Unavailable(m)) => {
-            tracing::warn!(error = %m, "identity service unavailable");
+            tracing::warn!(error = %m, "user lookup unavailable");
             Err(error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "identity service unavailable; retry later",
+                "user lookup unavailable; retry later",
             ))
         }
     }
@@ -85,7 +86,7 @@ async fn identify(s: &AppInner, headers: &HeaderMap) -> Result<Identity, Respons
 
 async fn admin(s: &AppInner, headers: &HeaderMap) -> Result<Identity, Response> {
     let who = identify(s, headers).await?;
-    if s.directory.is_global_admin(&who) {
+    if who.is_global_admin() {
         Ok(who)
     } else {
         Err(error(
@@ -99,7 +100,7 @@ async fn me(State(s): State<AppState>, headers: HeaderMap) -> Response {
     match identify(&s, &headers).await {
         Ok(who) => Json(serde_json::json!({
             "name": who.name(),
-            "admin": s.directory.is_global_admin(&who),
+            "admin": who.is_global_admin(),
         }))
         .into_response(),
         Err(r) => r,
@@ -295,85 +296,39 @@ async fn delete_repo(
     }
 }
 
-#[derive(Serialize)]
-struct UserView {
-    name: String,
-    access: BTreeMap<String, Access>,
-    /// "config" users are read-only here; "storage" users can be changed.
-    source: &'static str,
-    created_ms: Option<u64>,
-    updated_ms: Option<u64>,
-    updated_by: Option<String>,
-}
-
-impl From<UserRecord> for UserView {
-    fn from(r: UserRecord) -> Self {
-        Self {
-            name: r.name,
-            access: r.access,
-            source: "storage",
-            created_ms: Some(r.created_ms),
-            updated_ms: Some(r.updated_ms),
-            updated_by: Some(r.updated_by),
-        }
-    }
-}
-
 async fn users(State(s): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(r) = admin(&s, &headers).await {
         return r;
     }
-    let mut out: Vec<UserView> = s
-        .directory
-        .configured_users()
-        .into_iter()
-        .map(|u| UserView {
-            name: u.name,
-            access: u.access,
-            source: "config",
-            created_ms: None,
-            updated_ms: None,
-            updated_by: None,
-        })
-        .collect();
-    let store = s.directory.user_store();
-    if let Some(store) = store {
-        match store.list().await {
-            // A stored user shadowed by the file cannot sign in; not listed.
-            Ok(stored) => out.extend(
-                stored
-                    .into_iter()
-                    .filter(|u| !s.directory.is_configured_user(&u.name))
-                    .map(UserView::from),
-            ),
-            Err(e) => return storage_error(e),
-        }
+    let ids = s.directory.identities();
+    match ids.list().await {
+        Ok(users) => Json(serde_json::json!({ "managed": ids.manages_users(), "users": users }))
+            .into_response(),
+        Err(e) => user_error(e),
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    Json(serde_json::json!({ "managed": store.is_some(), "users": out })).into_response()
 }
 
 fn user_error(e: UserError) -> Response {
     match e {
-        UserError::Exists(_) => error(StatusCode::CONFLICT, e.to_string()),
+        UserError::Exists(_) | UserError::Unmanaged(_) => {
+            error(StatusCode::CONFLICT, e.to_string())
+        }
         UserError::NotFound(_) => error(StatusCode::NOT_FOUND, e.to_string()),
         UserError::Invalid(_) => error(StatusCode::BAD_REQUEST, e.to_string()),
-        UserError::Conflict => error(StatusCode::CONFLICT, e.to_string()),
-        UserError::Unknown(m) => {
-            tracing::warn!(error = %m, "user change result unknown");
+        UserError::Unavailable(m) => {
+            tracing::warn!(error = %m, "user store unavailable");
             error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "result unknown; reload before repeating the change",
+                "user store unavailable; retry later",
             )
         }
-        UserError::Storage(e) => storage_error(e),
     }
 }
 
 /// PBKDF2 with the default iterations takes a noticeable time; it runs off
 /// the request threads.
 async fn hash(password: String) -> Result<String, Response> {
-    validate_password(&password).map_err(user_error)?;
+    identity::validate_password(&password).map_err(user_error)?;
     tokio::task::spawn_blocking(move || {
         PasswordHash::new(&password, DEFAULT_ITERATIONS).to_string()
     })
@@ -381,25 +336,13 @@ async fn hash(password: String) -> Result<String, Response> {
     .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))
 }
 
-/// The store for changes to `name`, or the reason there is none.
-fn changeable<'a>(
-    s: &'a AppInner,
-    name: &str,
-) -> Result<&'a std::sync::Arc<crate::users::UserStore>, Response> {
-    let Some(store) = s.directory.user_store() else {
-        return Err(error(
-            StatusCode::CONFLICT,
-            "users come from the configuration file or the identity service; \
-             use catalog.kind = \"storage\" without [identity] to manage them here",
-        ));
-    };
-    if s.directory.is_configured_user(name) {
-        return Err(error(
-            StatusCode::CONFLICT,
-            format!("user {name} is defined in the configuration file"),
-        ));
+/// The caller for a user change, after the checks that need no hashing.
+async fn manage_users(s: &AppInner, headers: &HeaderMap) -> Result<Identity, Response> {
+    let who = admin(s, headers).await?;
+    if !s.directory.identities().manages_users() {
+        return Err(user_error(identity::unmanaged()));
     }
-    Ok(store)
+    Ok(who)
 }
 
 #[derive(Deserialize)]
@@ -416,16 +359,12 @@ async fn create_user(
     headers: HeaderMap,
     Json(new): Json<NewUser>,
 ) -> Response {
-    let who = match admin(&s, &headers).await {
+    let who = match manage_users(&s, &headers).await {
         Ok(w) => w,
         Err(r) => return r,
     };
-    let store = match changeable(&s, &new.name) {
-        Ok(store) => store,
-        Err(r) => return r,
-    };
-    if let Err(e) = crate::users::validate_user_name(&new.name)
-        .and_then(|_| crate::users::validate_access(&new.access))
+    if let Err(e) =
+        identity::validate_user_name(&new.name).and_then(|_| identity::validate_access(&new.access))
     {
         return user_error(e);
     }
@@ -433,13 +372,15 @@ async fn create_user(
         Ok(h) => h,
         Err(r) => return r,
     };
-    match store
-        .create(&new.name, password_hash, new.access, who.name())
-        .await
-    {
-        Ok(r) => {
-            tracing::info!(user = %r.name, by = %who.name(), "created user");
-            (StatusCode::CREATED, Json(UserView::from(r))).into_response()
+    let new = identity::NewUser {
+        name: new.name,
+        password_hash,
+        access: new.access,
+    };
+    match s.directory.identities().create(new, who.name()).await {
+        Ok(u) => {
+            tracing::info!(user = %u.name, by = %who.name(), "created user");
+            (StatusCode::CREATED, Json(u)).into_response()
         }
         Err(e) => user_error(e),
     }
@@ -447,7 +388,7 @@ async fn create_user(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UserChange {
+struct UserChangeRequest {
     #[serde(default)]
     password: Option<String>,
     /// Replaces all access levels.
@@ -459,18 +400,14 @@ async fn update_user(
     State(s): State<AppState>,
     headers: HeaderMap,
     Path(name): Path<String>,
-    Json(change): Json<UserChange>,
+    Json(change): Json<UserChangeRequest>,
 ) -> Response {
-    let who = match admin(&s, &headers).await {
+    let who = match manage_users(&s, &headers).await {
         Ok(w) => w,
         Err(r) => return r,
     };
-    let store = match changeable(&s, &name) {
-        Ok(store) => store,
-        Err(r) => return r,
-    };
     if let Some(a) = &change.access
-        && let Err(e) = crate::users::validate_access(a)
+        && let Err(e) = identity::validate_access(a)
     {
         return user_error(e);
     }
@@ -481,26 +418,20 @@ async fn update_user(
         },
         None => None,
     };
-    let result = store
-        .update(&name, who.name(), |r| {
-            if let Some(h) = &password_hash {
-                r.password_hash = h.clone();
-            }
-            if let Some(a) = &change.access {
-                r.access = a.clone();
-            }
-        })
-        .await;
-    match result {
-        Ok(r) => {
-            tracing::info!(
-                user = %r.name,
-                by = %who.name(),
-                password = password_hash.is_some(),
-                access = change.access.is_some(),
-                "changed user"
-            );
-            Json(UserView::from(r)).into_response()
+    let (password, access) = (password_hash.is_some(), change.access.is_some());
+    let change = UserChange {
+        password_hash,
+        access: change.access,
+    };
+    match s
+        .directory
+        .identities()
+        .update(&name, change, who.name())
+        .await
+    {
+        Ok(u) => {
+            tracing::info!(user = %u.name, by = %who.name(), password, access, "changed user");
+            Json(u).into_response()
         }
         Err(e) => user_error(e),
     }
@@ -511,18 +442,14 @@ async fn delete_user(
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Response {
-    let who = match admin(&s, &headers).await {
+    let who = match manage_users(&s, &headers).await {
         Ok(w) => w,
         Err(r) => return r,
     };
     if who.name() == name {
         return error(StatusCode::CONFLICT, "you cannot delete your own user");
     }
-    let store = match changeable(&s, &name) {
-        Ok(store) => store,
-        Err(r) => return r,
-    };
-    match store.delete(&name, who.name()).await {
+    match s.directory.identities().delete(&name, who.name()).await {
         Ok(()) => {
             tracing::info!(user = %name, by = %who.name(), "deleted user");
             StatusCode::NO_CONTENT.into_response()

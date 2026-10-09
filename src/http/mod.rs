@@ -289,7 +289,7 @@ async fn authorize(
     let identity = match s.directory.authenticate(auth).await {
         Ok(i) => i,
         Err(AuthError::BadCredentials) => return Err(unauthorized()),
-        Err(AuthError::Unavailable(m)) => return Err(unavailable("identity service", &m)),
+        Err(AuthError::Unavailable(m)) => return Err(unavailable("user lookup", &m)),
     };
     let repo = s
         .directory

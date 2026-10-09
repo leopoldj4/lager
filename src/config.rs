@@ -1,7 +1,7 @@
 //! Configuration file (TOML). The repository name table and development
 //! credentials live here initially (ARCHITECTURE.md §5, §11). Production
 //! setups move the name table to the repository catalog in storage and
-//! check identities with salted password hashes or an identity service.
+//! keep users in PostgreSQL or check them with an identity service.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -28,6 +28,8 @@ pub struct Config {
     pub customers: Vec<CustomerConfig>,
     #[serde(default)]
     pub identity: Option<IdentityConfig>,
+    #[serde(default)]
+    pub database: Option<DatabaseConfig>,
     #[serde(default)]
     pub catalog: CatalogConfig,
     #[serde(default)]
@@ -289,6 +291,20 @@ pub struct IdentityConfig {
     pub ca_certificate: Option<PathBuf>,
 }
 
+/// PostgreSQL for users managed through the admin API
+/// (docs/decisions/0008-users-in-postgres.md).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    /// For example `postgres://rustgit:...@db.example.com/rustgit?sslmode=verify-full`.
+    pub url: String,
+    #[serde(default = "default_database_connections")]
+    pub max_connections: u32,
+    /// Longest wait for a connection; the request then fails with 503.
+    #[serde(default = "default_database_timeout")]
+    pub timeout_secs: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CatalogKind {
@@ -402,6 +418,12 @@ fn default_identity_cache() -> u64 {
 fn default_identity_timeout() -> u64 {
     5
 }
+fn default_database_connections() -> u32 {
+    8
+}
+fn default_database_timeout() -> u64 {
+    5
+}
 fn access_write() -> Access {
     Access::Write
 }
@@ -458,6 +480,10 @@ impl Config {
                     .map_err(|e| anyhow::anyhow!("user {}: {e}", u.name))?;
             }
         }
+        anyhow::ensure!(
+            self.identity.is_none() || self.database.is_none(),
+            "[identity] decides alone who the users are; remove [database] or [identity]"
+        );
         if self.catalog.kind == CatalogKind::Storage {
             anyhow::ensure!(
                 self.repos.is_empty(),

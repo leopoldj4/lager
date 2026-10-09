@@ -11,9 +11,10 @@ changes of a repository.
 
 ## Local start
 
-One server, a local S3-compatible service (SeaweedFS), and development
-credentials. Storage data and caches live in separate directories under
-`./.local`; stored data is kept between runs.
+One server, a local S3-compatible service (SeaweedFS), PostgreSQL for
+managed users, and development credentials. Storage data, the database,
+and caches live in separate directories under `./.local`; stored data is
+kept between runs.
 
 ```bash
 nix run .#local
@@ -23,8 +24,8 @@ nix run .#local
 git clone http://dev:dev@127.0.0.1:8080/demo.git
 ```
 
-Without Nix, `dev/start-local.sh` uses `weed`, `git`, and `rustgit` from
-`PATH`. Git 2.45 or later is required.
+Without Nix, `dev/start-local.sh` uses `weed`, `initdb`, `pg_ctl`,
+`createdb`, `git`, and `rustgit` from `PATH`. Git 2.45 or later is required.
 
 ## Commands
 
@@ -85,9 +86,14 @@ secret_access_key = "..."          # restrict to the prefix
 kind = "storage"                   # repository names in the storage catalog
 create_on_push = "write"           # a push to a missing name creates it
 
-[identity]                         # or [[users]] with password_hash
-url = "https://id.example.com/git/check"
-token = "..."
+[database]                         # users managed through the admin API
+url = "postgres://rustgit:...@db.example.com/rustgit?sslmode=verify-full"
+# max_connections = 8
+# timeout_secs = 5
+
+# [identity]                       # instead of [database]: an external service
+# url = "https://id.example.com/git/check"
+# token = "..."
 
 [limits]
 max_receive_bytes = 2147483648
@@ -165,9 +171,10 @@ permission-rule version that log entries record.
 - `POST /_rustgit/snapshot?repo=<name>` and `POST /_rustgit/rebuild?repo=<name>`
   (admin access): create a snapshot, or rebuild the local cache from storage.
 - `/_rustgit/api/`: JSON for user management and the repository list, for
-  users with `"*" = "admin"`. With `catalog.kind = "storage"`, users created
-  there are kept in storage and need no configuration change; users in the
-  file take precedence. See [decision 4](docs/decisions/0004-users-in-storage.md).
+  users with `"*" = "admin"`. With `[database]`, users created there are
+  kept in PostgreSQL and need no configuration change; users in the file
+  take precedence, so keep one admin there. The server creates and updates
+  its tables when it starts. See [decision 8](docs/decisions/0008-users-in-postgres.md).
 - Every response has an `x-rustgit-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: rustgit: accepted ...` line. Logs never contain credentials or

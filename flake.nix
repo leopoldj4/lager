@@ -63,14 +63,16 @@
             meta.mainProgram = "rustgit";
           }
         );
-        # Local mode: the pinned SeaweedFS as the S3-compatible service, one
-        # server, development credentials. Storage data and caches live in
-        # separate directories under ./.local.
+        # Local mode: the pinned SeaweedFS as the S3-compatible service,
+        # PostgreSQL for managed users, one server, development credentials.
+        # Storage data, database, and caches live in separate directories
+        # under ./.local.
         local = pkgs.writeShellApplication {
           name = "rustgit-local";
           runtimeInputs = [
             rustgit
             pkgs.seaweedfs
+            pkgs.postgresql
             git
             pkgs.coreutils
             pkgs.gnugrep
@@ -141,6 +143,7 @@
             # (If-None-Match / If-Match), which the head CAS depends on.
             pkgs.seaweedfs
             pkgs.awscli2 # for poking at buckets and conditional writes by hand
+            pkgs.postgresql # managed users ([database])
             pkgs.cargo-watch
           ];
           RUST_BACKTRACE = "1";
