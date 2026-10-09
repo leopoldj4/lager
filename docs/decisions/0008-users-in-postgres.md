@@ -1,6 +1,7 @@
 # 8. Users in PostgreSQL behind an identity provider trait
 
-Status: accepted. Date: October 9, 2026.
+Status: accepted; users are managed with `rustgit user` instead of the
+admin API since [decision 10](0010-no-admin-api.md). Date: October 9, 2026.
 
 ## Context
 

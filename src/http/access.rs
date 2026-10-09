@@ -56,11 +56,6 @@ impl Directory {
         self.catalog.as_ref()
     }
 
-    /// Who the users are; the admin API manages them through this.
-    pub fn identities(&self) -> &dyn IdentityProvider {
-        self.identities.as_ref()
-    }
-
     /// Reloads the table if the configuration file changed. A file that does
     /// not load keeps the previous table.
     pub fn reload_if_changed(&self) {
