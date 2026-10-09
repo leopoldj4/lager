@@ -1,7 +1,6 @@
 //! Git smart HTTP requests, identity checks, permissions, and resource limits.
 
 pub mod access;
-pub mod api;
 pub mod health;
 pub mod limits;
 pub mod password;
@@ -13,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Query, Request, State};
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -43,7 +42,6 @@ pub struct AppInner {
     pub customers: CustomerLimits,
     pub routing: Option<Arc<crate::routing::Routing>>,
     pub socket_path: PathBuf,
-    pub admin_api: bool,
     pub health: health::Health,
 }
 
@@ -55,9 +53,6 @@ pub fn router(state: AppState) -> Router {
         .route("/_rustgit/live", get(|| async { "ok\n" }))
         .route("/_rustgit/metrics", get(metrics))
         .route("/_rustgit/notify", post(crate::routing::notify_handler))
-        .route("/_rustgit/snapshot", post(snapshot))
-        .route("/_rustgit/rebuild", post(rebuild))
-        .nest("/_rustgit/api", api::router())
         .fallback(git_handler)
         .layer(middleware::from_fn_with_state(state.clone(), request_id))
         .with_state(state)
@@ -675,56 +670,6 @@ fn default_branch_changed(
             }
         })
     }))
-}
-
-#[derive(serde::Deserialize)]
-struct RepoQuery {
-    repo: String,
-}
-
-/// Maintenance through HTTP: creates a snapshot of the current generation.
-async fn snapshot(
-    State(s): State<AppState>,
-    headers: HeaderMap,
-    Query(q): Query<RepoQuery>,
-) -> Response {
-    if !s.admin_api {
-        return plain(StatusCode::NOT_FOUND, "not found");
-    }
-    let auth = match authorize(&s, &headers, &q.repo, Access::Admin, false).await {
-        Ok(a) => a,
-        Err(r) => return r,
-    };
-    let controller = s.registry.controller(auth.repo.id);
-    match crate::maintenance::snapshot(&controller, auth.identity.name()).await {
-        Ok(r) => (StatusCode::OK, axum::Json(r)).into_response(),
-        Err(e) => repo_error(e),
-    }
-}
-
-/// Blocks the local cache of a repository and rebuilds it from storage.
-/// Active reads finish with the cache they started with.
-async fn rebuild(
-    State(s): State<AppState>,
-    headers: HeaderMap,
-    Query(q): Query<RepoQuery>,
-) -> Response {
-    if !s.admin_api {
-        return plain(StatusCode::NOT_FOUND, "not found");
-    }
-    let auth = match authorize(&s, &headers, &q.repo, Access::Admin, false).await {
-        Ok(a) => a,
-        Err(r) => return r,
-    };
-    let controller = s.registry.controller(auth.repo.id);
-    match controller.rebuild_cache().await {
-        Ok(generation) => (
-            StatusCode::OK,
-            axum::Json(serde_json::json!({ "generation": generation })),
-        )
-            .into_response(),
-        Err(e) => repo_error(e),
-    }
 }
 
 /// Disk space reservations: work is rejected before the disk becomes full.

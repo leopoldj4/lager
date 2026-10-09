@@ -256,7 +256,6 @@ pub async fn start_with_listener(
         customers: CustomerLimits::new(&cfg.customers),
         routing,
         socket_path: socket_path.clone(),
-        admin_api: cfg.server.admin_api,
         health: crate::http::health::Health::new(svc.storage.clone()),
     });
     let app = crate::http::router(state.clone());
