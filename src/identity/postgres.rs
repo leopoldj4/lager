@@ -1,4 +1,5 @@
-//! Users in PostgreSQL (`[database]`), managed through the admin API.
+//! Users in PostgreSQL (`[database]`), managed with `rustgit user` and
+//! `rustgit token`.
 //!
 //! `rustgit_users` holds one row per user with a salted password hash;
 //! `rustgit_user_access` holds its access levels. Every lookup reads the
@@ -25,8 +26,7 @@ use crate::config::{Access, DatabaseConfig};
 
 /// Schema changes, applied in order and recorded in `rustgit_schema`.
 /// Never edit an applied entry; append a new one.
-const MIGRATIONS: &[&str] = &[
-    r#"
+const MIGRATIONS: &[&str] = &[r#"
 CREATE TABLE rustgit_users (
     name text PRIMARY KEY,
     password_hash text NOT NULL,
@@ -38,12 +38,10 @@ CREATE TABLE rustgit_user_access (
     user_name text NOT NULL REFERENCES rustgit_users (name) ON DELETE CASCADE,
     -- A repository name or '*'.
     repository text NOT NULL,
-    level text NOT NULL CHECK (level IN ('none', 'read', 'write', 'force', 'admin')),
+    level text NOT NULL CHECK (level IN ('none', 'read', 'write', 'force')),
     PRIMARY KEY (user_name, repository)
 );
 CREATE INDEX rustgit_user_access_repository ON rustgit_user_access (repository);
-"#,
-    r#"
 CREATE TABLE rustgit_tokens (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_name text NOT NULL REFERENCES rustgit_users (name) ON DELETE CASCADE,
@@ -60,11 +58,10 @@ CREATE INDEX rustgit_tokens_user ON rustgit_tokens (user_name);
 CREATE TABLE rustgit_token_access (
     token_id bigint NOT NULL REFERENCES rustgit_tokens (id) ON DELETE CASCADE,
     repository text NOT NULL,
-    level text NOT NULL CHECK (level IN ('none', 'read', 'write', 'force', 'admin')),
+    level text NOT NULL CHECK (level IN ('none', 'read', 'write', 'force')),
     PRIMARY KEY (token_id, repository)
 );
-"#,
-];
+"#];
 
 /// Tokens a user can have at the same time.
 const MAX_TOKENS: i64 = 100;
@@ -182,7 +179,8 @@ impl PgUsers {
         let (mut user_access, mut token_access) = (BTreeMap::new(), BTreeMap::new());
         for (_, _, of_token, repo, level) in rows {
             if let (Some(repo), Some(level)) = (repo, level) {
-                let level = parse_level(&level)
+                let level = level
+                    .parse::<Access>()
                     .map_err(|e| AuthError::Unavailable(format!("database: {e}")))?;
                 if of_token {
                     token_access.insert(repo, level);
@@ -212,7 +210,6 @@ impl PgUsers {
         Ok(Identity::User {
             name: user.to_string(),
             access,
-            token: Some(id),
         })
     }
 }
@@ -281,7 +278,8 @@ impl IdentityProvider for PgUsers {
         let mut access = BTreeMap::new();
         for (_, repo, level) in rows {
             if let (Some(repo), Some(level)) = (repo, level) {
-                let level = parse_level(&level)
+                let level = level
+                    .parse::<Access>()
                     .map_err(|e| AuthError::Unavailable(format!("database: {e}")))?;
                 access.insert(repo, level);
             }
@@ -289,7 +287,6 @@ impl IdentityProvider for PgUsers {
         Ok(Some(Identity::User {
             name: user.to_string(),
             access,
-            token: None,
         }))
     }
 
@@ -472,7 +469,7 @@ async fn tokens(
             });
         }
         if let (Some(repo), Some(level)) = (repo, level) {
-            let level = parse_level(&level).map_err(UserError::Unavailable)?;
+            let level = level.parse::<Access>().map_err(UserError::Unavailable)?;
             let token = out.last_mut().expect("pushed");
             token.access.get_or_insert_default().insert(repo, level);
         }
@@ -525,7 +522,7 @@ async fn users(conn: &mut PgConnection, name: Option<&str>) -> Result<Vec<User>,
             });
         }
         if let (Some(repo), Some(level)) = (repo, level) {
-            let level = parse_level(&level).map_err(UserError::Unavailable)?;
+            let level = level.parse::<Access>().map_err(UserError::Unavailable)?;
             out.last_mut().expect("pushed").access.insert(repo, level);
         }
     }
@@ -534,33 +531,9 @@ async fn users(conn: &mut PgConnection, name: Option<&str>) -> Result<Vec<User>,
 
 /// Repository names and levels as two arrays for `unnest`.
 fn columns(access: &BTreeMap<String, Access>) -> (Vec<&str>, Vec<&str>) {
-    access
-        .iter()
-        .map(|(r, l)| (r.as_str(), level_name(*l)))
-        .unzip()
+    access.iter().map(|(r, l)| (r.as_str(), l.as_str())).unzip()
 }
 
 fn unavailable(e: sqlx::Error) -> UserError {
     UserError::Unavailable(e.to_string())
-}
-
-fn level_name(a: Access) -> &'static str {
-    match a {
-        Access::None => "none",
-        Access::Read => "read",
-        Access::Write => "write",
-        Access::Force => "force",
-        Access::Admin => "admin",
-    }
-}
-
-fn parse_level(s: &str) -> Result<Access, String> {
-    Ok(match s {
-        "none" => Access::None,
-        "read" => Access::Read,
-        "write" => Access::Write,
-        "force" => Access::Force,
-        "admin" => Access::Admin,
-        _ => return Err(format!("unknown access level {s:?}")),
-    })
 }

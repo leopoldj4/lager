@@ -1,11 +1,12 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use rustgit::catalog::Catalog;
-use rustgit::client::{self, Client, ClientError, Login};
-use rustgit::config::{CatalogKind, Config, validate_repo_name};
+use rustgit::config::{Access, CatalogKind, Config, validate_repo_name};
+use rustgit::identity::{self, NewToken, NewUser, UserChange};
 use rustgit::model::{RepoId, branch_ref};
 use rustgit::repository::admin;
 use rustgit::storage::Storage;
@@ -13,8 +14,7 @@ use rustgit::storage::Storage;
 #[derive(Parser)]
 #[command(name = "rustgit", about = "Git server with S3-compatible storage")]
 struct Cli {
-    /// Server configuration [default: rustgit.toml]. Repository commands
-    /// without it go through the server of `rustgit login`, if any.
+    /// Server configuration [default: rustgit.toml].
     #[arg(long, short, env = "RUSTGIT_CONFIG", global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]
@@ -25,25 +25,18 @@ struct Cli {
 enum Cmd {
     /// Run the server.
     Serve,
-    /// Keep a server URL and credentials for repository commands. Asks for
-    /// what the URL does not contain; needs no configuration file.
-    Login {
-        /// For example https://git.example.com or https://user@git.example.com
-        url: String,
-        #[arg(long, short)]
-        user: Option<String>,
+    /// Users in the database (`[database]`).
+    User {
+        #[command(subcommand)]
+        cmd: UserCmd,
     },
-    /// Remove the credentials that `rustgit login` kept, and delete the
-    /// token it created on the server.
-    Logout,
-    /// Personal access tokens for Git and other programs, on the server of
-    /// `rustgit login`.
+    /// Personal access tokens of database users, for Git in place of the
+    /// password.
     Token {
         #[command(subcommand)]
         cmd: TokenCmd,
     },
-    /// Repository management: through the server after `rustgit login`,
-    /// or directly in storage with a server configuration.
+    /// Repository management, directly in storage.
     Repo {
         #[command(subcommand)]
         cmd: RepoCmd,
@@ -93,22 +86,48 @@ enum RepoCmd {
 }
 
 #[derive(Subcommand)]
-enum TokenCmd {
-    /// Create a token and print it once. Asks for your password.
+enum UserCmd {
+    /// Create a user. Asks for the password.
     Create {
+        name: String,
+        /// An access level for a repository (or "*"), such as org/app=write.
+        /// Repeatable.
+        #[arg(long, value_name = "REPO=LEVEL")]
+        access: Vec<String>,
+    },
+    /// List the users of the configuration file and the database.
+    List,
+    /// Change a user's password. Asks for it.
+    SetPassword { name: String },
+    /// Replace all of a user's access levels; none removes all access.
+    SetAccess {
+        name: String,
+        #[arg(value_name = "REPO=LEVEL")]
+        access: Vec<String>,
+    },
+    /// Delete a user and its tokens.
+    Delete { name: String },
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+    /// Create a token for a user and print it once.
+    Create {
+        user: String,
         /// What the token is for, such as "CI for org/app".
         name: String,
         /// Limit the token to a level for a repository (or "*"), such as
-        /// org/app=read. Repeatable. Without it, the token has your access.
+        /// org/app=read. Repeatable. Without it, the token has the user's
+        /// access.
         #[arg(long, value_name = "REPO=LEVEL")]
         access: Vec<String>,
         #[arg(long)]
         expires_days: Option<u32>,
     },
-    /// List your tokens.
-    List,
-    /// Delete a token. Git and programs that use it stop working.
-    Delete { id: i64 },
+    /// List a user's tokens.
+    List { user: String },
+    /// Delete a token. Git clients that use it stop working.
+    Delete { user: String, id: i64 },
 }
 
 #[derive(Subcommand)]
@@ -146,23 +165,7 @@ fn main() {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
-    let cmd = match cli.cmd {
-        Cmd::Login { url, user } => return login(&url, user).await,
-        Cmd::Logout => return logout().await,
-        Cmd::Token { cmd } => return token_cmd(cmd).await,
-        Cmd::Repo { cmd } if cli.config.is_none() => {
-            if let Some(login) = saved_login()? {
-                return remote_repo_cmd(login, cmd).await;
-            }
-            anyhow::ensure!(
-                Path::new(DEFAULT_CONFIG).exists(),
-                "no {DEFAULT_CONFIG} here; run rustgit login <url> to manage \
-                 repositories through a server, or pass -c <config>"
-            );
-            Cmd::Repo { cmd }
-        }
-        cmd => cmd,
-    };
+    let cmd = cli.cmd;
     let config_path = cli.config.unwrap_or_else(|| DEFAULT_CONFIG.into());
     if let Cmd::HashPassword = cmd {
         let mut password = String::new();
@@ -177,6 +180,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
     let cfg = Config::load(&config_path)?;
+    let cmd = match cmd {
+        Cmd::User { cmd } => return user_cmd(&cfg, cmd).await,
+        Cmd::Token { cmd } => return token_cmd(&cfg, cmd).await,
+        cmd => cmd,
+    };
     let storage = rustgit::server::storage_from_config(&cfg)?;
     match cmd {
         Cmd::Serve => {
@@ -229,7 +237,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let report = rustgit::maintenance::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        Cmd::HashPassword | Cmd::Login { .. } | Cmd::Logout | Cmd::Token { .. } => {
+        Cmd::HashPassword | Cmd::User { .. } | Cmd::Token { .. } => {
             unreachable!("handled before the configuration loads")
         }
         Cmd::Backup {
@@ -401,149 +409,155 @@ async fn catalog_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
 
 const DEFAULT_CONFIG: &str = "rustgit.toml";
 
-fn login_path() -> anyhow::Result<PathBuf> {
-    Login::default_path().ok_or_else(|| anyhow::anyhow!("HOME is not set"))
+/// Who changed a user, as the database records it.
+fn operator() -> String {
+    format!(
+        "cli:{}",
+        std::env::var("USER").unwrap_or_else(|_| "unknown".into())
+    )
 }
 
-fn saved_login() -> anyhow::Result<Option<Login>> {
-    Login::load(&login_path()?)
+/// `REPO=LEVEL` arguments.
+fn parse_access(args: &[String]) -> anyhow::Result<BTreeMap<String, Access>> {
+    let mut out = BTreeMap::new();
+    for a in args {
+        let (repo, level) = a
+            .rsplit_once('=')
+            .ok_or_else(|| anyhow::anyhow!("{a:?}: use REPO=LEVEL"))?;
+        out.insert(
+            repo.to_string(),
+            level.parse().map_err(|e: String| anyhow::anyhow!(e))?,
+        );
+    }
+    identity::validate_access(&out)?;
+    Ok(out)
 }
 
-/// Checks the credentials with the server, then keeps a new personal
-/// access token in place of the password where the server has tokens.
-async fn login(url: &str, user: Option<String>) -> anyhow::Result<()> {
-    let (url, url_user, url_password) = client::parse_server_url(url)?;
-    let user = match user.or(url_user) {
-        Some(u) => u,
-        None => client::prompt("Username: ", false)?,
-    };
-    let password = match url_password {
-        Some(p) => p,
-        None => client::prompt("Password or token: ", true)?,
-    };
-    let client = Client::new(Login {
-        url,
-        user,
-        password,
-        created_token: None,
-    })?;
-    let me = client.me().await?;
-    let mut login = client.login().clone();
-    if me.token.is_none() {
-        let name = format!("rustgit login on {}", client::hostname());
-        match client.create_token(&name, None, None).await {
-            Ok(t) => {
-                login.password = t.token;
-                login.created_token = Some(t.id);
-            }
-            // Users in the server's configuration file, a server without a
-            // database, or an older server.
-            Err(ClientError::Server {
-                status: 404 | 409, ..
-            }) => {
-                eprintln!(
-                    "the server has no tokens for {}; keeping the password instead",
-                    me.name
+fn format_access(access: &BTreeMap<String, Access>) -> String {
+    if access.is_empty() {
+        return "-".into();
+    }
+    access
+        .iter()
+        .map(|(r, l)| format!("{r}={}", l.as_str()))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Asks for a new password (twice on a terminal) and hashes it.
+fn new_password_hash() -> anyhow::Result<String> {
+    use std::io::IsTerminal;
+    let password = prompt("Password: ", true)?;
+    if std::io::stdin().is_terminal() {
+        anyhow::ensure!(
+            prompt("Repeat: ", true)? == password,
+            "the passwords differ"
+        );
+    }
+    identity::validate_password(&password)?;
+    Ok(rustgit::http::password::PasswordHash::new(
+        &password,
+        rustgit::http::password::DEFAULT_ITERATIONS,
+    )
+    .to_string())
+}
+
+async fn user_cmd(cfg: &Config, cmd: UserCmd) -> anyhow::Result<()> {
+    let ids = identity::from_config(cfg).await?;
+    if !matches!(cmd, UserCmd::List) && !ids.manages_users() {
+        return Err(identity::unmanaged().into());
+    }
+    match cmd {
+        UserCmd::Create { name, access } => {
+            identity::validate_user_name(&name)?;
+            let access = parse_access(&access)?;
+            let password_hash = new_password_hash()?;
+            let new = NewUser {
+                name,
+                password_hash,
+                access,
+            };
+            let u = ids.create(new, &operator()).await?;
+            println!("created user {} ({})", u.name, format_access(&u.access));
+        }
+        UserCmd::List => {
+            for u in ids.list().await? {
+                println!(
+                    "{}\t{}\t{}",
+                    u.name,
+                    u.source.as_str(),
+                    format_access(&u.access)
                 );
             }
-            Err(e) => return Err(e.into()),
         }
-    }
-    let path = login_path()?;
-    login.save(&path)?;
-    println!("logged in to {} as {}", login.url, me.name);
-    if !me.admin {
-        println!("repository commands need admin access to every repository (\"*\" = \"admin\")");
+        UserCmd::SetPassword { name } => {
+            let change = UserChange {
+                password_hash: Some(new_password_hash()?),
+                access: None,
+            };
+            ids.update(&name, change, &operator()).await?;
+            println!("changed the password of {name}; its tokens still work");
+        }
+        UserCmd::SetAccess { name, access } => {
+            let change = UserChange {
+                password_hash: None,
+                access: Some(parse_access(&access)?),
+            };
+            let u = ids.update(&name, change, &operator()).await?;
+            println!("{}: {}", u.name, format_access(&u.access));
+        }
+        UserCmd::Delete { name } => {
+            ids.delete(&name, &operator()).await?;
+            println!("deleted user {name} and its tokens");
+        }
     }
     Ok(())
 }
 
-async fn logout() -> anyhow::Result<()> {
-    let path = login_path()?;
-    let Some(l) = Login::load(&path)? else {
-        println!("not logged in");
-        return Ok(());
-    };
-    if let Some(id) = l.created_token {
-        match Client::new(l.clone())?.delete_token(id).await {
-            // Already deleted, or the user is gone.
-            Ok(())
-            | Err(ClientError::Unauthorized(_) | ClientError::Server { status: 404, .. }) => {}
-            Err(e) => {
-                eprintln!("warning: token {id} not deleted on the server ({e}); delete it there")
-            }
-        }
-    }
-    std::fs::remove_file(&path)?;
-    println!("logged out of {}", l.url);
-    Ok(())
-}
-
-async fn token_cmd(cmd: TokenCmd) -> anyhow::Result<()> {
-    let login = saved_login()?
-        .ok_or_else(|| anyhow::anyhow!("not logged in; run rustgit login <url> first"))?;
+async fn token_cmd(cfg: &Config, cmd: TokenCmd) -> anyhow::Result<()> {
+    let ids = identity::from_config(cfg).await?;
     match cmd {
         TokenCmd::Create {
+            user,
             name,
             access,
             expires_days,
         } => {
-            let mut levels = std::collections::BTreeMap::new();
-            for a in &access {
-                let (repo, level) = a
-                    .rsplit_once('=')
-                    .ok_or_else(|| anyhow::anyhow!("--access {a:?}: use REPO=LEVEL"))?;
-                levels.insert(repo.to_string(), level.to_string());
-            }
-            // A token cannot create tokens.
-            let password = client::prompt(&format!("Password for {}: ", login.user), true)?;
-            let client = Client::new(Login {
-                password,
-                created_token: None,
-                ..login
-            })?;
-            let levels = (!levels.is_empty()).then_some(&levels);
-            let t = client.create_token(&name, levels, expires_days).await?;
-            eprintln!("created token {}; it is shown only now:", t.id);
-            println!("{}", t.token);
+            let new = NewToken {
+                name,
+                access: (!access.is_empty())
+                    .then(|| parse_access(&access))
+                    .transpose()?,
+                expires_days,
+            };
+            identity::validate_token(&new)?;
+            let (t, secret) = ids.create_token(&user, new).await?;
+            eprintln!("created token {} for {user}; it is shown only now:", t.id);
+            println!("{secret}");
         }
-        TokenCmd::List => {
-            let own = login.created_token;
-            for t in Client::new(login)?.tokens().await? {
-                let access = match &t.access {
-                    None => "user's access".to_string(),
-                    Some(m) => m
-                        .iter()
-                        .map(|(r, l)| format!("{r}={l}"))
-                        .collect::<Vec<_>>()
-                        .join(","),
-                };
+        TokenCmd::List { user } => {
+            for t in ids.tokens(&user).await? {
+                let access = t
+                    .access
+                    .as_ref()
+                    .map_or("user's access".into(), format_access);
                 let expires = t
                     .expires_ms
                     .map_or("no expiry".into(), |ms| format!("expires {}", relative(ms)));
                 let used = t
                     .last_used_ms
                     .map_or("never used".into(), |ms| format!("used {}", relative(ms)));
-                let mark = if Some(t.id) == own {
-                    " (this login)"
-                } else {
-                    ""
-                };
                 println!(
-                    "{}\t{}{mark}\t{access}\tcreated {}\t{expires}\t{used}",
+                    "{}\t{}\t{access}\tcreated {}\t{expires}\t{used}",
                     t.id,
                     t.name,
                     relative(t.created_ms)
                 );
             }
         }
-        TokenCmd::Delete { id } => {
-            let own = login.created_token == Some(id);
-            Client::new(login)?.delete_token(id).await?;
-            println!("deleted token {id}");
-            if own {
-                println!("it was this login's token; run rustgit login again");
-            }
+        TokenCmd::Delete { user, id } => {
+            ids.delete_token(&user, id).await?;
+            println!("deleted token {id} of {user}");
         }
     }
     Ok(())
@@ -571,35 +585,44 @@ fn relative(ms: u64) -> String {
     }
 }
 
-async fn remote_repo_cmd(login: Login, cmd: RepoCmd) -> anyhow::Result<()> {
-    let client = Client::new(login)?;
-    match cmd {
-        RepoCmd::Create {
-            name,
-            default_branch,
-        } => {
-            let r = client.create_repo(&name, &default_branch).await?;
-            println!("created {name} ({})", r.id);
-            println!("clone with: git clone {}/{name}.git", client.login().url);
-        }
-        RepoCmd::Delete { name } => {
-            client.delete_repo(&name).await?;
-            println!("deleted {name}");
-        }
-        RepoCmd::SetDefaultBranch { name, branch } => {
-            let r = client.set_default_branch(&name, &branch).await?;
-            println!(
-                "default branch of {name} is {branch} (generation {})",
-                r.generation.unwrap_or(0)
-            );
-        }
-        RepoCmd::List => {
-            for r in client.repos().await? {
-                println!("{}\t{}\t{}", r.name, r.id, r.default_branch);
-            }
-        }
+/// Reads a line from the terminal, or from standard input when it is not a
+/// terminal. With `hidden`, the terminal does not show what is typed.
+pub fn prompt(label: &str, hidden: bool) -> anyhow::Result<String> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let stdin = std::io::stdin();
+    let terminal = stdin.is_terminal();
+    if terminal {
+        eprint!("{label}");
+        std::io::stderr().flush()?;
     }
-    Ok(())
+    let restore = if terminal && hidden { echo_off() } else { None };
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line);
+    if let Some(saved) = restore {
+        // SAFETY: restores the attributes read from the same descriptor.
+        unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &saved) };
+    }
+    anyhow::ensure!(
+        read? > 0,
+        "no input for {}",
+        label.trim_end_matches([':', ' '])
+    );
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
+/// Turns off terminal echo; returns the previous attributes.
+fn echo_off() -> Option<libc::termios> {
+    // SAFETY: `t` is a valid out pointer for the attributes of stdin.
+    unsafe {
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(libc::STDIN_FILENO, &mut t) != 0 {
+            return None;
+        }
+        let saved = t;
+        t.c_lflag &= !libc::ECHO;
+        t.c_lflag |= libc::ECHONL;
+        (libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t) == 0).then_some(saved)
+    }
 }
 
 fn add_repo_to_config(

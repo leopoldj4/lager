@@ -1,6 +1,7 @@
 # 9. Personal access tokens
 
-Status: accepted. Date: October 9, 2026.
+Status: accepted; tokens are managed with `rustgit token`, and `login` is
+gone, since [decision 10](0010-no-admin-api.md). Date: October 9, 2026.
 
 ## Context
 
