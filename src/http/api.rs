@@ -1,4 +1,4 @@
-//! Admin API: JSON under `/_rustgit/api/` for the management interface
+//! Admin API: JSON under `/_rustgit/api/` for user management
 //! (docs/decisions/0004-users-in-storage.md).
 //!
 //! `me` answers every authenticated user; everything else needs admin access

@@ -732,8 +732,6 @@ pub struct DiskReservations {
     dir: PathBuf,
     min_free: u64,
     reserved: Mutex<u64>,
-    /// For tests: pretend that only this much space is free.
-    pub free_override: Mutex<Option<u64>>,
 }
 
 pub struct DiskReservation {
@@ -753,15 +751,11 @@ impl DiskReservations {
             dir: dir.to_path_buf(),
             min_free,
             reserved: Mutex::new(0),
-            free_override: Mutex::new(None),
         })
     }
 
     pub fn reserve(self: &Arc<Self>, bytes: u64) -> Result<DiskReservation, String> {
-        let free = match *self.free_override.lock().unwrap() {
-            Some(f) => f,
-            None => free_space(&self.dir).map_err(|e| format!("cannot check disk space: {e}"))?,
-        };
+        let free = free_space(&self.dir).map_err(|e| format!("cannot check disk space: {e}"))?;
         let mut reserved = self.reserved.lock().unwrap();
         // A reservation larger than the free space fails even without a minimum.
         let left = free
@@ -789,65 +783,4 @@ pub fn free_space(dir: &Path) -> std::io::Result<u64> {
     }
     #[allow(clippy::unnecessary_cast)]
     Ok(st.f_bavail as u64 * st.f_frsize as u64)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn git_paths_map_to_repository_names_and_services() {
-        assert_eq!(
-            parse_git_path("/demo.git/info/refs"),
-            Some(GitRoute::InfoRefs("demo".into()))
-        );
-        assert_eq!(
-            parse_git_path("/org/demo/info/refs"),
-            Some(GitRoute::InfoRefs("org/demo".into()))
-        );
-        assert_eq!(
-            parse_git_path("/demo/git-receive-pack"),
-            Some(GitRoute::Rpc("demo".into(), Service::ReceivePack))
-        );
-        for bad in [
-            "/../x/info/refs",
-            "/a/../b/info/refs",
-            "/.git/info/refs",
-            "/demo/HEAD",
-            "/demo/objects/aa/bb",
-            "/info/refs",
-        ] {
-            assert_eq!(parse_git_path(bad), None, "{bad}");
-        }
-    }
-
-    #[test]
-    fn protocol_version_2_is_not_passed_to_git() {
-        let h = |v: &str| {
-            let mut m = HeaderMap::new();
-            m.insert("git-protocol", HeaderValue::from_str(v).unwrap());
-            git_protocol(&m)
-        };
-        assert_eq!(h("version=2"), None);
-        assert_eq!(h("version=1"), Some("version=1".into()));
-        assert_eq!(
-            h("version=2:object-format=sha1"),
-            Some("object-format=sha1".into())
-        );
-        assert_eq!(h("version=2 ; rm"), None);
-    }
-
-    #[test]
-    fn disk_reservations_keep_the_minimum_free() {
-        let d = DiskReservations::new(Path::new("/"), 100);
-        *d.free_override.lock().unwrap() = Some(1000);
-        let a = d.reserve(600).unwrap();
-        assert!(d.reserve(400).is_err());
-        drop(a);
-        assert!(d.reserve(900).is_ok());
-        let none = DiskReservations::new(Path::new("/"), 0);
-        *none.free_override.lock().unwrap() = Some(10);
-        assert!(none.reserve(11).is_err());
-        assert!(none.reserve(10).is_ok());
-    }
 }

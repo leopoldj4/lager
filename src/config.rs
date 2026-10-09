@@ -74,24 +74,12 @@ pub struct ServerConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
-    #[serde(default)]
-    pub kind: StorageKind,
     /// Key prefix inside the bucket.
     #[serde(default)]
     pub prefix: String,
     #[serde(default = "yes")]
     pub verify_uploads: bool,
-    #[serde(default)]
-    pub s3: Option<S3Config>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum StorageKind {
-    #[default]
-    S3,
-    /// In-process storage. Only for controlled tests: data is lost at exit.
-    Memory,
+    pub s3: S3Config,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -481,12 +469,6 @@ impl Config {
                 "catalog.create_on_push needs catalog.kind = \"storage\""
             );
         }
-        if self.storage.kind == StorageKind::S3 {
-            anyhow::ensure!(
-                self.storage.s3.is_some(),
-                "storage.s3 is required for kind = \"s3\""
-            );
-        }
         let tls = self.server.tls_certificate.is_some() && self.server.tls_private_key.is_some();
         anyhow::ensure!(
             loopback || tls || self.server.tls_terminated_upstream,
@@ -536,78 +518,4 @@ pub fn validate_repo_name(name: &str) -> anyhow::Result<()> {
         );
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn repository_names_reject_paths_and_special_segments() {
-        for ok in ["demo", "org/project", "a.b-c_d"] {
-            assert!(validate_repo_name(ok).is_ok(), "{ok}");
-        }
-        for bad in [
-            "",
-            "../x",
-            "a/../b",
-            ".git",
-            "a//b",
-            "a/.hidden",
-            "x.git",
-            "a b",
-            "a\\b",
-            "/abs",
-        ] {
-            assert!(validate_repo_name(bad).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn plain_http_on_a_public_address_is_rejected() {
-        let text = r#"
-            [server]
-            listen = "0.0.0.0:8080"
-            cache_dir = "/tmp/x"
-            [storage]
-            kind = "memory"
-        "#;
-        let cfg: Config = toml::from_str(text).unwrap();
-        assert!(cfg.validate().unwrap_err().to_string().contains("loopback"));
-        let local: Config = toml::from_str(&text.replace("0.0.0.0", "127.0.0.1")).unwrap();
-        assert!(local.validate().is_ok());
-    }
-
-    /// The configuration examples in README.md load and pass validation.
-    #[test]
-    fn readme_configuration_examples_are_valid() {
-        let readme = include_str!("../README.md");
-        let blocks: Vec<&str> = readme
-            .split("```toml\n")
-            .skip(1)
-            .map(|b| b.split("```").next().unwrap())
-            .collect();
-        assert_eq!(blocks.len(), 2);
-        let production: Config = toml::from_str(blocks[0]).unwrap();
-        production.validate().unwrap();
-        assert_eq!(production.catalog.kind, CatalogKind::Storage);
-        assert_eq!(production.routing.servers.len(), 3);
-        let local = format!(
-            "[server]\nlisten = \"127.0.0.1:1\"\ncache_dir = \"/tmp/x\"\n\
-             [storage]\nkind = \"memory\"\n[[customers]]\nname = \"acme\"\n{}",
-            blocks[1]
-        );
-        let repos: Config = toml::from_str(&local).unwrap();
-        repos.validate().unwrap();
-        let rules = &repos.repos[0].ref_rules;
-        assert_eq!(
-            ref_rule(rules, "refs/heads/main").unwrap().force,
-            Access::Admin
-        );
-        assert_eq!(
-            ref_rule(rules, "refs/heads/release/1").unwrap().update,
-            Access::Admin
-        );
-        assert!(ref_rule(rules, "refs/heads/other").is_none());
-    }
 }

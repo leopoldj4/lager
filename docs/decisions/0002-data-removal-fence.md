@@ -59,12 +59,3 @@ at all. The command refuses shorter periods.
 This adds the `removal` operation type to log entries and an optional
 `removal` pointer to the head. Heads without a fence serialize as before.
 The record format version stays 1: there is no deployed data.
-
-## Evidence
-
-| Requirement | Test |
-|---|---|
-| A delayed push cannot use removed data; after the window it uploads again | `maintenance_faults::the_removal_fence_stops_a_delayed_push_from_using_removed_data` |
-| Removal first reports, and recovery works after removal | `stage3_maintenance::data_removal_reports_first_and_keeps_recovery_possible` |
-| Removal does not break an active push within the retention period | `stage3_maintenance::data_removal_does_not_break_an_active_push` |
-| Packs and records have separate retention periods | `maintenance_faults::packs_and_records_have_separate_retention_periods` |

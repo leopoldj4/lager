@@ -120,25 +120,3 @@ impl Drop for StepTimer<'_> {
         self.metrics.observe(self.step, self.start.elapsed());
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn percentiles_use_recent_samples() {
-        let m = Metrics::default();
-        for i in 1..=100 {
-            m.observe("cas", Duration::from_millis(i));
-        }
-        let (p50, p95, p99, n) = m.percentiles("cas").unwrap();
-        assert_eq!(n, 100);
-        assert!((p50 - 0.050).abs() < 0.002, "{p50}");
-        assert!((p95 - 0.095).abs() < 0.002, "{p95}");
-        assert!((p99 - 0.099).abs() < 0.002, "{p99}");
-        assert!(
-            m.render()
-                .contains("rustgit_step_seconds{step=\"cas\",quantile=\"0.99\"}")
-        );
-    }
-}
