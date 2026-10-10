@@ -4,15 +4,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use worktree::catalog::Catalog;
-use worktree::config::{Access, CatalogKind, Config, validate_repo_name};
-use worktree::identity::{self, NewToken, NewUser, UserChange};
-use worktree::model::{RepoId, branch_ref};
-use worktree::repository::admin;
-use worktree::storage::Storage;
+use worktree_core::catalog::Catalog;
+use worktree_core::config::{Access, CatalogKind, Config, validate_repo_name};
+use worktree_core::identity::{self, NewToken, NewUser, UserChange};
+use worktree_core::model::{RepoId, branch_ref};
+use worktree_core::repository::admin;
+use worktree_core::storage::Storage;
 
 #[derive(Parser)]
-#[command(name = "worktree", about = "Git server with S3-compatible storage")]
+#[command(
+    name = "worktree",
+    about = "Administration of a worktree Git server and its storage"
+)]
 struct Cli {
     /// Server configuration [default: worktree.toml].
     #[arg(long, short, env = "WORKTREE_CONFIG", global = true)]
@@ -23,8 +26,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Run the server.
-    Serve,
     /// Users in the database (`[database]`).
     User {
         #[command(subcommand)]
@@ -145,11 +146,6 @@ enum BackupCmd {
 }
 
 fn main() {
-    // Git runs this program as the proc-receive hook through a symlink.
-    let argv0 = std::env::args_os().next().unwrap_or_default();
-    if Path::new(&argv0).file_name().and_then(|f| f.to_str()) == Some("proc-receive") {
-        std::process::exit(worktree::git::hook::run_proc_receive());
-    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -172,9 +168,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         std::io::stdin().read_line(&mut password)?;
         let password = password.trim_end_matches(['\r', '\n']);
         anyhow::ensure!(!password.is_empty(), "empty password");
-        let hash = worktree::http::password::PasswordHash::new(
+        let hash = worktree_core::password::PasswordHash::new(
             password,
-            worktree::http::password::DEFAULT_ITERATIONS,
+            worktree_core::password::DEFAULT_ITERATIONS,
         );
         println!("{hash}");
         return Ok(());
@@ -185,32 +181,15 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Token { cmd } => return token_cmd(&cfg, cmd).await,
         cmd => cmd,
     };
-    let storage = worktree::server::storage_from_config(&cfg)?;
+    let storage = Storage::from_config(&cfg)?;
     match cmd {
-        Cmd::Serve => {
-            let server = worktree::server::start(cfg, Some(config_path.clone()), storage).await?;
-            eprintln!("worktree serving on {}", server.url());
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut term = signal(SignalKind::terminate())?;
-            let mut int = signal(SignalKind::interrupt())?;
-            tokio::select! {
-                _ = term.recv() => {}
-                _ = int.recv() => {}
-            }
-            eprintln!("worktree stopping; a second signal stops at once");
-            // Stopping at any point is safe: storage decides every push.
-            tokio::select! {
-                _ = server.shutdown() => {}
-                _ = term.recv() => {}
-                _ = int.recv() => {}
-            }
-        }
         Cmd::Repo { cmd } => repo_cmd(&config_path, &cfg, &storage, cmd).await?,
         Cmd::Snapshot { name } => {
             let id = repo_id(&cfg, &storage, &name).await?;
             let svc = cli_services(&cfg, storage).await?;
-            let registry = worktree::repository::Registry::new(svc)?;
-            let report = worktree::maintenance::snapshot(&registry.controller(id), "cli").await?;
+            let registry = worktree_core::repository::Registry::new(svc)?;
+            let report =
+                worktree_core::maintenance::snapshot(&registry.controller(id), "cli").await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::Cleanup {
@@ -221,20 +200,20 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             unsafe_short_retention,
         } => {
             let id = repo_id(&cfg, &storage, &name).await?;
-            let opts = worktree::maintenance::CleanupOptions {
+            let opts = worktree_core::maintenance::CleanupOptions {
                 pack_retention: Duration::from_secs(pack_retention_hours * 3600),
                 record_retention: Duration::from_secs(record_retention_hours * 3600),
                 removal_window: Duration::from_secs(600),
-                clock_margin: worktree::maintenance::CLOCK_MARGIN,
+                clock_margin: worktree_core::maintenance::CLOCK_MARGIN,
                 report_only: !delete,
             };
-            let min = worktree::maintenance::CleanupOptions::minimum_retention(&cfg.limits);
+            let min = worktree_core::maintenance::CleanupOptions::minimum_retention(&cfg.limits);
             anyhow::ensure!(
                 unsafe_short_retention || opts.pack_retention.min(opts.record_retention) >= min,
                 "retention periods must be at least {} seconds",
                 min.as_secs()
             );
-            let report = worktree::maintenance::cleanup(&storage, id, &opts).await?;
+            let report = worktree_core::maintenance::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::HashPassword | Cmd::User { .. } | Cmd::Token { .. } => {
@@ -243,8 +222,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Backup {
             cmd: BackupCmd::Export { name, out },
         } => {
-            let m = worktree::backup::export(&storage, repo_id(&cfg, &storage, &name).await?, &out)
-                .await?;
+            let m = worktree_core::backup::export(
+                &storage,
+                repo_id(&cfg, &storage, &name).await?,
+                &out,
+            )
+            .await?;
             println!(
                 "exported generation {} ({} records, {} packs)",
                 m.generation,
@@ -255,7 +238,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Backup {
             cmd: BackupCmd::Import { dir, name },
         } => {
-            let head = worktree::backup::import(&storage, &dir).await?;
+            let head = worktree_core::backup::import(&storage, &dir).await?;
             if let Some(name) = name {
                 validate_repo_name(&name)?;
                 anyhow::ensure!(
@@ -276,26 +259,22 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 
 async fn cli_services(
     cfg: &Config,
-    storage: worktree::storage::Storage,
-) -> anyhow::Result<Arc<worktree::repository::Services>> {
+    storage: worktree_core::storage::Storage,
+) -> anyhow::Result<Arc<worktree_core::repository::Services>> {
     let dir = cfg
         .server
         .cache_dir
         .join(format!("cli-{}", std::process::id()));
-    let git = worktree::git::Git::new(
-        cfg.server.git_binary.clone(),
-        &dir.join("work"),
-        &std::env::current_exe()?,
-    )?;
+    let git = worktree_core::git::Git::new(cfg.server.git_binary.clone(), &dir.join("work"), None)?;
     std::fs::create_dir_all(&cfg.server.cache_dir)?;
-    Ok(Arc::new(worktree::repository::Services {
+    Ok(Arc::new(worktree_core::repository::Services {
         storage,
         git,
         cache_root: dir,
         limits: cfg.limits.clone(),
         metrics: Default::default(),
         notifier: Default::default(),
-        disk: worktree::http::DiskReservations::new(
+        disk: worktree_core::disk::DiskReservations::new(
             &cfg.server.cache_dir,
             cfg.limits.min_free_disk_bytes,
         ),
@@ -335,7 +314,7 @@ async fn repo_cmd(
             if let Some(existing) = cfg.repos.iter().find(|r| r.name == name) {
                 // A reused name gets a new UUID. The old repository must be deleted.
                 match storage.load_head(existing.id).await? {
-                    Some((h, _)) if h.state == worktree::model::RepoState::Deleted => {}
+                    Some((h, _)) if h.state == worktree_core::model::RepoState::Deleted => {}
                     None => {}
                     Some(_) => anyhow::bail!("repository {name} exists"),
                 }
@@ -385,7 +364,7 @@ async fn catalog_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
             name,
             default_branch,
         } => {
-            let mut settings = worktree::config::RepoConfig::new(&name, RepoId::new());
+            let mut settings = worktree_core::config::RepoConfig::new(&name, RepoId::new());
             settings.default_branch = default_branch;
             let r = catalog.create(&settings, "cli").await?;
             println!("created {name} ({})", r.id);
@@ -455,9 +434,9 @@ fn new_password_hash() -> anyhow::Result<String> {
         );
     }
     identity::validate_password(&password)?;
-    Ok(worktree::http::password::PasswordHash::new(
+    Ok(worktree_core::password::PasswordHash::new(
         &password,
-        worktree::http::password::DEFAULT_ITERATIONS,
+        worktree_core::password::DEFAULT_ITERATIONS,
     )
     .to_string())
 }
@@ -565,7 +544,7 @@ async fn token_cmd(cfg: &Config, cmd: TokenCmd) -> anyhow::Result<()> {
 
 /// "3 days ago" or "in 3 days" for a time in milliseconds since 1970.
 fn relative(ms: u64) -> String {
-    let now = worktree::model::now_ms();
+    let now = worktree_core::model::now_ms();
     let (d, future) = if ms > now {
         (ms - now, true)
     } else {

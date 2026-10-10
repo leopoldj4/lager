@@ -122,6 +122,14 @@ impl Storage {
         }
     }
 
+    /// Storage from the configuration.
+    pub fn from_config(cfg: &crate::config::Config) -> anyhow::Result<Self> {
+        let backend = Arc::new(ObjectStoreBackend::s3(&cfg.storage.s3)?);
+        Ok(Storage::new(backend, &cfg.storage.prefix)
+            .with_upload_verification(cfg.storage.verify_uploads)
+            .with_upload_limit(cfg.limits.max_concurrent_uploads))
+    }
+
     pub fn stats(&self) -> &StorageStats {
         &self.stats
     }

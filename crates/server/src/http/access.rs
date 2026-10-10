@@ -1,6 +1,6 @@
 //! Identity checks, repository names, and permissions.
 //!
-//! Identities come from an [`IdentityProvider`] (`crate::identity`).
+//! Identities come from an [`IdentityProvider`] (`worktree_core::identity`).
 //! Repository names come from the configuration file or from the repository
 //! catalog in storage. The directory reloads the file when it changes; each
 //! reload increases the permission-rule version that log entries record.
@@ -12,11 +12,11 @@ use std::time::SystemTime;
 
 use base64::Engine;
 
-use crate::catalog::Catalog;
-use crate::config::{Access, Config, RepoConfig};
-use crate::identity::IdentityProvider;
-pub use crate::identity::{AuthError, Identity};
-use crate::storage::StorageError;
+use worktree_core::catalog::Catalog;
+use worktree_core::config::{Access, Config, RepoConfig};
+use worktree_core::identity::IdentityProvider;
+pub use worktree_core::identity::{AuthError, Identity};
+use worktree_core::storage::StorageError;
 
 pub struct Directory {
     inner: RwLock<Inner>,
@@ -117,7 +117,7 @@ impl Directory {
         if self.catalog.is_none() || *who == Identity::Anonymous {
             return false;
         }
-        let probe = RepoConfig::new(name, crate::model::RepoId(uuid::Uuid::nil()));
+        let probe = RepoConfig::new(name, worktree_core::model::RepoId(uuid::Uuid::nil()));
         self.access(who, &probe).0 >= min.max(Access::Write)
     }
 

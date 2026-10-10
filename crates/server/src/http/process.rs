@@ -46,7 +46,7 @@ pub fn spawn_service(
     input: Input,
     guards: Guards,
     label: &'static str,
-    metrics: Arc<crate::metrics::Metrics>,
+    metrics: Arc<worktree_core::metrics::Metrics>,
 ) -> std::io::Result<Body> {
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

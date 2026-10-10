@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::storage::Storage;
+use worktree_core::storage::Storage;
 
 /// A storage answer is reused for this long, so that frequent health checks
 /// from several load balancers cost at most one storage request each time.

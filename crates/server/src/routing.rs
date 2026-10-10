@@ -15,9 +15,9 @@ use axum::response::{IntoResponse, Response};
 use futures::TryStreamExt;
 use sha2::{Digest, Sha256};
 
-use crate::config::RoutingConfig;
 use crate::http::AppState;
-use crate::model::RepoId;
+use worktree_core::config::RoutingConfig;
+use worktree_core::model::RepoId;
 
 pub const FORWARDED_HEADER: &str = "x-worktree-forwarded";
 const PEER_TOKEN_HEADER: &str = "x-worktree-peer-token";
@@ -79,7 +79,7 @@ impl Routing {
     }
 
     /// The first available server for the repository.
-    pub fn preferred(&self, repo: RepoId) -> Option<&crate::config::PeerConfig> {
+    pub fn preferred(&self, repo: RepoId) -> Option<&worktree_core::config::PeerConfig> {
         let ids = rank(repo, self.cfg.servers.iter().map(|s| s.id.as_str()));
         let id = ids
             .into_iter()

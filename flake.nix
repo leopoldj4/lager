@@ -44,6 +44,9 @@
 
         commonArgs = {
           inherit src;
+          # The root Cargo.toml is a workspace without a package name.
+          pname = "worktree";
+          version = "0.1.0";
           strictDeps = true;
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
@@ -57,8 +60,12 @@
             inherit cargoArtifacts;
             doCheck = false;
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
+            # The server runs Git for clients; the command line runs it for
+            # snapshots.
             postInstall = ''
-              wrapProgram $out/bin/worktree --prefix PATH : ${lib.makeBinPath [ git ]}
+              for bin in worktree worktree-server; do
+                wrapProgram $out/bin/$bin --prefix PATH : ${lib.makeBinPath [ git ]}
+              done
             '';
             meta.mainProgram = "worktree";
           }
@@ -175,7 +182,7 @@
             fi
 
             echo "clone with: git clone http://dev:dev@$listen/demo.git"
-            worktree -c "$config" serve &
+            worktree-server -c "$config" &
             server_pid=$!
             wait "$server_pid"
           '';
@@ -200,12 +207,11 @@
             Entrypoint = [
               "${pkgs.tini}/bin/tini"
               "--"
-              "${worktree}/bin/worktree"
+              "${worktree}/bin/worktree-server"
             ];
             Cmd = [
               "-c"
               "/etc/worktree/worktree.toml"
-              "serve"
             ];
             User = "10001:10001";
             Env = [ "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt" ];
@@ -233,7 +239,7 @@
               cargoClippyExtraArgs = "--all-targets -- --deny warnings";
             }
           );
-          fmt = craneLib.cargoFmt { inherit src; };
+          fmt = craneLib.cargoFmt { inherit (commonArgs) src pname version; };
         };
 
         devShells.default = craneLib.devShell {

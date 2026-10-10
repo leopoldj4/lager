@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::config::CustomerConfig;
+use worktree_core::config::CustomerConfig;
 
 /// A fixed time window with a counter.
 struct Window {

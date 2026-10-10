@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use super::{AuthError, Identity, IdentityProvider, User, UserError, UserSource, VerifiedHashes};
 use crate::config::{Config, UserConfig};
-use crate::http::password::constant_time_eq;
+use crate::password::constant_time_eq;
 
 pub struct FileUsers {
     users: RwLock<HashMap<String, UserConfig>>,
