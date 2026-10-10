@@ -3,11 +3,10 @@
 pub mod access;
 pub mod health;
 pub mod limits;
-pub mod password;
 pub mod process;
 
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Router;
@@ -23,11 +22,11 @@ use tracing::Instrument;
 use self::access::{AuthError, Directory, Identity};
 use self::limits::{CustomerLimits, LimitExceeded};
 use self::process::{Guards, Input, spawn_service};
-use crate::catalog::CatalogError;
-use crate::config::{Access, RepoConfig};
-use crate::git::hook;
-use crate::model::RequestId;
-use crate::repository::{PendingPush, PushAccess, Registry, RepoError};
+use worktree_core::catalog::CatalogError;
+use worktree_core::config::{Access, RepoConfig};
+use worktree_core::git::hook;
+use worktree_core::model::RequestId;
+use worktree_core::repository::{PendingPush, PushAccess, Registry, RepoError};
 
 pub const REQUEST_ID_HEADER: &str = "x-worktree-request-id";
 /// Set on every response while the server stops. Other servers then stop
@@ -206,7 +205,7 @@ fn parse_git_path(path: &str) -> Option<GitRoute> {
         )
     };
     let name = name.strip_suffix(".git").unwrap_or(name);
-    crate::config::validate_repo_name(name).ok()?;
+    worktree_core::config::validate_repo_name(name).ok()?;
     Some(match route {
         None => GitRoute::InfoRefs(name.to_string()),
         Some(s) => GitRoute::Rpc(name.to_string(), s),
@@ -237,7 +236,7 @@ fn unavailable(what: &str, m: &str) -> Response {
     )
 }
 
-fn too_many(e: LimitExceeded, metrics: &crate::metrics::Metrics) -> Response {
+fn too_many(e: LimitExceeded, metrics: &worktree_core::metrics::Metrics) -> Response {
     metrics.inc("customer_limit_rejections");
     let mut r = plain(
         StatusCode::TOO_MANY_REQUESTS,
@@ -446,12 +445,12 @@ async fn info_refs(
     if let Some(p) = &protocol {
         cmd.env("GIT_PROTOCOL", p);
     }
-    let out = crate::git::run(&mut cmd, None)
+    let out = worktree_core::git::run(&mut cmd, None)
         .await
         .map_err(|e| repo_error(RepoError::Internal(e.to_string())))?;
     let mut data =
-        crate::git::pktline::encode(format!("# service={}\n", service.name()).as_bytes());
-    data.extend_from_slice(crate::git::pktline::FLUSH);
+        worktree_core::git::pktline::encode(format!("# service={}\n", service.name()).as_bytes());
+    data.extend_from_slice(worktree_core::git::pktline::FLUSH);
     data.extend(out);
     Ok(git_response(
         format!("application/x-{}-advertisement", service.name()),
@@ -621,7 +620,7 @@ fn push_access(
     directory: Arc<Directory>,
     who: Identity,
     repo_name: String,
-) -> crate::repository::AccessCheck {
+) -> worktree_core::repository::AccessCheck {
     Arc::new(move || {
         let (directory, who, repo_name) = (directory.clone(), who.clone(), repo_name.clone());
         Box::pin(async move {
@@ -648,7 +647,7 @@ fn push_access(
 fn default_branch_changed(
     directory: Arc<Directory>,
     repo_name: String,
-) -> Option<crate::repository::DefaultBranchChanged> {
+) -> Option<worktree_core::repository::DefaultBranchChanged> {
     directory.catalog()?;
     Some(Arc::new(move |id, branch| {
         let (directory, repo_name) = (directory.clone(), repo_name.clone());
@@ -670,62 +669,4 @@ fn default_branch_changed(
             }
         })
     }))
-}
-
-/// Disk space reservations: work is rejected before the disk becomes full.
-pub struct DiskReservations {
-    dir: PathBuf,
-    min_free: u64,
-    reserved: Mutex<u64>,
-}
-
-pub struct DiskReservation {
-    owner: Arc<DiskReservations>,
-    bytes: u64,
-}
-
-impl Drop for DiskReservation {
-    fn drop(&mut self) {
-        *self.owner.reserved.lock().unwrap() -= self.bytes;
-    }
-}
-
-impl DiskReservations {
-    pub fn new(dir: &Path, min_free: u64) -> Arc<Self> {
-        Arc::new(Self {
-            dir: dir.to_path_buf(),
-            min_free,
-            reserved: Mutex::new(0),
-        })
-    }
-
-    pub fn reserve(self: &Arc<Self>, bytes: u64) -> Result<DiskReservation, String> {
-        let free = free_space(&self.dir).map_err(|e| format!("cannot check disk space: {e}"))?;
-        let mut reserved = self.reserved.lock().unwrap();
-        // A reservation larger than the free space fails even without a minimum.
-        let left = free
-            .checked_sub(*reserved)
-            .and_then(|f| f.checked_sub(bytes));
-        if left.is_none_or(|l| l < self.min_free) {
-            return Err("insufficient disk space on the server".into());
-        }
-        *reserved += bytes;
-        Ok(DiskReservation {
-            owner: self.clone(),
-            bytes,
-        })
-    }
-}
-
-pub fn free_space(dir: &Path) -> std::io::Result<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).map_err(std::io::Error::other)?;
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    // SAFETY: `c` is a valid NUL-terminated path and `st` is a valid out pointer.
-    let r = unsafe { libc::statvfs(c.as_ptr(), &mut st) };
-    if r != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    #[allow(clippy::unnecessary_cast)]
-    Ok(st.f_bavail as u64 * st.f_frsize as u64)
 }

@@ -29,8 +29,13 @@ is required.
 
 ## Commands
 
+The server and the administration command line are separate programs:
+
 ```text
-worktree [-c worktree.toml] serve
+worktree-server [-c worktree.toml]
+```
+
+```text
 worktree user create <name> [--access repo=level]...   # asks for the password
 worktree user list
 worktree user set-password <name>
@@ -50,7 +55,7 @@ worktree backup import <dir> [--name <name>]
 worktree hash-password < password.txt         # for password_hash
 ```
 
-All commands read the server configuration (`-c`, `WORKTREE_CONFIG`, or
+Both programs read the server configuration (`-c`, `WORKTREE_CONFIG`, or
 `./worktree.toml`). `repo`, `snapshot`, `cleanup`, and `backup` use the
 storage service directly; `user` and `token` use the database
 (`[database]`). The server has no management API
@@ -201,7 +206,7 @@ nix build .#docker && ./result | docker load
 ```
 
 The image holds only worktree, the pinned Git, tini as PID 1, and CA
-certificates. It runs as user 10001 and reads
+certificates. It runs `worktree-server` as user 10001 and reads
 `/etc/worktree/worktree.toml`; mount the configuration as a secret, and the
 cache at `/var/cache/worktree` on local disk. Set the container stop timeout
 above `drain_delay_secs` plus `shutdown_timeout_secs`, and keep
@@ -230,3 +235,11 @@ nix develop
 cargo build
 nix flake check    # build, clippy, and rustfmt
 ```
+
+The Cargo workspace has three crates:
+
+| Crate | Contents |
+|---|---|
+| `crates/core` (`worktree-core`) | Configuration, record formats, storage, catalog, identities, the Git process wrapper, the repository engine, maintenance, and backup. |
+| `crates/server` (`worktree-server`) | Git HTTP requests, access checks, limits, routing, server assembly, and the `proc-receive` hook program. |
+| `crates/cli` (`worktree-cli`, binary `worktree`) | The administration commands. It does not depend on the server crate. |

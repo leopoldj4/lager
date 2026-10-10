@@ -72,7 +72,7 @@ pub struct Services {
     pub metrics: Arc<Metrics>,
     pub notifier: StdMutex<Option<Notifier>>,
     /// Disk space for receipts and cache reconstruction.
-    pub disk: Arc<crate::http::DiskReservations>,
+    pub disk: Arc<crate::disk::DiskReservations>,
 }
 
 impl Services {
@@ -92,7 +92,7 @@ impl Services {
     pub(crate) fn reserve_for_packs<'a>(
         &self,
         packs: impl Iterator<Item = &'a crate::model::PackRef>,
-    ) -> Result<crate::http::DiskReservation, RepoError> {
+    ) -> Result<crate::disk::DiskReservation, RepoError> {
         let bytes: u64 = packs.map(|p| p.size).sum();
         self.disk.reserve(bytes.saturating_mul(2)).map_err(|m| {
             self.metrics.inc("disk_limit_rejections");

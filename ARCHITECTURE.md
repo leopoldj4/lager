@@ -317,17 +317,17 @@ Set separate retention periods for operation records and recoverable contents. O
 
 ## 10. Rust code arrangement
 
-Start with one Cargo project and these modules. Separate crates only when necessary. This arrangement keeps the same functions with fewer initial components.
+Use one Cargo workspace with three crates: `worktree-core` for the shared modules, `worktree-server` for `http` and `routing`, and `worktree-cli` for the administration commands. The command line does not depend on the server crate.
 
-| Module | Work |
-|---|---|
-| `model` | Identifiers, record formats, ref checks, and transaction rules. |
-| `storage` | S3 requests, conditional writes, and checksums. |
-| `git` | Git processes, hooks, quarantine, packs, and ref transactions. |
-| `repository` | Controllers, caches, recovery, request results, and locks. |
-| `http` | Git HTTP requests, identity checks, permissions, and resource limits. |
-| `maintenance` | Snapshots, compaction, and safe data removal. |
-| `routing` | Server selection and notification. |
+| Module | Crate | Work |
+|---|---|---|
+| `model` | core | Identifiers, record formats, ref checks, and transaction rules. |
+| `storage` | core | S3 requests, conditional writes, and checksums. |
+| `git` | core | Git processes, hooks, quarantine, packs, and ref transactions. |
+| `repository` | core | Controllers, caches, recovery, request results, and locks. |
+| `http` | server | Git HTTP requests, identity checks, permissions, and resource limits. |
+| `maintenance` | core | Snapshots, compaction, and safe data removal. |
+| `routing` | server | Server selection and notification. |
 
 Use [Tokio](https://docs.rs/tokio/latest/tokio/process/struct.Command.html) for asynchronous work and process control. Use [Axum](https://docs.rs/axum/latest/axum/) for HTTP. Use [object_store](https://docs.rs/object_store/latest/object_store/enum.PutMode.html) as the S3 interface library.
 

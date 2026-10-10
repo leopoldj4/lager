@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
 use crate::config::{Access, Config, validate_repo_name};
-use crate::http::password::PasswordHash;
+use crate::password::PasswordHash;
 
 pub const MIN_PASSWORD_CHARS: usize = 12;
 

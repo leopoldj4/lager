@@ -11,25 +11,18 @@ use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 
-use crate::catalog::Catalog;
-use crate::config::{CatalogKind, Config};
-use crate::git::Git;
-use crate::git::hook::{HookRequest, HookResponse, HookResult};
 use crate::http::access::Directory;
 use crate::http::limits::CustomerLimits;
-use crate::http::{AppInner, AppState, DiskReservations};
-use crate::metrics::Metrics;
-use crate::model::branch_ref;
-use crate::repository::{Registry, Services};
-use crate::storage::{ObjectStoreBackend, Storage};
-
-/// Storage from the configuration.
-pub fn storage_from_config(cfg: &Config) -> anyhow::Result<Storage> {
-    let backend = Arc::new(ObjectStoreBackend::s3(&cfg.storage.s3)?);
-    Ok(Storage::new(backend, &cfg.storage.prefix)
-        .with_upload_verification(cfg.storage.verify_uploads)
-        .with_upload_limit(cfg.limits.max_concurrent_uploads))
-}
+use crate::http::{AppInner, AppState};
+use worktree_core::catalog::Catalog;
+use worktree_core::config::{CatalogKind, Config};
+use worktree_core::disk::DiskReservations;
+use worktree_core::git::Git;
+use worktree_core::git::hook::{HookRequest, HookResponse, HookResult};
+use worktree_core::metrics::Metrics;
+use worktree_core::model::branch_ref;
+use worktree_core::repository::{Registry, Services};
+use worktree_core::storage::Storage;
 
 pub struct RunningServer {
     pub addr: SocketAddr,
@@ -142,12 +135,12 @@ pub async fn start_with_listener(
     let git = Git::new(
         cfg.server.git_binary.clone(),
         &cache_root.join("work"),
-        &hook_binary,
+        Some(&hook_binary),
     )?
     .with_process_limits(cfg.limits.git_cpu_secs, cfg.limits.git_memory_bytes);
     let version = git.version().await?;
     anyhow::ensure!(
-        version >= crate::git::MIN_VERSION,
+        version >= worktree_core::git::MIN_VERSION,
         "git {}.{} is too old",
         version.0,
         version.1
@@ -164,7 +157,7 @@ pub async fn start_with_listener(
         disk: DiskReservations::new(&cache_root, cfg.limits.min_free_disk_bytes),
     });
     let registry = Registry::new(svc.clone())?;
-    let identities = crate::identity::from_config(&cfg).await?;
+    let identities = worktree_core::identity::from_config(&cfg).await?;
     let mut directory = Directory::new(&cfg, config_path, identities);
     if cfg.catalog.kind == CatalogKind::Storage {
         directory = directory.with_catalog(Arc::new(Catalog::new(
@@ -176,7 +169,8 @@ pub async fn start_with_listener(
 
     for r in &cfg.repos {
         let branch = branch_ref(&r.default_branch)?;
-        match crate::repository::admin::ensure_repository(&svc.storage, r.id, &branch).await {
+        match worktree_core::repository::admin::ensure_repository(&svc.storage, r.id, &branch).await
+        {
             Ok(true) => tracing::info!(repo = %r.name, id = %r.id, "created repository"),
             Ok(false) => {}
             Err(e) => tracing::warn!(repo = %r.name, error = %e, "could not check repository head"),
@@ -240,7 +234,7 @@ pub async fn start_with_listener(
                     _ = tick.tick() => {}
                     _ = stopped(&mut stop) => break,
                 }
-                crate::maintenance::auto_snapshot(&reg, after, |repo| {
+                worktree_core::maintenance::auto_snapshot(&reg, after, |repo| {
                     routing.as_ref().is_none_or(|r| r.is_preferred_self(repo))
                 })
                 .await;
@@ -294,7 +288,7 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
 fn bind_socket(path: &Path) -> anyhow::Result<UnixListener> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     anyhow::ensure!(
-        path.as_os_str().len() < crate::config::MAX_SOCKET_PATH,
+        path.as_os_str().len() < worktree_core::config::MAX_SOCKET_PATH,
         "socket path too long: {}",
         path.display()
     );

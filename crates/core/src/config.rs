@@ -500,7 +500,7 @@ impl Config {
                 u.name
             );
             if let Some(h) = &u.password_hash {
-                crate::http::password::PasswordHash::parse(h)
+                crate::password::PasswordHash::parse(h)
                     .map_err(|e| anyhow::anyhow!("user {}: {e}", u.name))?;
             }
         }

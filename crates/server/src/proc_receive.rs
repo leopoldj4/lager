@@ -1,6 +1,6 @@
-//! The `proc-receive` hook program and its messages to the controller.
+//! The `proc-receive` hook program.
 //!
-//! Git runs this program (a symlink named `proc-receive` to the worktree
+//! Git runs this program (a symlink named `proc-receive` to the server
 //! binary) after it receives and checks the objects. The hook forwards the
 //! ref commands to the controller through a private Unix socket, with the
 //! access token of this operation, and relays the controller's decision to
@@ -10,40 +10,10 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
-use serde::{Deserialize, Serialize};
-
-use super::pktline;
-
-pub const ENV_SOCKET: &str = "WORKTREE_HOOK_SOCKET";
-pub const ENV_TOKEN: &str = "WORKTREE_HOOK_TOKEN";
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HookRequest {
-    pub token: String,
-    pub commands: Vec<HookCommand>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HookCommand {
-    pub old: String,
-    pub new: String,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HookResponse {
-    pub results: Vec<HookResult>,
-    /// Progress and diagnostic lines shown to the client.
-    #[serde(default)]
-    pub messages: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HookResult {
-    pub name: String,
-    pub ok: bool,
-    pub message: Option<String>,
-}
+use worktree_core::git::hook::{
+    ENV_SOCKET, ENV_TOKEN, HookCommand, HookRequest, HookResponse, HookResult,
+};
+use worktree_core::git::pktline;
 
 /// Entry point when the program runs as `proc-receive`. Returns the exit code.
 pub fn run_proc_receive() -> i32 {
