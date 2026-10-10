@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::push::{Resolution, resolve_unknown_cas};
+use crate::cas::{Resolution, resolve_unknown_cas};
 use crate::model::{
     EntryId, Head, IncarnationId, LOG_FORMAT_VERSION, LogEntry, ObjectFormat, Operation, RefName,
     RepoId, RepoState, RequestId, RevisionId, now_ms, request_checksum,

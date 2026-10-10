@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::admin::{self, AdminError};
 use crate::config::{RefRule, RepoConfig, validate_repo_name};
 use crate::model::{FORMAT_VERSION, RepoId, RepoState, RevisionId, branch_ref};
-use crate::repository::admin::{self, AdminError};
 use crate::storage::{CasOutcome, ETag, Storage, StorageError, Versioned, WriteMode};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

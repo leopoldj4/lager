@@ -1,14 +1,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use worktree_core::admin;
 use worktree_core::catalog::Catalog;
 use worktree_core::config::{Access, CatalogKind, Config, validate_repo_name};
 use worktree_core::identity::{self, NewToken, NewUser, UserChange};
 use worktree_core::model::{RepoId, branch_ref};
-use worktree_core::repository::admin;
 use worktree_core::storage::Storage;
 
 #[derive(Parser)]
@@ -42,8 +41,6 @@ enum Cmd {
         #[command(subcommand)]
         cmd: RepoCmd,
     },
-    /// Create a snapshot (combined pack) of the current generation.
-    Snapshot { name: String },
     /// Find obsolete stored data. Removes it only with --delete.
     Cleanup {
         name: String,
@@ -184,14 +181,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let storage = Storage::from_config(&cfg)?;
     match cmd {
         Cmd::Repo { cmd } => repo_cmd(&config_path, &cfg, &storage, cmd).await?,
-        Cmd::Snapshot { name } => {
-            let id = repo_id(&cfg, &storage, &name).await?;
-            let svc = cli_services(&cfg, storage).await?;
-            let registry = worktree_core::repository::Registry::new(svc)?;
-            let report =
-                worktree_core::maintenance::snapshot(&registry.controller(id), "cli").await?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
         Cmd::Cleanup {
             name,
             pack_retention_hours,
@@ -200,20 +189,20 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             unsafe_short_retention,
         } => {
             let id = repo_id(&cfg, &storage, &name).await?;
-            let opts = worktree_core::maintenance::CleanupOptions {
+            let opts = worktree_core::cleanup::CleanupOptions {
                 pack_retention: Duration::from_secs(pack_retention_hours * 3600),
                 record_retention: Duration::from_secs(record_retention_hours * 3600),
                 removal_window: Duration::from_secs(600),
-                clock_margin: worktree_core::maintenance::CLOCK_MARGIN,
+                clock_margin: worktree_core::cleanup::CLOCK_MARGIN,
                 report_only: !delete,
             };
-            let min = worktree_core::maintenance::CleanupOptions::minimum_retention(&cfg.limits);
+            let min = worktree_core::cleanup::CleanupOptions::minimum_retention(&cfg.limits);
             anyhow::ensure!(
                 unsafe_short_retention || opts.pack_retention.min(opts.record_retention) >= min,
                 "retention periods must be at least {} seconds",
                 min.as_secs()
             );
-            let report = worktree_core::maintenance::cleanup(&storage, id, &opts).await?;
+            let report = worktree_core::cleanup::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::HashPassword | Cmd::User { .. } | Cmd::Token { .. } => {
@@ -255,30 +244,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-async fn cli_services(
-    cfg: &Config,
-    storage: worktree_core::storage::Storage,
-) -> anyhow::Result<Arc<worktree_core::repository::Services>> {
-    let dir = cfg
-        .server
-        .cache_dir
-        .join(format!("cli-{}", std::process::id()));
-    let git = worktree_core::git::Git::new(cfg.server.git_binary.clone(), &dir.join("work"), None)?;
-    std::fs::create_dir_all(&cfg.server.cache_dir)?;
-    Ok(Arc::new(worktree_core::repository::Services {
-        storage,
-        git,
-        cache_root: dir,
-        limits: cfg.limits.clone(),
-        metrics: Default::default(),
-        notifier: Default::default(),
-        disk: worktree_core::disk::DiskReservations::new(
-            &cfg.server.cache_dir,
-            cfg.limits.min_free_disk_bytes,
-        ),
-    }))
 }
 
 fn catalog(cfg: &Config, storage: &Storage) -> Option<Catalog> {

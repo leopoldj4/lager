@@ -10,8 +10,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::history::{chain_state, load_chain};
 use crate::model::{Head, PackRef, RepoId};
-use crate::repository::sync::{chain_state, load_chain};
 use crate::storage::{Storage, StorageError};
 
 #[derive(Debug, Serialize, Deserialize)]

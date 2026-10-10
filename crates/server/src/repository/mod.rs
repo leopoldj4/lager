@@ -6,7 +6,6 @@
 //! - publishes complete read views per generation, so readers never observe
 //!   part of a ref transaction and long reads do not block writes.
 
-pub mod admin;
 pub mod push;
 pub mod sync;
 
@@ -17,11 +16,11 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::sync::Mutex;
 
-use crate::config::{Access, Limits, RefRule};
 use crate::git::Git;
 use crate::metrics::Metrics;
-use crate::model::{Head, ObjectFormat, RefName, RefState, RepoId, RepoState, RequestId};
-use crate::storage::{ETag, HeadRead, Storage, StorageError};
+use worktree_core::config::{Access, Limits, RefRule};
+use worktree_core::model::{Head, ObjectFormat, RefName, RefState, RepoId, RepoState, RequestId};
+use worktree_core::storage::{ETag, HeadRead, Storage, StorageError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepoError {
@@ -91,7 +90,7 @@ impl Services {
     /// Reserves disk space for downloading and indexing packs.
     pub(crate) fn reserve_for_packs<'a>(
         &self,
-        packs: impl Iterator<Item = &'a crate::model::PackRef>,
+        packs: impl Iterator<Item = &'a worktree_core::model::PackRef>,
     ) -> Result<crate::disk::DiskReservation, RepoError> {
         let bytes: u64 = packs.map(|p| p.size).sum();
         self.disk.reserve(bytes.saturating_mul(2)).map_err(|m| {
@@ -277,7 +276,7 @@ pub struct Known {
     /// generation for a cache from an earlier process; use `entry`.
     pub head: Head,
     /// The entry of the cache's generation.
-    pub entry: crate::model::EntryId,
+    pub entry: worktree_core::model::EntryId,
     /// `None` when the accepted head's ETag is not known.
     pub etag: Option<ETag>,
     pub refs: RefState,
@@ -320,18 +319,18 @@ impl Controller {
             write_op: Mutex::new(()),
             state: Mutex::new(CacheState::default()),
             last_etag: StdMutex::new(None),
-            last_used_ms: AtomicU64::new(crate::model::now_ms()),
+            last_used_ms: AtomicU64::new(worktree_core::model::now_ms()),
         }
     }
 
     fn touch(&self) {
         self.last_used_ms
-            .store(crate::model::now_ms(), Ordering::Relaxed);
+            .store(worktree_core::model::now_ms(), Ordering::Relaxed);
     }
 
     fn idle_for(&self) -> std::time::Duration {
         let last = self.last_used_ms.load(Ordering::Relaxed);
-        std::time::Duration::from_millis(crate::model::now_ms().saturating_sub(last))
+        std::time::Duration::from_millis(worktree_core::model::now_ms().saturating_sub(last))
     }
 
     async fn try_evict(&self) -> bool {

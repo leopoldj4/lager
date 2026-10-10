@@ -254,7 +254,7 @@ pub struct SnapshotPointer {
     pub base_generation: u64,
 }
 
-/// The latest data removal fence (see `maintenance::cleanup`).
+/// The latest data removal fence (see `cleanup::cleanup`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemovalPointer {
     pub entry: EntryId,
