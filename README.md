@@ -48,7 +48,6 @@ worktree repo create <name> [--default-branch main]
 worktree repo delete <name>
 worktree repo set-default-branch <name> <branch>
 worktree repo list
-worktree snapshot <name>                      # snapshot and combined pack
 worktree cleanup <name> [--delete]            # report, or remove, obsolete data
 worktree backup export <name> <dir>
 worktree backup import <dir> [--name <name>]
@@ -56,7 +55,7 @@ worktree hash-password < password.txt         # for password_hash
 ```
 
 Both programs read the server configuration (`-c`, `WORKTREE_CONFIG`, or
-`./worktree.toml`). `repo`, `snapshot`, `cleanup`, and `backup` use the
+`./worktree.toml`). `repo`, `cleanup`, and `backup` use the
 storage service directly; `user` and `token` use the database
 (`[database]`). The server has no management API
 ([decision 10](docs/decisions/0010-no-admin-api.md)).
@@ -240,6 +239,6 @@ The Cargo workspace has three crates:
 
 | Crate | Contents |
 |---|---|
-| `crates/core` (`worktree-core`) | Configuration, record formats, storage, catalog, identities, the Git process wrapper, the repository engine, maintenance, and backup. |
-| `crates/server` (`worktree-server`) | Git HTTP requests, access checks, limits, routing, server assembly, and the `proc-receive` hook program. |
+| `crates/core` (`worktree-core`) | Configuration, record formats, storage, catalog, identities, repository creation and deletion, history reading, data removal, and backup. |
+| `crates/server` (`worktree-server`) | The Git process wrapper, the repository engine (caches and pushes), snapshots, Git HTTP requests, access checks, limits, routing, server assembly, and the `proc-receive` hook program. |
 | `crates/cli` (`worktree-cli`, binary `worktree`) | The administration commands. It does not depend on the server crate. |

@@ -13,7 +13,7 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-use crate::model::{ObjectFormat, Oid, RefName, RefUpdate};
+use worktree_core::model::{ObjectFormat, Oid, RefName, RefUpdate};
 
 /// Minimum Git version: `proc-receive` and `update-ref --stdin` transactions
 /// with `--ref-format`.
@@ -43,22 +43,14 @@ pub struct Git {
 
 impl Git {
     /// `work_dir` holds an empty home directory and the hooks directory.
-    /// `hook_binary` is the `proc-receive` hook program; without it, the
-    /// hooks directory stays empty and pushes cannot be received.
-    pub fn new(
-        binary: PathBuf,
-        work_dir: &Path,
-        hook_binary: Option<&Path>,
-    ) -> std::io::Result<Git> {
+    pub fn new(binary: PathBuf, work_dir: &Path, hook_binary: &Path) -> std::io::Result<Git> {
         let home = work_dir.join("home");
         let hooks_dir = work_dir.join("hooks");
         std::fs::create_dir_all(&home)?;
         std::fs::create_dir_all(&hooks_dir)?;
         let link = hooks_dir.join("proc-receive");
         let _ = std::fs::remove_file(&link);
-        if let Some(hook_binary) = hook_binary {
-            std::os::unix::fs::symlink(hook_binary, &link)?;
-        }
+        std::os::unix::fs::symlink(hook_binary, &link)?;
         let path_env = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());
         Ok(Git {
             binary,

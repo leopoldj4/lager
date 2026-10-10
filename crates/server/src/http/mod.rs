@@ -22,11 +22,11 @@ use tracing::Instrument;
 use self::access::{AuthError, Directory, Identity};
 use self::limits::{CustomerLimits, LimitExceeded};
 use self::process::{Guards, Input, spawn_service};
+use crate::git::hook;
+use crate::repository::{PendingPush, PushAccess, Registry, RepoError};
 use worktree_core::catalog::CatalogError;
 use worktree_core::config::{Access, RepoConfig};
-use worktree_core::git::hook;
 use worktree_core::model::RequestId;
-use worktree_core::repository::{PendingPush, PushAccess, Registry, RepoError};
 
 pub const REQUEST_ID_HEADER: &str = "x-worktree-request-id";
 /// Set on every response while the server stops. Other servers then stop
@@ -236,7 +236,7 @@ fn unavailable(what: &str, m: &str) -> Response {
     )
 }
 
-fn too_many(e: LimitExceeded, metrics: &worktree_core::metrics::Metrics) -> Response {
+fn too_many(e: LimitExceeded, metrics: &crate::metrics::Metrics) -> Response {
     metrics.inc("customer_limit_rejections");
     let mut r = plain(
         StatusCode::TOO_MANY_REQUESTS,
@@ -445,12 +445,12 @@ async fn info_refs(
     if let Some(p) = &protocol {
         cmd.env("GIT_PROTOCOL", p);
     }
-    let out = worktree_core::git::run(&mut cmd, None)
+    let out = crate::git::run(&mut cmd, None)
         .await
         .map_err(|e| repo_error(RepoError::Internal(e.to_string())))?;
     let mut data =
-        worktree_core::git::pktline::encode(format!("# service={}\n", service.name()).as_bytes());
-    data.extend_from_slice(worktree_core::git::pktline::FLUSH);
+        crate::git::pktline::encode(format!("# service={}\n", service.name()).as_bytes());
+    data.extend_from_slice(crate::git::pktline::FLUSH);
     data.extend(out);
     Ok(git_response(
         format!("application/x-{}-advertisement", service.name()),
@@ -620,7 +620,7 @@ fn push_access(
     directory: Arc<Directory>,
     who: Identity,
     repo_name: String,
-) -> worktree_core::repository::AccessCheck {
+) -> crate::repository::AccessCheck {
     Arc::new(move || {
         let (directory, who, repo_name) = (directory.clone(), who.clone(), repo_name.clone());
         Box::pin(async move {
@@ -647,7 +647,7 @@ fn push_access(
 fn default_branch_changed(
     directory: Arc<Directory>,
     repo_name: String,
-) -> Option<worktree_core::repository::DefaultBranchChanged> {
+) -> Option<crate::repository::DefaultBranchChanged> {
     directory.catalog()?;
     Some(Arc::new(move |id, branch| {
         let (directory, repo_name) = (directory.clone(), repo_name.clone());

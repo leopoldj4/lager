@@ -10,10 +10,8 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
-use worktree_core::git::hook::{
-    ENV_SOCKET, ENV_TOKEN, HookCommand, HookRequest, HookResponse, HookResult,
-};
-use worktree_core::git::pktline;
+use crate::git::hook::{ENV_SOCKET, ENV_TOKEN, HookCommand, HookRequest, HookResponse, HookResult};
+use crate::git::pktline;
 
 /// Entry point when the program runs as `proc-receive`. Returns the exit code.
 pub fn run_proc_receive() -> i32 {
