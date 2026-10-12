@@ -225,13 +225,25 @@
             wait "$server_pid"
           '';
         };
+        # The built web interface at /share/worktree/web, for `[web] dir`.
+        webShare = pkgs.runCommand "worktree-web-share" { } ''
+          mkdir -p $out/share/worktree
+          ln -s ${web} $out/share/worktree/web
+        '';
         # Container image (Linux only). `nix build .#docker` gives a script
-        # that streams the image: `./result | docker load`. tini is PID 1
-        # because Git starts processes that worktree does not reap when they
-        # are orphaned; it forwards SIGTERM for the clean stop.
+        # that streams the image: `./result | docker load`; deploy/ has a
+        # Compose file for it. tini is PID 1 because Git starts processes
+        # that worktree does not reap when they are orphaned; it forwards
+        # SIGTERM for the clean stop.
         docker = pkgs.dockerTools.streamLayeredImage {
           name = "worktree";
-          contents = [ pkgs.dockerTools.caCertificates ];
+          # /bin/worktree for administration (`docker compose exec worktree
+          # worktree user create ...`), and the web interface.
+          contents = [
+            pkgs.dockerTools.caCertificates
+            worktree
+            webShare
+          ];
           fakeRootCommands = ''
             mkdir -p etc tmp var/cache/worktree var/empty
             chmod 1777 tmp

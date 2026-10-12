@@ -1,0 +1,69 @@
+# One host: Caddy (HTTPS), worktree, NATS, and PostgreSQL. Repositories live
+# in an external S3-compatible service (R2, S3, ...); see worktree.example.toml.
+#
+#   nix build .#docker && ./result | docker load    # prints the image name
+#   cp .env.example .env && cp worktree.example.toml worktree.toml   # fill in both
+#   docker compose up -d
+#   docker compose exec worktree worktree user create <name> --access '*=force'
+
+name: worktree
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      WORKTREE_DOMAIN: ${WORKTREE_DOMAIN:?set WORKTREE_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - worktree
+
+  worktree:
+    image: ${WORKTREE_IMAGE:?set WORKTREE_IMAGE in .env to the image docker load printed}
+    restart: unless-stopped
+    # Room for drain_delay_secs + shutdown_timeout_secs: running pushes finish.
+    stop_grace_period: 2m
+    environment:
+      # For `docker compose exec worktree worktree ...`.
+      WORKTREE_CONFIG: /etc/worktree/worktree.toml
+    volumes:
+      - ./worktree.toml:/etc/worktree/worktree.toml:ro
+      # Caches only; any of it can be removed. Use local disk.
+      - worktree-cache:/var/cache/worktree
+    depends_on:
+      nats:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  nats:
+    image: nats:2
+    restart: unless-stopped
+    command: ["--name", "worktree"]
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: worktree
+      POSTGRES_DB: worktree
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "worktree", "-d", "worktree"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  caddy-data:
+  caddy-config:
+  worktree-cache:
+  postgres-data:

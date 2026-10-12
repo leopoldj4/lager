@@ -1,0 +1,38 @@
+# Production configuration for compose.yaml. Copy to worktree.toml, fill in
+# the values marked CHANGE, and keep the file private: it holds secrets.
+
+[server]
+listen = "0.0.0.0:8080"
+cache_dir = "/var/cache/worktree"
+# Caddy terminates HTTPS in front of the server.
+tls_terminated_upstream = true
+drain_delay_secs = 5
+shutdown_timeout_secs = 90
+
+[storage]
+prefix = "worktree"
+
+[storage.s3]
+# Cloudflare R2: https://<account id>.r2.cloudflarestorage.com, region "auto".
+# AWS S3: leave out endpoint and set region. The service must support
+# conditional writes (If-Match / If-None-Match).
+endpoint = "https://CHANGE.r2.cloudflarestorage.com"
+region = "auto"
+bucket = "CHANGE"
+access_key_id = "CHANGE"
+secret_access_key = "CHANGE"
+
+[catalog]
+kind = "storage"               # repositories in the storage service
+create_on_push = "write"       # git push to a new name creates it
+
+[database]                     # users and access tokens
+url = "postgres://worktree:CHANGE@postgres:5432/worktree"
+
+[bus]                          # change events
+url = "nats://nats:4222"
+
+[web]
+dir = "/share/worktree/web"    # built into the image
+# At least 32 characters: openssl rand -base64 32
+session_secret = "CHANGE"

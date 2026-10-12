@@ -231,12 +231,26 @@ streams the image:
 nix build .#docker && ./result | docker load
 ```
 
-The image holds only worktree, the pinned Git, tini as PID 1, and CA
-certificates. It runs `worktree-server` as user 10001 and reads
+The image holds worktree (`/bin/worktree-server` and `/bin/worktree`), the
+built web interface (`/share/worktree/web`), the pinned Git, tini as PID 1,
+and CA certificates. It runs `worktree-server` as user 10001 and reads
 `/etc/worktree/worktree.toml`; mount the configuration as a secret, and the
 cache at `/var/cache/worktree` on local disk. Set the container stop timeout
 above `drain_delay_secs` plus `shutdown_timeout_secs`, and keep
 `git_memory_bytes` times `max_git_processes` below the memory limit.
+
+`deploy/` runs it on one host with Docker Compose: Caddy for HTTPS, worktree,
+NATS, and PostgreSQL, with repositories in an external S3-compatible service.
+
+```bash
+nix build .#docker && ./result | docker load      # note the image name
+cd deploy
+cp .env.example .env                               # domain, image, database password
+cp worktree.example.toml worktree.toml             # storage keys, session secret
+docker compose up -d
+docker compose exec worktree worktree user create <name> --access '*=force'
+docker compose exec worktree worktree token create <name> laptop
+```
 
 On a Mac, an OrbStack NixOS machine works as the Linux builder: it sees
 the Mac's files, so this builds and loads the image into OrbStack's Docker:
