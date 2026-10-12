@@ -1,4 +1,4 @@
-//! Server selection and notification.
+//! Server selection.
 //!
 //! Rendezvous hashing ranks servers per repository. Routing only reduces
 //! duplicate cache work: correctness never depends on it, because every
@@ -9,7 +9,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use futures::TryStreamExt;
@@ -20,7 +19,6 @@ use worktree_core::config::RoutingConfig;
 use worktree_core::model::RepoId;
 
 pub const FORWARDED_HEADER: &str = "x-worktree-forwarded";
-const PEER_TOKEN_HEADER: &str = "x-worktree-peer-token";
 const DOWN_FOR: Duration = Duration::from_secs(10);
 
 pub struct Routing {
@@ -90,29 +88,6 @@ impl Routing {
     /// Whether this server is the first available server for the repository.
     pub fn is_preferred_self(&self, repo: RepoId) -> bool {
         self.preferred(repo).is_none_or(|p| p.id == self.self_id)
-    }
-
-    /// Tells other servers about an accepted push. Failures are ignored.
-    pub fn notify(&self, repo: RepoId, generation: u64) {
-        if !self.cfg.notify {
-            return;
-        }
-        for peer in self.cfg.servers.iter().filter(|p| p.id != self.self_id) {
-            let url = format!("{}/_worktree/notify", peer.url.trim_end_matches('/'));
-            let body = serde_json::to_vec(&Notification { repo, generation }).expect("serializes");
-            let mut req = self
-                .client
-                .post(url)
-                .header("content-type", "application/json")
-                .body(body)
-                .timeout(Duration::from_secs(2));
-            if let Some(t) = &self.cfg.peer_token {
-                req = req.header(PEER_TOKEN_HEADER, t);
-            }
-            tokio::spawn(async move {
-                let _ = req.send().await;
-            });
-        }
     }
 }
 
@@ -212,35 +187,4 @@ fn is_end_to_end(h: &HeaderName) -> bool {
             | "trailer"
             | "content-length"
     )
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct Notification {
-    pub repo: RepoId,
-    pub generation: u64,
-}
-
-/// Receives a change notification and updates the local cache in the
-/// background. Reads still check the storage head themselves.
-pub async fn notify_handler(
-    State(s): State<AppState>,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
-) -> Response {
-    let Some(r) = &s.routing else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let token = headers.get(PEER_TOKEN_HEADER).and_then(|v| v.to_str().ok());
-    if r.cfg.peer_token.as_deref() != token {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let Ok(n) = serde_json::from_slice::<Notification>(&body) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    s.registry.svc.metrics.inc("notifications_received");
-    let controller = s.registry.controller(n.repo);
-    tokio::spawn(async move {
-        let _ = controller.sync_to_storage().await;
-    });
-    StatusCode::ACCEPTED.into_response()
 }

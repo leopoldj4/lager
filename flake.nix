@@ -72,7 +72,8 @@
         );
         # Local mode (IMPLEMENTATION_PLAN.md, Stage 1): `nix run .#local`
         # starts the pinned SeaweedFS as the S3-compatible service,
-        # PostgreSQL for managed users, and one server with development
+        # PostgreSQL for managed users, NATS for change events, and one
+        # server with development
         # credentials. Storage data, database, and caches use separate
         # directories under $WORKTREE_LOCAL_DIR (default: ./.local). Stored
         # data is kept between runs. Remove the cache directory at any time:
@@ -83,6 +84,7 @@
             worktree
             pkgs.seaweedfs
             pkgs.postgresql
+            pkgs.nats-server
             git
             pkgs.coreutils
             pkgs.gnugrep
@@ -94,6 +96,7 @@
             listen="''${WORKTREE_LISTEN:-127.0.0.1:8080}"
             s3_port="''${WORKTREE_S3_PORT:-8333}"
             pg_port="''${WORKTREE_PG_PORT:-5433}"
+            nats_port="''${WORKTREE_NATS_PORT:-4222}"
             pg_dir="$root/postgres"
             mkdir -p "$storage_dir" "$cache_dir"
 
@@ -132,6 +135,9 @@
             [database]                        # users for worktree user / worktree token
             url = "postgres://worktree@127.0.0.1:$pg_port/worktree"
 
+            [bus]                             # change events between servers
+            url = "nats://127.0.0.1:$nats_port"
+
             [[users]]
             name = "dev"
             password = "dev"
@@ -146,9 +152,11 @@
               -admin.ui=false -webdav=false -s3.config="$s3_config" -bucket=worktree \
               >"$root/storage.log" 2>&1 &
             weed_pid=$!
+            nats-server -a 127.0.0.1 -p "$nats_port" >"$root/nats.log" 2>&1 &
+            nats_pid=$!
             server_pid=""
             cleanup() {
-              kill ''${server_pid:+"$server_pid"} "$weed_pid" 2>/dev/null || true
+              kill ''${server_pid:+"$server_pid"} "$weed_pid" "$nats_pid" 2>/dev/null || true
               pg_ctl -D "$pg_dir" -m fast stop >/dev/null 2>&1 || true
               wait 2>/dev/null || true
             }
@@ -251,6 +259,7 @@
             pkgs.seaweedfs
             pkgs.awscli2 # for poking at buckets and conditional writes by hand
             pkgs.postgresql # managed users ([database])
+            pkgs.nats-server # change events between servers ([bus])
             pkgs.cargo-watch
           ];
           RUST_BACKTRACE = "1";

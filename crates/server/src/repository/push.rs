@@ -390,9 +390,7 @@ impl Controller {
                 }
             }
         }
-        if let Some(n) = svc.notifier.lock().unwrap().clone() {
-            n(self.repo, generation);
-        }
+        svc.bus.publish(self.repo, generation);
         Ok(Attempt::Done(HookResponse {
             results: names
                 .iter()

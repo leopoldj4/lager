@@ -15,7 +15,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use tokio::sync::Semaphore;
 use tracing::Instrument;
 
@@ -51,14 +51,13 @@ pub fn router(state: AppState) -> Router {
         .route("/_worktree/health", get(ready))
         .route("/_worktree/live", get(|| async { "ok\n" }))
         .route("/_worktree/metrics", get(metrics))
-        .route("/_worktree/notify", post(crate::routing::notify_handler))
         .fallback(git_handler)
         .layer(middleware::from_fn_with_state(state.clone(), request_id))
         .with_state(state)
 }
 
 /// Readiness for a load balancer: 503 while the storage service does not
-/// answer or while the server stops. `/_worktree/live` only shows that the
+/// answer, while the change bus is disconnected, or while the server stops. `/_worktree/live` only shows that the
 /// process runs.
 async fn ready(State(s): State<AppState>) -> Response {
     use health::NotReady;
@@ -68,6 +67,10 @@ async fn ready(State(s): State<AppState>) -> Response {
         Err(NotReady::StorageUnavailable) => {
             s.registry.svc.metrics.inc("health_storage_failures");
             (StatusCode::SERVICE_UNAVAILABLE, "storage unavailable\n").into_response()
+        }
+        Err(NotReady::BusUnavailable) => {
+            s.registry.svc.metrics.inc("health_bus_failures");
+            (StatusCode::SERVICE_UNAVAILABLE, "bus unavailable\n").into_response()
         }
     }
 }

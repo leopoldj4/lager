@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -89,6 +89,7 @@ impl RunningServer {
         let hooks_done = tokio::time::timeout_at(deadline, self.pushes.wait())
             .await
             .is_ok();
+        let _ = tokio::time::timeout_at(deadline, self.state.registry.svc.bus.flush()).await;
         let mut background_done = true;
         for t in &mut self.background {
             background_done &= tokio::time::timeout_at(deadline, t).await.is_ok();
@@ -147,13 +148,16 @@ pub async fn start_with_listener(
     );
 
     let metrics = Arc::new(Metrics::default());
+    let bus = Arc::new(
+        crate::bus::Bus::connect(cfg.server.id.clone(), cfg.bus.as_ref(), metrics.clone()).await?,
+    );
     let svc = Arc::new(Services {
         storage,
         git,
         cache_root: cache_root.clone(),
         limits: cfg.limits.clone(),
         metrics,
-        notifier: Mutex::new(None),
+        bus: bus.clone(),
         disk: DiskReservations::new(&cache_root, cfg.limits.min_free_disk_bytes),
     });
     let registry = Registry::new(svc.clone())?;
@@ -179,15 +183,10 @@ pub async fn start_with_listener(
     let routing = if cfg.routing.servers.is_empty() {
         None
     } else {
-        let r = Arc::new(crate::routing::Routing::new(
+        Some(Arc::new(crate::routing::Routing::new(
             cfg.server.id.clone(),
             cfg.routing.clone(),
-        )?);
-        let rn = r.clone();
-        *svc.notifier.lock().unwrap() = Some(Arc::new(move |repo, generation| {
-            rn.notify(repo, generation)
-        }));
-        Some(r)
+        )?))
     };
 
     let socket_path = cfg.socket_path();
@@ -215,6 +214,40 @@ pub async fn start_with_listener(
             let n = reg.evict_idle(idle).await;
             if n > 0 {
                 tracing::info!(count = n, "removed idle caches");
+            }
+        }
+    }));
+
+    let (b, stop) = (bus.clone(), stop_http.subscribe());
+    background.push(tokio::spawn(async move {
+        if let Err(e) = b.receive(stop).await {
+            tracing::error!(error = %e, "change events from other servers are not received");
+        }
+    }));
+
+    // Another server accepted a push: bring the local cache up to date in
+    // the background. Reads still check the storage head themselves.
+    let reg = registry.clone();
+    let mut changes = bus.subscribe();
+    let mut stop = stop_http.subscribe();
+    background.push(tokio::spawn(async move {
+        loop {
+            let change = tokio::select! {
+                c = changes.recv() => c,
+                _ = stopped(&mut stop) => break,
+            };
+            match change {
+                Ok(c) if c.remote => {
+                    let controller = reg.controller(c.repo);
+                    tokio::spawn(async move {
+                        let _ = controller.sync_to_storage().await;
+                    });
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(missed = n, "cache updates skipped change events");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     }));
@@ -249,7 +282,7 @@ pub async fn start_with_listener(
         customers: CustomerLimits::new(&cfg.customers),
         routing,
         socket_path: socket_path.clone(),
-        health: crate::http::health::Health::new(svc.storage.clone()),
+        health: crate::http::health::Health::new(svc.storage.clone(), bus),
     });
     let app = crate::http::router(state.clone());
     let tls = match (&cfg.server.tls_certificate, &cfg.server.tls_private_key) {
@@ -278,7 +311,7 @@ pub async fn start_with_listener(
 
 /// Waits for the stop signal. A dropped [`RunningServer`] is no signal:
 /// the server then runs until the process ends, as before.
-async fn stopped(stop: &mut watch::Receiver<bool>) {
+pub(crate) async fn stopped(stop: &mut watch::Receiver<bool>) {
     if stop.wait_for(|s| *s).await.is_err() {
         std::future::pending::<()>().await;
     }

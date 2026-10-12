@@ -12,7 +12,7 @@ changes of a repository.
 ## Local start
 
 One server, a local S3-compatible service (SeaweedFS), PostgreSQL for
-managed users, and development credentials. Storage data, the database,
+managed users, NATS for change events, and development credentials. Storage data, the database,
 and caches live in separate directories under `./.local`; stored data is
 kept between runs.
 
@@ -111,6 +111,11 @@ url = "postgres://worktree:...@db.example.com/worktree?sslmode=verify-full"
 # max_connections = 8
 # timeout_secs = 5
 
+[bus]                              # change events between servers (NATS)
+url = "nats://nats.internal:4222"
+# subject_prefix = "worktree"      # events go to <prefix>.repo.<id>.changed
+# health_grace_secs = 5            # health check fails after this long disconnected
+
 # [identity]                       # instead of [database]: an external service
 # url = "https://id.example.com/git/check"
 # token = "..."
@@ -137,8 +142,6 @@ servers = [
   { id = "git-3", url = "http://10.0.0.3:8080" },
 ]
 forward = true                     # send requests to the preferred server
-notify = true                      # tell other servers about pushes
-peer_token = "..."
 
 [maintenance]
 snapshot_after_entries = 200       # the default; on the preferred server only
@@ -176,8 +179,9 @@ permission-rule version that log entries record.
 ## Operation
 
 - `GET /_worktree/health`: the load balancer check. 503 while the storage
-  service does not answer (checked at most once per second) or while the
-  server stops. `GET /_worktree/live` only shows that the process runs.
+  service does not answer (checked at most once per second), while the NATS
+  connection of `[bus]` is down for longer than `health_grace_secs` or has
+  not been made yet, or while the server stops. `GET /_worktree/live` only shows that the process runs.
 - On `SIGTERM` or `SIGINT` the server stops cleanly: the health check fails
   for `drain_delay_secs` while requests are still served, then the server
   accepts no new connections and waits up to `shutdown_timeout_secs` for
@@ -186,7 +190,12 @@ permission-rule version that log entries record.
   second signal stops at once, which is also safe. Allow the service
   manager enough time (for systemd, `TimeoutStopSec` above the sum).
 - `GET /_worktree/metrics`: counters and median, 95th, and 99th percentile
-  delays per push step, in Prometheus text format.
+  delays per push step, in Prometheus text format. It needs no sign-in;
+  keep it away from the public network.
+- After an accepted push, the server publishes the repository and generation
+  on NATS; other servers then update their caches. Lost events are harmless:
+  every request checks the storage head. See
+  [decision 12](docs/decisions/0012-nats-change-bus.md).
 - Every response has an `x-worktree-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: worktree: accepted ...` line. Logs never contain credentials or
@@ -240,5 +249,5 @@ The Cargo workspace has three crates:
 | Crate | Contents |
 |---|---|
 | `crates/core` (`worktree-core`) | Configuration, record formats, storage, catalog, identities, repository creation and deletion, history reading, data removal, and backup. |
-| `crates/server` (`worktree-server`) | The Git process wrapper, the repository engine (caches and pushes), snapshots, Git HTTP requests, access checks, limits, routing, server assembly, and the `proc-receive` hook program. |
+| `crates/server` (`worktree-server`) | The Git process wrapper, the repository engine (caches and pushes), snapshots, Git HTTP requests, access checks, limits, routing, change events, server assembly, and the `proc-receive` hook program. |
 | `crates/cli` (`worktree-cli`, binary `worktree`) | The administration commands. It does not depend on the server crate. |

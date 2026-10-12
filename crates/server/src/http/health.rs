@@ -1,10 +1,11 @@
-//! Readiness for load balancers: the storage service answers, and the
-//! server is not stopping.
+//! Readiness for load balancers: the storage service answers, the change
+//! bus is connected, and the server is not stopping.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::bus::Bus;
 use worktree_core::storage::Storage;
 
 /// A storage answer is reused for this long, so that frequent health checks
@@ -16,10 +17,12 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 pub enum NotReady {
     Draining,
     StorageUnavailable,
+    BusUnavailable,
 }
 
 pub struct Health {
     storage: Storage,
+    bus: Arc<Bus>,
     draining: AtomicBool,
     last: Mutex<Option<(Instant, bool)>>,
     /// One probe at a time; waiting checks use its answer.
@@ -27,9 +30,10 @@ pub struct Health {
 }
 
 impl Health {
-    pub fn new(storage: Storage) -> Self {
+    pub fn new(storage: Storage, bus: Arc<Bus>) -> Self {
         Self {
             storage,
+            bus,
             draining: AtomicBool::new(false),
             last: Mutex::new(None),
             probe: tokio::sync::Mutex::new(()),
@@ -47,6 +51,9 @@ impl Health {
     pub async fn check(&self) -> Result<(), NotReady> {
         if self.is_draining() {
             return Err(NotReady::Draining);
+        }
+        if !self.bus.healthy() {
+            return Err(NotReady::BusUnavailable);
         }
         if self.storage_ok().await {
             Ok(())

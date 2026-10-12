@@ -6,6 +6,7 @@
 // HTTP handlers return complete responses as errors.
 #![allow(clippy::result_large_err)]
 
+pub mod bus;
 pub mod disk;
 pub mod git;
 pub mod http;
