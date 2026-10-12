@@ -33,9 +33,9 @@ export function RepoPage({ loc }: { loc: Location }) {
   const empty = refs.data && refs.data.branches.length === 0
 
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="flex items-center gap-2 text-xl">
+        <h1 className="flex min-w-0 items-center gap-2 text-xl break-all">
           <BookMarked className="size-5 text-muted-foreground" />
           <RepoName name={loc.repo} />
         </h1>
@@ -57,7 +57,7 @@ export function RepoPage({ loc }: { loc: Location }) {
       {refs.error ? (
         <QueryError error={refs.error} />
       ) : !refs.data ? (
-        <div className="grid gap-2">
+        <div className="grid grid-cols-1 gap-2">
           <Skeleton className="h-10" />
           <Skeleton className="h-64" />
         </div>
@@ -155,7 +155,7 @@ function Tabs({
   const active =
     loc.view === "blob" ? "tree" : loc.view === "commit" ? "commits" : loc.view
   return (
-    <nav className="-mt-2 flex gap-1 border-b">
+    <nav className="-mt-2 flex [scrollbar-width:none] gap-1 overflow-x-auto border-b">
       {tabs.map((t) => (
         <Link
           key={t.view}
@@ -171,13 +171,13 @@ function Tabs({
                   ),
           }}
           className={cn(
-            "-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm",
+            "-mb-px flex shrink-0 items-center gap-2 border-b-2 px-2.5 py-2 text-sm whitespace-nowrap sm:px-3",
             active === t.view
               ? "border-foreground font-medium"
               : "border-transparent text-muted-foreground hover:text-foreground"
           )}
         >
-          <t.icon className="size-4" />
+          <t.icon className="hidden size-4 sm:block" />
           {t.label}
           {t.count !== undefined && (
             <span className="rounded-full bg-muted px-1.5 text-xs">

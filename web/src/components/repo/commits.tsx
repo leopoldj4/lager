@@ -29,7 +29,7 @@ export function CommitList({
   const days = groupByDay(commits ?? [])
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <RevPicker
           repo={repo}
@@ -47,9 +47,9 @@ export function CommitList({
       ) : commits.length === 0 ? (
         <p className="text-sm text-muted-foreground">No commits.</p>
       ) : (
-        <div className="grid gap-6">
+        <div className="grid grid-cols-1 gap-6">
           {days.map(([day, list]) => (
-            <section key={day} className="grid gap-2">
+            <section key={day} className="grid grid-cols-1 gap-2">
               <h2 className="text-sm text-muted-foreground">
                 Commits on {day}
               </h2>

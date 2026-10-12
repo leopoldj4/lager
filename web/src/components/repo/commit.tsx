@@ -23,7 +23,7 @@ export function CommitView({ repo, rev }: { repo: string; rev: string }) {
   const dels = files.reduce((n, f) => n + f.dels, 0)
 
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       <div className="rounded-lg border">
         <div className="p-4">
           <h2 className="text-lg font-semibold">{commit.subject}</h2>

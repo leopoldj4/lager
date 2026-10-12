@@ -20,7 +20,7 @@ function Repositories() {
   )
 
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       <div className="flex flex-wrap items-center gap-4">
         <h1 className="text-xl font-semibold">Repositories</h1>
         <div className="relative ml-auto w-full sm:w-72">
@@ -36,7 +36,7 @@ function Repositories() {
       {repos.error ? (
         <QueryError error={repos.error} />
       ) : !shown ? (
-        <div className="grid gap-2">
+        <div className="grid grid-cols-1 gap-2">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-14" />
           ))}

@@ -35,7 +35,7 @@ export function TreeView({
       e.kind === "file" && /^readme(\.(md|markdown|txt|rst))?$/i.test(e.name)
   )
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <RevPicker repo={repo} view="tree" rev={rev} path={path} refs={refs} />
         <PathCrumbs repo={repo} rev={rev} path={path} />

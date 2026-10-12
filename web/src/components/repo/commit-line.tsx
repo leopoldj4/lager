@@ -17,7 +17,7 @@ export function CommitLine({
   return (
     <div className="flex items-center gap-3 rounded-t-lg border-b bg-muted/40 px-4 py-2.5 text-sm">
       <Avatar name={commit.author.name} />
-      <span className="font-medium">{commit.author.name}</span>
+      <span className="hidden font-medium sm:inline">{commit.author.name}</span>
       <Link
         to="/$"
         params={{ _splat: href(repo, "commit", commit.oid) }}
@@ -29,7 +29,7 @@ export function CommitLine({
         <Link
           to="/$"
           params={{ _splat: href(repo, "commit", commit.oid) }}
-          className="font-mono hover:underline"
+          className="hidden font-mono hover:underline sm:inline"
         >
           {short(commit.oid)}
         </Link>

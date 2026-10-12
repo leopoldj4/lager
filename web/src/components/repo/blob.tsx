@@ -26,7 +26,7 @@ export function BlobView({
   const blob = useBlob(repo, rev, path)
   const lines = blob.data?.text?.replace(/\n$/, "").split("\n")
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <RevPicker repo={repo} view="blob" rev={rev} path={path} refs={refs} />
         <PathCrumbs repo={repo} rev={rev} path={path} />
