@@ -110,6 +110,11 @@ impl Hmac {
     }
 }
 
+/// HMAC-SHA256 of the concatenated `data` (RFC 2104).
+pub fn hmac_sha256(key: &[u8], data: &[&[u8]]) -> [u8; 32] {
+    Hmac::new(key).mac(data)
+}
+
 /// PBKDF2-HMAC-SHA256 with a 32-byte result (RFC 8018).
 pub fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
     let hmac = Hmac::new(password);

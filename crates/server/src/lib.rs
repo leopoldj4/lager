@@ -16,3 +16,4 @@ pub mod repository;
 pub mod routing;
 pub mod server;
 pub mod snapshot;
+pub mod web;

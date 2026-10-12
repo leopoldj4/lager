@@ -144,6 +144,10 @@ impl Bus {
         });
     }
 
+    pub fn server_id(&self) -> &str {
+        &self.self_id
+    }
+
     /// Events of all servers, including this one.
     pub fn subscribe(&self) -> broadcast::Receiver<Change> {
         self.local.subscribe()

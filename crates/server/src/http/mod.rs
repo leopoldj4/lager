@@ -42,13 +42,18 @@ pub struct AppInner {
     pub routing: Option<Arc<crate::routing::Routing>>,
     pub socket_path: PathBuf,
     pub health: health::Health,
+    /// The web interface, with `[web]`.
+    pub web: Option<Arc<crate::web::Web>>,
 }
 
 pub type AppState = Arc<AppInner>;
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/_worktree/health", get(ready))
+    let mut r = Router::new();
+    if state.web.is_some() {
+        r = r.merge(crate::web::router());
+    }
+    r.route("/_worktree/health", get(ready))
         .route("/_worktree/live", get(|| async { "ok\n" }))
         .route("/_worktree/metrics", get(metrics))
         .fallback(git_handler)
@@ -137,6 +142,12 @@ async fn metrics(State(s): State<AppState>) -> Response {
         caches += c.cached_generation().await.is_some() as u64;
     }
     text.push_str(&format!("worktree_caches {caches}\n"));
+    if let Some(web) = &s.web {
+        text.push_str(&format!(
+            "worktree_live_open_connections {}\n",
+            web.connections.load(Relaxed)
+        ));
+    }
     text.push_str(&format!(
         "worktree_draining {}\n",
         s.health.is_draining() as u8
@@ -365,7 +376,7 @@ fn git_protocol(headers: &HeaderMap) -> Option<String> {
 }
 
 /// A server process slot and, for customers with a limit, a customer slot.
-async fn process_permit(s: &AppInner, repo: &RepoConfig) -> Result<Guards, Response> {
+pub(crate) async fn process_permit(s: &AppInner, repo: &RepoConfig) -> Result<Guards, Response> {
     let mut guards = Guards::default();
     let customer = s
         .customers
@@ -397,6 +408,13 @@ async fn git_handler(State(s): State<AppState>, req: Request) -> Response {
         .unwrap_or(RequestTag(uuid::Uuid::new_v4()));
     let (parts, body) = req.into_parts();
     let Some(route) = parse_git_path(parts.uri.path()) else {
+        if parts.method == Method::GET
+            && crate::web::wants_page(&parts.headers)
+            && let Some(web) = &s.web
+            && let Some(shell) = web.shell().await
+        {
+            return shell;
+        }
         return plain(StatusCode::NOT_FOUND, "not found");
     };
     let result = match (&parts.method, route) {

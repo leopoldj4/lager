@@ -19,8 +19,8 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::{Connection, PgConnection};
 
 use super::{
-    AuthError, Identity, IdentityProvider, NewToken, NewUser, TOKEN_PREFIX, Token, TokenId, User,
-    UserChange, UserError, UserSource, VerifiedHashes, restrict,
+    AuthError, Identity, IdentityProvider, NamedUser, NewToken, NewUser, TOKEN_PREFIX, Token,
+    TokenId, User, UserChange, UserError, UserSource, VerifiedHashes, password_stamp, restrict,
 };
 use crate::config::{Access, DatabaseConfig};
 
@@ -288,6 +288,39 @@ impl IdentityProvider for PgUsers {
         Ok(Some(Identity::User {
             name: user.to_string(),
             access,
+        }))
+    }
+
+    async fn lookup(&self, name: &str) -> Result<Option<NamedUser>, AuthError> {
+        let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT u.password_hash, a.repository, a.level
+             FROM worktree_users u
+             LEFT JOIN worktree_user_access a ON a.user_name = u.name
+             WHERE u.name = $1",
+        )
+        .bind(name)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AuthError::Unavailable(format!("database: {e}")))?;
+        let Some((hash, _, _)) = rows.first() else {
+            return Ok(None);
+        };
+        let stamp = password_stamp(hash);
+        let mut access = BTreeMap::new();
+        for (_, repo, level) in rows {
+            if let (Some(repo), Some(level)) = (repo, level) {
+                let level = level
+                    .parse::<Access>()
+                    .map_err(|e| AuthError::Unavailable(format!("database: {e}")))?;
+                access.insert(repo, level);
+            }
+        }
+        Ok(Some(NamedUser {
+            identity: Identity::User {
+                name: name.to_string(),
+                access,
+            },
+            stamp,
         }))
     }
 

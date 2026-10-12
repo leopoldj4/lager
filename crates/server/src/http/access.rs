@@ -14,8 +14,8 @@ use base64::Engine;
 
 use worktree_core::catalog::Catalog;
 use worktree_core::config::{Access, Config, RepoConfig};
-use worktree_core::identity::IdentityProvider;
 pub use worktree_core::identity::{AuthError, Identity};
+use worktree_core::identity::{IdentityProvider, NamedUser};
 use worktree_core::storage::StorageError;
 
 pub struct Directory {
@@ -105,6 +105,20 @@ impl Directory {
             .authenticate(&user, &password)
             .await?
             .ok_or(AuthError::BadCredentials)
+    }
+
+    /// Checks a user name and password from the sign-in form.
+    pub async fn sign_in(&self, user: &str, password: &str) -> Result<Identity, AuthError> {
+        self.identities
+            .authenticate(user, password)
+            .await?
+            .ok_or(AuthError::BadCredentials)
+    }
+
+    /// The user with this name and its current access, for web sessions.
+    pub async fn lookup(&self, name: &str) -> Result<Option<NamedUser>, AuthError> {
+        self.reload_if_changed();
+        self.identities.lookup(name).await
     }
 
     /// Whether a push by `who` may create the missing repository `name`:

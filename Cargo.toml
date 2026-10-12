@@ -14,7 +14,7 @@ anyhow = "=1.0.104"
 async-nats = { version = "=0.50.0", default-features = false, features = ["ring"] }
 async-compression = { version = "=0.4.48", features = ["tokio", "gzip"] }
 async-trait = "=0.1.92"
-axum = { version = "=0.8.9", features = ["http1", "tokio"] }
+axum = { version = "=0.8.9", features = ["http1", "tokio", "ws"] }
 base64 = "=0.22.1"
 bytes = "=1.12.1"
 clap = { version = "=4.6.7", features = ["derive", "env"] }

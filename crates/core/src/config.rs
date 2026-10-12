@@ -33,6 +33,8 @@ pub struct Config {
     #[serde(default)]
     pub bus: Option<BusConfig>,
     #[serde(default)]
+    pub web: Option<WebConfig>,
+    #[serde(default)]
     pub catalog: CatalogConfig,
     #[serde(default)]
     pub maintenance: MaintenanceConfig,
@@ -316,6 +318,26 @@ pub struct BusConfig {
     pub health_grace_secs: u64,
 }
 
+/// The web interface and its API (docs/decisions/0014-web-interface.md).
+/// Without it, the server answers only Git requests.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebConfig {
+    /// The built interface (`web/dist/client`). Without it, only the API
+    /// under `/-/api/` answers.
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+    /// Signs session cookies: at least 32 characters, the same on every
+    /// server. A new secret signs every user out.
+    pub session_secret: String,
+    #[serde(default = "default_session_days")]
+    pub session_days: u64,
+    /// Origins besides the server's own host that may sign in and open the
+    /// live connection, for example `http://localhost:3000`.
+    #[serde(default)]
+    pub origins: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CatalogKind {
@@ -462,6 +484,9 @@ fn default_database_connections() -> u32 {
 fn default_database_timeout() -> u64 {
     5
 }
+fn default_session_days() -> u64 {
+    14
+}
 fn default_subject_prefix() -> String {
     "worktree".into()
 }
@@ -541,6 +566,26 @@ impl Config {
                 b.subject_prefix
             );
         }
+        if let Some(w) = &self.web {
+            anyhow::ensure!(
+                w.session_secret.chars().count() >= 32,
+                "web.session_secret needs at least 32 characters"
+            );
+            anyhow::ensure!(
+                (1..=365).contains(&w.session_days),
+                "web.session_days must be between 1 and 365"
+            );
+            for o in &w.origins {
+                anyhow::ensure!(
+                    (o.starts_with("https://") || o.starts_with("http://"))
+                        && !o.ends_with('/')
+                        && o.split("://")
+                            .nth(1)
+                            .is_some_and(|h| !h.is_empty() && !h.contains('/')),
+                    "web.origins entry {o:?}: use scheme://host[:port]"
+                );
+            }
+        }
         if self.catalog.kind == CatalogKind::Storage {
             anyhow::ensure!(
                 self.repos.is_empty(),
@@ -583,7 +628,8 @@ impl Config {
 pub const MAX_SOCKET_PATH: usize = 100;
 
 /// Repository names: segments of `[A-Za-z0-9._-]`, separated by `/`, never
-/// starting with `.`. The name is never used as a disk path or storage key.
+/// starting with `.`. A segment `-` is reserved for the web interface
+/// (`/-/api/`, `/<name>/-/tree/...`). The name is never used as a disk path or storage key.
 pub fn validate_repo_name(name: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         !name.is_empty() && name.len() <= 200,
@@ -592,6 +638,7 @@ pub fn validate_repo_name(name: &str) -> anyhow::Result<()> {
     for seg in name.split('/') {
         anyhow::ensure!(
             !seg.is_empty()
+                && seg != "-"
                 && !seg.starts_with('.')
                 && !seg.ends_with(".git")
                 && seg

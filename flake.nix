@@ -70,6 +70,28 @@
             meta.mainProgram = "worktree";
           }
         );
+        # The web interface (docs/decisions/0014-web-interface.md): static
+        # files that the server serves with `[web] dir`. Dependencies come
+        # from web/package-lock.json.
+        web = pkgs.buildNpmPackage {
+          pname = "worktree-web";
+          version = "0.1.0";
+          src = lib.fileset.toSource {
+            root = ./web;
+            fileset = lib.fileset.difference ./web (
+              lib.fileset.unions [
+                (lib.fileset.maybeMissing ./web/node_modules)
+                (lib.fileset.maybeMissing ./web/dist)
+              ]
+            );
+          };
+          npmDeps = pkgs.importNpmLock { npmRoot = ./web; };
+          npmConfigHook = pkgs.importNpmLock.npmConfigHook;
+          installPhase = ''
+            cp -r dist/client $out
+          '';
+        };
+
         # Local mode (IMPLEMENTATION_PLAN.md, Stage 1): `nix run .#local`
         # starts the pinned SeaweedFS as the S3-compatible service,
         # PostgreSQL for managed users, NATS for change events, and one
@@ -99,6 +121,8 @@
             nats_port="''${WORKTREE_NATS_PORT:-4222}"
             pg_dir="$root/postgres"
             mkdir -p "$storage_dir" "$cache_dir"
+            # The built interface of this flake, also for an older config file.
+            ln -sfn ${web} "$root/web"
 
             s3_config="$root/s3.json"
             cat >"$s3_config" <<'EOF'
@@ -137,6 +161,11 @@
 
             [bus]                             # change events between servers
             url = "nats://127.0.0.1:$nats_port"
+
+            [web]                             # web interface on http://$listen/
+            dir = "$root/web"
+            session_secret = "$(head -c 32 /dev/urandom | base64)"
+            origins = ["http://localhost:3000"] # npm run dev in web/
 
             [[users]]
             name = "dev"
@@ -190,6 +219,7 @@
             fi
 
             echo "clone with: git clone http://dev:dev@$listen/demo.git"
+            echo "web interface: http://$listen/ (sign in as dev / dev)"
             worktree-server -c "$config" &
             server_pid=$!
             wait "$server_pid"
@@ -231,7 +261,7 @@
       {
         packages = {
           default = worktree;
-          inherit local;
+          inherit local web;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux { inherit docker; };
 
@@ -260,6 +290,7 @@
             pkgs.awscli2 # for poking at buckets and conditional writes by hand
             pkgs.postgresql # managed users ([database])
             pkgs.nats-server # change events between servers ([bus])
+            pkgs.nodejs # the web interface (web/)
             pkgs.cargo-watch
           ];
           RUST_BACKTRACE = "1";

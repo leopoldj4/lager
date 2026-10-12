@@ -1,7 +1,8 @@
 # 13. Live updates for the web interface over WebSockets
 
-Status: accepted; not implemented. Browser sign-in (sessions) is still
-open. Date: October 10, 2026.
+Status: accepted; implemented in `crates/server/src/web/live.rs` and
+`web/src/lib/live.ts`. Sign-in and read queries: decision 14. Date:
+October 10, 2026; revised October 12, 2026.
 
 ## Context
 
@@ -12,65 +13,77 @@ through NATS (decision 12).
 
 ## Decision
 
-**Transport.** One WebSocket per tab at `GET /api/live`, to any server.
-Server-sent events would need a new connection or a second channel for each
-change of the watched set; WebTransport needs HTTP/3 over UDP, which
-hyper/axum do not serve and many networks block, so it would need a
-fallback anyway.
+**Transport.** One WebSocket per tab at `GET /-/api/live`, to any server.
+It carries the read queries of the pages too, so a page needs one
+connection and one sign-in check. Server-sent events would need a new
+connection or a second channel for each change of the watched set;
+WebTransport needs HTTP/3 over UDP, which hyper/axum do not serve and many
+networks block, so it would need a fallback anyway.
 
-**Sign-in.** A session cookie (HttpOnly, `SameSite=Lax`), because browsers
-cannot set headers on a WebSocket and tokens in URLs reach logs. The
-server checks `Origin` against configured origins on the upgrade, so other
-sites cannot open a socket with the user's cookie. Without a cookie, a
-socket can watch repositories with `anonymous_read` only.
+**Sign-in.** The session cookie of decision 14, because browsers cannot
+set headers on a WebSocket and tokens in URLs reach logs. The server checks
+`Origin` on the upgrade (decision 14), so other sites cannot open a socket
+with the user's cookie. Without a valid cookie, the socket sees
+repositories with `anonymous_read` only.
 
-**Messages.** JSON with a `type`. Client messages can carry an `id` that
-the answer repeats.
+**Messages.** JSON text messages with a `type`, at most 64 KiB. Client
+messages can carry an `id` that the answer repeats.
 
 | Direction | Message | Meaning |
 |---|---|---|
-| client | `hello {v}` | Protocol version. |
-| client | `sub {id, repo, since}` | Watch a repository; `since` is the last known generation or null. |
-| client | `unsub {id, repo}` | Stop watching. |
-| server | `welcome {v, server}` | Answer to `hello`. |
-| server | `subbed {id, repo, generation}` | The current generation. Above `since`: the client fetches again. |
-| server | `changed {repo, generation, refs?}` | A push. `refs` is optional and left out for large pushes. |
-| server | `error {id, repo, code}` | `forbidden`, `not_found`, or `too_many_subs`. |
-| server | `resync {repo?}` | Events can be missing; send `sub` again (for all repositories without `repo`). |
+| client | `hello {v}` | Protocol version (1). Other versions close the socket. |
+| client | `sub {id?, repo}` | Watch a repository. |
+| client | `unsub {id?, repo}` | Stop watching. |
+| client | `req {id, op, ...}` | A read query (decision 14). |
+| server | `welcome {v, server, user}` | Answer to `hello`; `user` is null without a session. |
+| server | `subbed {id, repo, generation}` | The current generation. Above the page's: fetch again. |
+| server | `unsubbed {id, repo}` | Answer to `unsub`. |
+| server | `changed {repo, generation}` | A push. |
+| server | `res {id, data}` | Answer to `req`; `data.generation` is the generation it shows. |
+| server | `error {id?, repo?, code, message}` | `not_found`, `too_many_subs`, `bad_request`, `busy`, `unavailable`, `internal`, and query-specific codes. |
+| server | `resync {repo?}` | Events can be missing; fetch again and send `sub` again (for all repositories without `repo`). |
+| server | `heartbeat` | Every 25 seconds. |
 
 **Access.** Events are restricted by repository only: `sub` needs read
-access to the repository, and every event of the repository goes to every
-such subscriber. Ref rules (decision 3) restrict only writes, so `refs`
-shows nothing that `git fetch` would not. When access changes, the server
-checks the affected subscriptions again and sends `error forbidden`.
+access, and every event of the repository goes to every such subscriber.
+Ref rules (decision 3) restrict only writes, so events show nothing that
+`git fetch` would not. Unknown repositories and missing access both answer
+`not_found`. At every heartbeat the server looks the session user up again
+and checks each subscription with the current access and repository
+settings; a lost one gets `error not_found`, an ended session closes the
+socket with code 4401.
 
-**Order on `sub`.** The server first receives events for the repository,
-then reads the head generation from storage, then answers `subbed`. Events
-at or below that generation are dropped. The other order loses a push that
-lands between the read and the subscription.
+**Order on `sub`.** Each connection receives the events of the bus from its
+start. On `sub`, the server reads the head generation from storage and then
+answers `subbed`; events at or below that generation are dropped. Reading
+the head before receiving events would lose a push in between.
 
-**Client.** It keeps the last generation per repository and ignores events
-at or below it. A gap, `resync`, or reconnect makes it send `sub` with
-`since` again. A lost event therefore delays a page, but never leaves it
-wrong.
+**Client.** It keeps the highest generation per repository, from `subbed`,
+`changed`, and every `res`, and ignores events at or below it. A newer
+generation, `resync`, or a reconnect refetches the repository's queries. A
+lost event therefore delays a page, but never leaves it wrong. Queries in
+flight during a reconnect are sent again; they only read.
 
-**Server.** One task per connection with a bounded queue. A hub per server
-keeps the connections per repository and reads `Bus::subscribe`. A full
-queue never blocks the hub: the connection gets `resync`, and a connection
-that stays behind is closed. Limits on subscriptions per connection and
-connections per user.
+**Server.** One task per connection with a queue of 256 messages and its
+own receiver of `Bus::subscribe`. Events never wait for the socket: when
+the queue is full, the connection owes a `resync`, and one that still
+cannot take it at the next heartbeat is closed with 1013. A connection
+that falls 1024 events behind the bus gets `resync`. Limits: 100
+subscriptions and 8 queries in flight per connection.
 
-**Lifecycle.** The server sends a WebSocket ping and an application
-heartbeat about every 25 seconds; browsers do not show pings to scripts,
-so the client reconnects after two missed heartbeats. On a clean stop the
-server closes with code 1012; clients reconnect after a random delay up to
-min(30 s, 0.5 s · 2ⁿ).
+**Lifecycle.** The server sends a WebSocket ping and a `heartbeat` every 25
+seconds, and closes connections that sent nothing for 70 seconds.
+Browsers do not show pings to scripts, so the client reconnects after 60
+seconds without a message. On a clean stop the server closes with code
+1012; clients reconnect after a random delay up to min(30 s, 0.5 s · 2ⁿ).
 
 ## Consequences
 
-- Needs browser sign-in with sessions and a read API for refs, commits,
-  and trees: `changed` only says what to fetch again.
-- Needs the `ws` feature of axum.
-- `/api/` must be reserved so that no repository name hides it.
+- `-` is reserved as a repository name segment (decision 14).
 - Several tabs open several sockets. A `SharedWorker` can share one later
   without a protocol change.
+- Each connection filters every event of the cluster. A hub that keeps the
+  connections per repository can replace the receivers when the event rate
+  needs it, without a protocol change.
+- No limit on connections per user yet.
+- Access changes reach open subscriptions within one heartbeat.

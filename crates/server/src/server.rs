@@ -283,6 +283,12 @@ pub async fn start_with_listener(
         routing,
         socket_path: socket_path.clone(),
         health: crate::http::health::Health::new(svc.storage.clone(), bus),
+        web: cfg.web.as_ref().map(|w| {
+            let secure = !cfg.server.listen.ip().is_loopback()
+                || cfg.server.tls_certificate.is_some()
+                || cfg.server.tls_terminated_upstream;
+            Arc::new(crate::web::Web::new(w, secure, stop_http.subscribe()))
+        }),
     });
     let app = crate::http::router(state.clone());
     let tls = match (&cfg.server.tls_certificate, &cfg.server.tls_private_key) {
@@ -477,7 +483,10 @@ where
         .http1()
         .timer(TokioTimer::new())
         .header_read_timeout(idle);
-    let conn = builder.serve_connection(TokioIo::new(stream), TowerToHyperService::new(app));
+    // Upgrades: the live connection of the web interface. Upgraded
+    // connections end on their own stop signal.
+    let conn =
+        builder.serve_connection_with_upgrades(TokioIo::new(stream), TowerToHyperService::new(app));
     tokio::pin!(conn);
     tokio::select! {
         r = conn.as_mut() => return r,

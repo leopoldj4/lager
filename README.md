@@ -24,6 +24,10 @@ nix run .#local
 git clone http://dev:dev@127.0.0.1:8080/demo.git
 ```
 
+The web interface is at http://127.0.0.1:8080/ (sign in as `dev` / `dev`).
+A `.local/worktree.toml` from before the web interface needs a `[web]`
+table added by hand (see Configuration).
+
 The script is defined in `flake.nix` (`packages.local`). Git 2.45 or later
 is required.
 
@@ -116,6 +120,12 @@ url = "nats://nats.internal:4222"
 # subject_prefix = "worktree"      # events go to <prefix>.repo.<id>.changed
 # health_grace_secs = 5            # health check fails after this long disconnected
 
+[web]                              # web interface and its API under /-/
+dir = "/opt/worktree/web"          # nix build .#web; without it, only the API
+session_secret = "..."             # at least 32 characters, the same on every server
+# session_days = 14
+# origins = ["http://localhost:3000"]  # other origins that may sign in
+
 # [identity]                       # instead of [database]: an external service
 # url = "https://id.example.com/git/check"
 # token = "..."
@@ -196,6 +206,13 @@ permission-rule version that log entries record.
   on NATS; other servers then update their caches. Lost events are harmless:
   every request checks the storage head. See
   [decision 12](docs/decisions/0012-nats-change-bus.md).
+- The web interface (`[web]`) shows repositories, files, history, and
+  commits, and updates open pages on every push. Browsers sign in with the
+  Git password and keep a signed session cookie; one WebSocket per tab
+  (`/-/api/live`) carries queries and change events. Repository names
+  cannot contain a `-` segment, which the interface reserves. See
+  [decision 13](docs/decisions/0013-live-connection-protocol.md) and
+  [decision 14](docs/decisions/0014-web-interface.md).
 - Every response has an `x-worktree-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: worktree: accepted ...` line. Logs never contain credentials or
@@ -244,10 +261,21 @@ cargo build
 nix flake check    # build, clippy, and rustfmt
 ```
 
+The web interface lives in `web/` (TanStack Start in SPA mode, shadcn/ui).
+With a server on 127.0.0.1:8080 (`nix run .#local`):
+
+```bash
+cd web && npm install
+npm run dev        # http://localhost:3000, API and WebSocket go to the server
+npm run build      # dist/client, what [web] dir serves
+npm run typecheck
+```
+
 The Cargo workspace has three crates:
 
 | Crate | Contents |
 |---|---|
 | `crates/core` (`worktree-core`) | Configuration, record formats, storage, catalog, identities, repository creation and deletion, history reading, data removal, and backup. |
-| `crates/server` (`worktree-server`) | The Git process wrapper, the repository engine (caches and pushes), snapshots, Git HTTP requests, access checks, limits, routing, change events, server assembly, and the `proc-receive` hook program. |
+| `crates/server` (`worktree-server`) | The Git process wrapper, the repository engine (caches and pushes), snapshots, Git HTTP requests, access checks, limits, routing, change events, the web API and live connection, server assembly, and the `proc-receive` hook program. |
+| `web` | The web interface. The server serves its built files. |
 | `crates/cli` (`worktree-cli`, binary `worktree`) | The administration commands. It does not depend on the server crate. |

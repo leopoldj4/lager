@@ -7,7 +7,10 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
-use super::{AuthError, Identity, IdentityProvider, User, UserError, UserSource, VerifiedHashes};
+use super::{
+    AuthError, Identity, IdentityProvider, NamedUser, User, UserError, UserSource, VerifiedHashes,
+    password_stamp,
+};
 use crate::config::{Config, UserConfig};
 use crate::password::constant_time_eq;
 
@@ -65,6 +68,24 @@ impl IdentityProvider for FileUsers {
         } else {
             Err(AuthError::BadCredentials)
         }
+    }
+
+    async fn lookup(&self, name: &str) -> Result<Option<NamedUser>, AuthError> {
+        let Some(u) = self.users.read().unwrap().get(name).cloned() else {
+            return Ok(None);
+        };
+        let stored = u
+            .password_hash
+            .or(u.password_sha256)
+            .or(u.password)
+            .unwrap_or_default();
+        Ok(Some(NamedUser {
+            stamp: password_stamp(&stored),
+            identity: Identity::User {
+                name: u.name,
+                access: u.access,
+            },
+        }))
     }
 
     async fn list(&self) -> Result<Vec<User>, UserError> {

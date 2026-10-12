@@ -177,12 +177,29 @@ pub fn restrict(
         .collect()
 }
 
+/// A user found by name, for web sessions
+/// (docs/decisions/0014-web-interface.md).
+#[derive(Clone, Debug)]
+pub struct NamedUser {
+    pub identity: Identity,
+    /// A digest of the stored password: it changes with the password, which
+    /// ends the user's sessions.
+    pub stamp: [u8; 32],
+}
+
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
     /// Checks a user name and password. `Ok(None)`: no user with this name
     /// here, so another provider may know it.
     async fn authenticate(&self, user: &str, password: &str)
     -> Result<Option<Identity>, AuthError>;
+
+    /// The user with this name and its current access. `Ok(None)`: unknown
+    /// here, or the provider cannot look users up by name (then web
+    /// sessions do not work).
+    async fn lookup(&self, _name: &str) -> Result<Option<NamedUser>, AuthError> {
+        Ok(None)
+    }
 
     /// Whether [`create`](Self::create), [`update`](Self::update), and
     /// [`delete`](Self::delete) can work.
@@ -287,6 +304,16 @@ impl IdentityProvider for Layered {
         }
         match &self.store {
             Some(s) => s.authenticate(user, password).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn lookup(&self, name: &str) -> Result<Option<NamedUser>, AuthError> {
+        if self.file.contains(name) {
+            return self.file.lookup(name).await;
+        }
+        match &self.store {
+            Some(s) => s.lookup(name).await,
             None => Ok(None),
         }
     }
@@ -447,6 +474,11 @@ impl VerifiedHashes {
     fn clear(&self) {
         self.0.lock().unwrap().clear();
     }
+}
+
+/// The session stamp of a stored password.
+fn password_stamp(stored: &str) -> [u8; 32] {
+    credential_digest("worktree-session-stamp", stored)
 }
 
 fn credential_digest(user: &str, password: &str) -> [u8; 32] {
