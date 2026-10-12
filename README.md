@@ -251,3 +251,11 @@ The Cargo workspace has three crates:
 | `crates/core` (`worktree-core`) | Configuration, record formats, storage, catalog, identities, repository creation and deletion, history reading, data removal, and backup. |
 | `crates/server` (`worktree-server`) | The Git process wrapper, the repository engine (caches and pushes), snapshots, Git HTTP requests, access checks, limits, routing, change events, server assembly, and the `proc-receive` hook program. |
 | `crates/cli` (`worktree-cli`, binary `worktree`) | The administration commands. It does not depend on the server crate. |
+
+## License
+
+[Functional Source License 1.1, Apache 2.0 Future License](LICENSE.md)
+(`FSL-1.1-ALv2`). You may use, change, and redistribute the code for any
+purpose other than a product or service that competes with it. Each version
+becomes available under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)
+two years after it is released.
