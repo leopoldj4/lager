@@ -6,6 +6,7 @@ members = ["crates/core", "crates/server", "crates/cli"]
 version = "0.1.0"
 edition = "2024"
 publish = false
+license = "FSL-1.1-ALv2"
 
 # Versions are fixed with `=` so that the tested combination is the built one.
 [workspace.dependencies]
