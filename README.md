@@ -51,6 +51,7 @@ worktree token delete <user> <id>
 worktree repo create <name> [--default-branch main]
 worktree repo delete <name>
 worktree repo set-default-branch <name> <branch>
+worktree repo set-public <name> true|false   # read without signing in
 worktree repo list
 worktree cleanup <name> [--delete]            # report, or remove, obsolete data
 worktree backup export <name> <dir>

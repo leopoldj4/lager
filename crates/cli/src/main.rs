@@ -79,6 +79,13 @@ enum RepoCmd {
     Delete { name: String },
     /// Change the default branch (Git HEAD).
     SetDefaultBranch { name: String, branch: String },
+    /// Let anyone read a repository without signing in (`true`), or only
+    /// users with access (`false`).
+    SetPublic {
+        name: String,
+        #[arg(action = clap::ArgAction::Set)]
+        public: bool,
+    },
     /// List the repositories.
     List,
 }
@@ -314,6 +321,9 @@ async fn repo_cmd(
                 head.generation
             );
         }
+        RepoCmd::SetPublic { name, .. } => {
+            anyhow::bail!("set anonymous_read for {name} in its [[repos]] table");
+        }
         RepoCmd::List => {
             for r in &cfg.repos {
                 println!("{}\t{}", r.name, r.id);
@@ -341,6 +351,10 @@ async fn catalog_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
         RepoCmd::SetDefaultBranch { name, branch } => {
             let (_, generation) = catalog.set_default_branch(&name, &branch, "cli").await?;
             println!("default branch of {name} is {branch} (generation {generation})");
+        }
+        RepoCmd::SetPublic { name, public } => {
+            catalog.update(&name, |r| r.anonymous_read = public).await?;
+            println!("{name} is {}", if public { "public" } else { "private" });
         }
         RepoCmd::List => {
             for r in catalog.list().await? {
