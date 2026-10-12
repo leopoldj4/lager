@@ -58,10 +58,6 @@ impl From<std::io::Error> for RepoError {
     }
 }
 
-/// Called after an accepted push, to tell other servers. Lost notifications
-/// never change a read result.
-pub type Notifier = Arc<dyn Fn(RepoId, u64) + Send + Sync>;
-
 /// Shared parts of one server.
 pub struct Services {
     pub storage: Storage,
@@ -69,7 +65,8 @@ pub struct Services {
     pub cache_root: PathBuf,
     pub limits: Limits,
     pub metrics: Arc<Metrics>,
-    pub notifier: StdMutex<Option<Notifier>>,
+    /// Change events of this and the other servers.
+    pub bus: Arc<crate::bus::Bus>,
     /// Disk space for receipts and cache reconstruction.
     pub disk: Arc<crate::disk::DiskReservations>,
 }

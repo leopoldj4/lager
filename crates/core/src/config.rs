@@ -31,6 +31,8 @@ pub struct Config {
     #[serde(default)]
     pub database: Option<DatabaseConfig>,
     #[serde(default)]
+    pub bus: Option<BusConfig>,
+    #[serde(default)]
     pub catalog: CatalogConfig,
     #[serde(default)]
     pub maintenance: MaintenanceConfig,
@@ -166,10 +168,6 @@ pub struct RoutingConfig {
     pub servers: Vec<PeerConfig>,
     /// Forward client requests to the preferred server for the repository.
     pub forward: bool,
-    /// Tell other servers about accepted pushes. Lost notifications are harmless.
-    pub notify: bool,
-    /// Shared secret for requests between servers.
-    pub peer_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -300,6 +298,22 @@ pub struct DatabaseConfig {
     /// Longest wait for a connection; the request then fails with 503.
     #[serde(default = "default_database_timeout")]
     pub timeout_secs: u64,
+}
+
+/// NATS for change events between servers
+/// (docs/decisions/0012-nats-change-bus.md). Without it, events stay on
+/// this server.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BusConfig {
+    /// For example `nats://nats.internal:4222` or `tls://user:...@nats.example.com:4222`.
+    pub url: String,
+    /// First subject token: events go to `<prefix>.repo.<id>.changed`.
+    #[serde(default = "default_subject_prefix")]
+    pub subject_prefix: String,
+    /// The health check fails when the connection is down for longer.
+    #[serde(default = "default_bus_health_grace")]
+    pub health_grace_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -448,6 +462,12 @@ fn default_database_connections() -> u32 {
 fn default_database_timeout() -> u64 {
     5
 }
+fn default_subject_prefix() -> String {
+    "worktree".into()
+}
+fn default_bus_health_grace() -> u64 {
+    5
+}
 fn access_write() -> Access {
     Access::Write
 }
@@ -508,6 +528,19 @@ impl Config {
             self.identity.is_none() || self.database.is_none(),
             "[identity] decides alone who the users are; remove [database] or [identity]"
         );
+        if let Some(b) = &self.bus {
+            anyhow::ensure!(!b.url.is_empty(), "bus.url is empty");
+            anyhow::ensure!(
+                !b.subject_prefix.is_empty()
+                    && b.subject_prefix.split('.').all(|t| {
+                        !t.is_empty()
+                            && t.chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    }),
+                "bus.subject_prefix {:?}: use dot-separated tokens of letters, digits, - and _",
+                b.subject_prefix
+            );
+        }
         if self.catalog.kind == CatalogKind::Storage {
             anyhow::ensure!(
                 self.repos.is_empty(),

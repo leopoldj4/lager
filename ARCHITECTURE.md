@@ -205,7 +205,7 @@ Step 16 makes the push visible. Before this step, a failure can cancel the push.
 
 If local completion fails after CAS success, block access to that cache. Rebuild it from storage. Do not reverse the accepted storage change.
 
-The server can send change notifications to other servers. Lost notifications must not change the result of a read.
+The server publishes a change event to the other servers through NATS ([decision 12](docs/decisions/0012-nats-change-bus.md)). Lost events must not change the result of a read.
 
 ### When another server changes the head
 
@@ -328,7 +328,8 @@ Use one Cargo workspace with three crates: `worktree-core` for the shared module
 | `http` | server | Git HTTP requests, identity checks, permissions, and resource limits. |
 | `snapshot` | server | Snapshots and compaction. |
 | `cleanup` | core | Safe data removal. |
-| `routing` | server | Server selection and notification. |
+| `routing` | server | Server selection. |
+| `bus` | server | Change events between servers. |
 
 Use [Tokio](https://docs.rs/tokio/latest/tokio/process/struct.Command.html) for asynchronous work and process control. Use [Axum](https://docs.rs/axum/latest/axum/) for HTTP. Use [object_store](https://docs.rs/object_store/latest/object_store/enum.PutMode.html) as the S3 interface library.
 
