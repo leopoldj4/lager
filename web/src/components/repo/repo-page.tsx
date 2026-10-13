@@ -1,12 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import { useEffect, useState } from "react"
-import {
-  BookMarked,
-  GitCommitHorizontal,
-  GitBranch,
-  Tag,
-  Zap,
-} from "lucide-react"
+import { BookMarked, GitCommitHorizontal, GitBranch, Tag } from "lucide-react"
 
 import { useRefs, useWatch } from "@/lib/api"
 import { href, splitRev, type Location, type View } from "@/lib/paths"
@@ -22,7 +15,7 @@ import { RefList } from "./refs"
 import { EmptyRepo } from "./empty"
 
 export function RepoPage({ loc }: { loc: Location }) {
-  const pushedAt = useWatch(loc.repo)
+  useWatch(loc.repo)
   const refs = useRefs(loc.repo)
   const names = refs.data && [
     ...refs.data.branches.map((b) => b.name),
@@ -39,7 +32,6 @@ export function RepoPage({ loc }: { loc: Location }) {
           <BookMarked className="size-5 text-muted-foreground" />
           <RepoName name={loc.repo} />
         </h1>
-        <PushNotice at={pushedAt} />
         <div className="ml-auto">
           <CloneButton repo={loc.repo} />
         </div>
@@ -106,24 +98,6 @@ function RepoName({ name }: { name: string }) {
       ))}
       <span className="font-semibold">{parts[parts.length - 1]}</span>
     </Link>
-  )
-}
-
-/** Shown for a few seconds after a push to this repository. */
-function PushNotice({ at }: { at: number | null }) {
-  const [visible, setVisible] = useState(false)
-  useEffect(() => {
-    if (!at) return
-    setVisible(true)
-    const t = setTimeout(() => setVisible(false), 6000)
-    return () => clearTimeout(t)
-  }, [at])
-  if (!visible) return null
-  return (
-    <span className="flex animate-in items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-700 fade-in dark:text-emerald-400">
-      <Zap className="size-3" />
-      New push
-    </span>
   )
 }
 
