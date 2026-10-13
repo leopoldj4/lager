@@ -21,6 +21,7 @@ clap.workspace = true
 futures.workspace = true
 hyper-util.workspace = true
 libc.workspace = true
+percent-encoding.workspace = true
 reqwest.workspace = true
 rustls-pemfile.workspace = true
 serde.workspace = true

@@ -210,10 +210,13 @@ permission-rule version that log entries record.
 - The web interface (`[web]`) shows repositories, files, history, and
   commits, and updates open pages on every push. Browsers sign in with the
   Git password and keep a signed session cookie; one WebSocket per tab
-  (`/-/api/live`) carries queries and change events. Repository names
-  cannot contain a `-` segment, which the interface reserves. See
-  [decision 13](docs/decisions/0013-live-connection-protocol.md) and
-  [decision 14](docs/decisions/0014-web-interface.md).
+  (`/-/api/live`) carries queries and change events, and
+  `/<name>/-/raw/<rev>/<path>` serves a file's bytes. Markdown files and
+  READMEs are rendered. Repository names cannot contain a `-` segment,
+  which the interface reserves. See
+  [decision 13](docs/decisions/0013-live-connection-protocol.md),
+  [decision 14](docs/decisions/0014-web-interface.md), and
+  [decision 15](docs/decisions/0015-raw-files-and-markdown.md).
 - Every response has an `x-worktree-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: worktree: accepted ...` line. Logs never contain credentials or

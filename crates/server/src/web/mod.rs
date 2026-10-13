@@ -3,10 +3,12 @@
 //!
 //! Everything lives under `/-/`, which no repository name can take:
 //! `/-/api/session` signs in and out, `/-/api/live` is the WebSocket, and
-//! `/-/assets/` holds the built files. Every other browser page that is no
-//! Git request gets the application shell, which routes in the browser.
+//! `/-/assets/` holds the built files. `/<repo>/-/raw/<rev>/<path>` answers
+//! a file's bytes. Every other browser page that is no Git request gets the
+//! application shell, which routes in the browser.
 
 pub mod live;
+pub mod raw;
 pub mod read;
 pub mod session;
 
@@ -23,7 +25,7 @@ use tokio::sync::watch;
 
 use crate::http::AppState;
 use worktree_core::config::WebConfig;
-use worktree_core::identity::{AuthError, TOKEN_PREFIX};
+use worktree_core::identity::{AuthError, Identity, TOKEN_PREFIX};
 
 pub struct Web {
     pub sessions: session::Sessions,
@@ -68,6 +70,26 @@ impl Web {
             .strip_prefix("https://")
             .or_else(|| origin.strip_prefix("http://"));
         host.is_some() && origin_host == host
+    }
+
+    /// The user of a request's session cookie; anonymous without a valid
+    /// one.
+    pub async fn identity(
+        &self,
+        directory: &crate::http::access::Directory,
+        headers: &HeaderMap,
+    ) -> Result<Identity, Response> {
+        let Some(cookie) = session::from_headers(headers) else {
+            return Ok(Identity::Anonymous);
+        };
+        match self.sessions.resolve(directory, &cookie).await {
+            Ok(Some(i)) => Ok(i),
+            Ok(None) | Err(AuthError::BadCredentials) => Ok(Identity::Anonymous),
+            Err(AuthError::Unavailable(m)) => {
+                tracing::warn!(error = %m, "user lookup unavailable");
+                Err((StatusCode::SERVICE_UNAVAILABLE, "user lookup unavailable\n").into_response())
+            }
+        }
     }
 
     /// The application shell for browser pages, if the interface is built.
@@ -166,9 +188,14 @@ async fn sign_in(State(s): State<AppState>, headers: HeaderMap, body: Json<SignI
     s.registry.svc.metrics.inc("web_sign_ins");
     tracing::info!(user = %user, "signed in on the web");
     let mut r = Json(serde_json::json!({ "user": user })).into_response();
-    r.headers_mut().insert(
+    let h = r.headers_mut();
+    h.insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&web.sessions.issue(&user, &found.stamp)).expect("valid"),
+    );
+    h.append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&web.sessions.clear_old()).expect("valid"),
     );
     r
 }
@@ -181,9 +208,14 @@ async fn sign_out(State(s): State<AppState>, headers: HeaderMap) -> Response {
         return json_error(StatusCode::FORBIDDEN, "forbidden", "origin not allowed");
     }
     let mut r = StatusCode::NO_CONTENT.into_response();
-    r.headers_mut().insert(
+    let h = r.headers_mut();
+    h.insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&web.sessions.clear()).expect("valid"),
+    );
+    h.append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&web.sessions.clear_old()).expect("valid"),
     );
     r
 }

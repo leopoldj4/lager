@@ -22,9 +22,12 @@
     "radix-ui": "1.8.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
     "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
+    "@tailwindcss/typography": "0.5.20",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "22.20.5",
     "@types/react": "19.3.0",

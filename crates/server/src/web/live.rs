@@ -116,18 +116,9 @@ pub async fn upgrade(
         return (StatusCode::FORBIDDEN, "origin not allowed\n").into_response();
     }
     let cookie = session::from_headers(&headers);
-    let identity = match &cookie {
-        None => Identity::Anonymous,
-        Some(c) => match web.sessions.resolve(&s.directory, c).await {
-            Ok(Some(i)) => i,
-            Ok(None) => Identity::Anonymous,
-            Err(AuthError::BadCredentials) => Identity::Anonymous,
-            Err(AuthError::Unavailable(m)) => {
-                tracing::warn!(error = %m, "user lookup unavailable");
-                return (StatusCode::SERVICE_UNAVAILABLE, "user lookup unavailable\n")
-                    .into_response();
-            }
-        },
+    let identity = match web.identity(&s.directory, &headers).await {
+        Ok(i) => i,
+        Err(r) => return r,
     };
     // An invalid cookie is no session; the client sees `user: null`.
     let cookie = cookie.filter(|_| identity != Identity::Anonymous);
