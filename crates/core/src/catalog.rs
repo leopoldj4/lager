@@ -14,12 +14,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::admin::{self, AdminError};
-use crate::config::{RefRule, RepoConfig, validate_repo_name};
 use crate::model::{FORMAT_VERSION, RepoId, RepoState, RevisionId, branch_ref};
+use crate::repo::{RefRule, RepoSettings, validate_repo_name};
 use crate::storage::{CasOutcome, ETag, Storage, StorageError, Versioned, WriteMode};
 
+/// Unknown fields are ignored: older records also have a `customer`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogRecord {
     pub format: u32,
     pub name: String,
@@ -29,18 +29,16 @@ pub struct CatalogRecord {
     pub revision: RevisionId,
     pub default_branch: String,
     pub anonymous_read: bool,
-    pub customer: Option<String>,
     pub ref_rules: Vec<RefRule>,
 }
 
 impl CatalogRecord {
-    pub fn repo_config(&self) -> RepoConfig {
-        RepoConfig {
+    pub fn settings(&self) -> RepoSettings {
+        RepoSettings {
             name: self.name.clone(),
             id: self.repository,
             default_branch: self.default_branch.clone(),
             anonymous_read: self.anonymous_read,
-            customer: self.customer.clone(),
             ref_rules: self.ref_rules.clone(),
         }
     }
@@ -111,7 +109,7 @@ impl Catalog {
 
     /// The active repository for a name. Lookups are reused for the cache
     /// time; after that a conditional read checks for changes.
-    pub async fn lookup(&self, name: &str) -> Result<Option<RepoConfig>, StorageError> {
+    pub async fn lookup(&self, name: &str) -> Result<Option<RepoSettings>, StorageError> {
         let cached = self.cache.lock().unwrap().get(name).cloned();
         if let Some((at, value)) = &cached
             && at.elapsed() < self.ttl
@@ -146,53 +144,88 @@ impl Catalog {
     /// every creation gets a new repository UUID.
     pub async fn create(
         &self,
-        settings: &RepoConfig,
+        settings: &RepoSettings,
         user: &str,
-    ) -> Result<RepoConfig, CatalogError> {
-        let name = &settings.name;
-        validate_repo_name(name).map_err(|e| CatalogError::Invalid(e.to_string()))?;
+    ) -> Result<RepoSettings, CatalogError> {
         let branch = branch_ref(&settings.default_branch)
             .map_err(|e| CatalogError::Invalid(e.to_string()))?;
-        let existing = self.record(name).await?;
-        let mode = match &existing {
-            Some((r, _)) if r.state == RepoState::Active => {
-                return Err(CatalogError::Exists(name.clone()));
-            }
-            Some((_, etag)) => WriteMode::Update(etag.0.clone()),
-            None => WriteMode::Create,
-        };
+        let mode = self.free_name(&settings.name).await?;
         let id = RepoId::new();
         admin::create_repository(&self.storage, id, &branch, user).await?;
+        // A lost race leaves an unreferenced repository head; nothing serves it.
+        self.insert(settings, id, mode).await
+    }
+
+    /// Gives an existing repository, such as one restored from a backup, a
+    /// name. `settings.id` is the repository; its head must be active.
+    pub async fn attach(&self, settings: &RepoSettings) -> Result<RepoSettings, CatalogError> {
+        branch_ref(&settings.default_branch).map_err(|e| CatalogError::Invalid(e.to_string()))?;
+        match self.storage.load_head(settings.id).await? {
+            Some((h, _)) if h.state == RepoState::Active => {}
+            Some(_) => return Err(AdminError::Deleted.into()),
+            None => return Err(AdminError::NotFound.into()),
+        }
+        let mode = self.free_name(&settings.name).await?;
+        self.insert(settings, settings.id, mode).await
+    }
+
+    /// How to write the record of a new repository with this name: a name
+    /// without an active repository can be taken.
+    async fn free_name(&self, name: &str) -> Result<WriteMode, CatalogError> {
+        validate_repo_name(name).map_err(|e| CatalogError::Invalid(e.to_string()))?;
+        Ok(match self.record(name).await? {
+            Some((r, _)) if r.state == RepoState::Active => {
+                return Err(CatalogError::Exists(name.into()));
+            }
+            Some((_, etag)) => WriteMode::Update(etag.0),
+            None => WriteMode::Create,
+        })
+    }
+
+    async fn insert(
+        &self,
+        settings: &RepoSettings,
+        id: RepoId,
+        mode: WriteMode,
+    ) -> Result<RepoSettings, CatalogError> {
+        for rule in &settings.ref_rules {
+            crate::repo::validate_ref_rule(rule)
+                .map_err(|e| CatalogError::Invalid(e.to_string()))?;
+        }
         let record = CatalogRecord {
             format: FORMAT_VERSION,
-            name: name.clone(),
+            name: settings.name.clone(),
             repository: id,
             state: RepoState::Active,
             revision: RevisionId::new(),
             default_branch: settings.default_branch.clone(),
             anonymous_read: settings.anonymous_read,
-            customer: settings.customer.clone(),
             ref_rules: settings.ref_rules.clone(),
         };
-        // A lost race leaves an unreferenced repository head; nothing serves it.
-        self.write(&record, mode, || CatalogError::Exists(name.clone()))
-            .await?;
-        Ok(record.repo_config())
+        self.write(&record, mode, || {
+            CatalogError::Exists(settings.name.clone())
+        })
+        .await?;
+        Ok(record.settings())
     }
 
     /// The active repository for a name, created with default settings if
     /// there is none; true if this call created it. Reads the record, not the
     /// lookup cache: another server may have created it within the cache time.
-    pub async fn ensure(&self, name: &str, user: &str) -> Result<(RepoConfig, bool), CatalogError> {
+    pub async fn ensure(
+        &self,
+        name: &str,
+        user: &str,
+    ) -> Result<(RepoSettings, bool), CatalogError> {
         for _ in 0..4 {
             if let Some((r, _)) = self.record(name).await?
                 && r.state == RepoState::Active
             {
                 self.cache.lock().unwrap().remove(name);
-                return Ok((r.repo_config(), false));
+                return Ok((r.settings(), false));
             }
             match self
-                .create(&RepoConfig::new(name, RepoId::new()), user)
+                .create(&RepoSettings::new(name, RepoId::new()), user)
                 .await
             {
                 Ok(r) => return Ok((r, true)),
@@ -234,7 +267,7 @@ impl Catalog {
         name: &str,
         branch: &str,
         user: &str,
-    ) -> Result<(RepoConfig, u64), CatalogError> {
+    ) -> Result<(RepoSettings, u64), CatalogError> {
         let branch_name = branch_ref(branch).map_err(|e| CatalogError::Invalid(e.to_string()))?;
         let Some((record, _)) = self.record(name).await? else {
             return Err(CatalogError::NotFound(name.into()));
@@ -260,7 +293,7 @@ impl Catalog {
         &self,
         name: &str,
         change: impl Fn(&mut CatalogRecord),
-    ) -> Result<RepoConfig, CatalogError> {
+    ) -> Result<RepoSettings, CatalogError> {
         for _ in 0..8 {
             let Some((mut record, etag)) = self.record(name).await? else {
                 return Err(CatalogError::NotFound(name.into()));
@@ -274,7 +307,7 @@ impl Catalog {
             record.name = name.into();
             record.revision = RevisionId::new();
             for rule in &record.ref_rules {
-                crate::config::validate_ref_rule(rule)
+                crate::repo::validate_ref_rule(rule)
                     .map_err(|e| CatalogError::Invalid(e.to_string()))?;
             }
             match self
@@ -283,7 +316,7 @@ impl Catalog {
                 })
                 .await
             {
-                Ok(()) => return Ok(record.repo_config()),
+                Ok(()) => return Ok(record.settings()),
                 Err(CatalogError::Conflict) => continue,
                 Err(e) => return Err(e),
             }
@@ -338,11 +371,11 @@ impl Catalog {
     }
 }
 
-fn active(value: &Option<(CatalogRecord, ETag)>) -> Option<RepoConfig> {
+fn active(value: &Option<(CatalogRecord, ETag)>) -> Option<RepoSettings> {
     value
         .as_ref()
         .filter(|(r, _)| r.state == RepoState::Active)
-        .map(|(r, _)| r.repo_config())
+        .map(|(r, _)| r.settings())
 }
 
 fn check(key: &str, name: &str, r: &CatalogRecord) -> Result<(), StorageError> {

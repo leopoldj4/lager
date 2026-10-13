@@ -1,41 +1,33 @@
 //! Who a client is and what it may access
 //! (docs/decisions/0008-users-in-postgres.md).
 //!
-//! An [`IdentityProvider`] checks a user name and password and answers with
-//! the user's access levels; a provider that manages users also lists and
-//! changes them for `worktree user` and `worktree token`. The server uses one
-//! provider, built from
-//! the configuration by [`from_config`]:
+//! Users and their access levels live in PostgreSQL ([`postgres`]); they
+//! are managed with `worktree user` and `worktree token`. [`PgUsers`] checks
+//! a user name and password and answers with the user's access levels.
 //!
-//! - `[identity]`: an external service decides alone ([`service`]).
-//! - Otherwise users in the configuration file ([`file`]), then, with
-//!   `[database]`, users in PostgreSQL ([`postgres`]). File users take
-//!   precedence, so the file always keeps a way in.
-//!
-//! Database users can also sign in with personal access tokens
+//! Users can also sign in with personal access tokens
 //! (docs/decisions/0009-personal-access-tokens.md): the token takes the
 //! place of the password, and can limit the user's access further.
 
-pub mod file;
 pub mod postgres;
-pub mod service;
+
+pub use postgres::PgUsers;
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
-use crate::config::{Access, Config, validate_repo_name};
 use crate::password::PasswordHash;
+use crate::repo::{Access, validate_repo_name};
 
 pub const MIN_PASSWORD_CHARS: usize = 12;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Identity {
     Anonymous,
-    /// A signed-in user with the access levels its provider granted.
+    /// A signed-in user with its access levels.
     User {
         name: String,
         access: BTreeMap<String, Access>,
@@ -69,7 +61,7 @@ impl Identity {
 pub enum AuthError {
     /// Wrong or malformed credentials.
     BadCredentials,
-    /// The identity service or database did not answer.
+    /// The database did not answer.
     Unavailable(String),
 }
 
@@ -83,27 +75,8 @@ pub enum UserError {
     TokenNotFound(TokenId),
     #[error("{0}")]
     Invalid(String),
-    /// The user cannot be changed here.
-    #[error("{0}")]
-    Unmanaged(String),
     #[error("user store unavailable: {0}")]
     Unavailable(String),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UserSource {
-    /// `[[users]]` in the configuration file; changed only there.
-    Config,
-    Database,
-}
-
-impl UserSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            UserSource::Config => "config",
-            UserSource::Database => "database",
-        }
-    }
 }
 
 /// A user without its password hash.
@@ -112,7 +85,6 @@ pub struct User {
     pub name: String,
     /// Repository name (or "*") to access level.
     pub access: BTreeMap<String, Access>,
-    pub source: UserSource,
     pub created_ms: Option<u64>,
     pub updated_ms: Option<u64>,
     pub updated_by: Option<String>,
@@ -187,185 +159,9 @@ pub struct NamedUser {
     pub stamp: [u8; 32],
 }
 
-#[async_trait]
-pub trait IdentityProvider: Send + Sync {
-    /// Checks a user name and password. `Ok(None)`: no user with this name
-    /// here, so another provider may know it.
-    async fn authenticate(&self, user: &str, password: &str)
-    -> Result<Option<Identity>, AuthError>;
-
-    /// The user with this name and its current access. `Ok(None)`: unknown
-    /// here, or the provider cannot look users up by name (then web
-    /// sessions do not work).
-    async fn lookup(&self, _name: &str) -> Result<Option<NamedUser>, AuthError> {
-        Ok(None)
-    }
-
-    /// Whether [`create`](Self::create), [`update`](Self::update), and
-    /// [`delete`](Self::delete) can work.
-    fn manages_users(&self) -> bool {
-        false
-    }
-
-    /// The users this provider knows, sorted by name.
-    async fn list(&self) -> Result<Vec<User>, UserError> {
-        Ok(vec![])
-    }
-
-    async fn create(&self, _new: NewUser, _by: &str) -> Result<User, UserError> {
-        Err(unmanaged())
-    }
-
-    async fn update(&self, _name: &str, _change: UserChange, _by: &str) -> Result<User, UserError> {
-        Err(unmanaged())
-    }
-
-    async fn delete(&self, _name: &str, _by: &str) -> Result<(), UserError> {
-        Err(unmanaged())
-    }
-
-    /// Creates a personal access token for a user. Answers with the token,
-    /// which is not kept.
-    async fn create_token(
-        &self,
-        _user: &str,
-        _new: NewToken,
-    ) -> Result<(Token, String), UserError> {
-        Err(unmanaged())
-    }
-
-    /// A user's tokens, oldest first, without expired ones.
-    async fn tokens(&self, _user: &str) -> Result<Vec<Token>, UserError> {
-        Ok(vec![])
-    }
-
-    async fn delete_token(&self, _user: &str, _id: TokenId) -> Result<(), UserError> {
-        Err(unmanaged())
-    }
-
-    /// Takes the users of a changed configuration file.
-    fn reload(&self, _cfg: &Config) {}
-}
-
-/// The answer when users cannot be changed through this server.
-pub fn unmanaged() -> UserError {
-    UserError::Unmanaged(
-        "users come from the configuration file or the identity service; \
-         configure [database] without [identity] to manage them with worktree user"
-            .into(),
-    )
-}
-
-/// The provider for this configuration. Connects to the database and brings
-/// its schema up to date.
-pub async fn from_config(cfg: &Config) -> anyhow::Result<Arc<dyn IdentityProvider>> {
-    if let Some(i) = &cfg.identity {
-        return Ok(Arc::new(service::IdentityService::new(i)?));
-    }
-    let store: Option<Box<dyn IdentityProvider>> = match &cfg.database {
-        Some(db) => Some(Box::new(postgres::PgUsers::connect(db).await?)),
-        None => None,
-    };
-    Ok(Arc::new(Layered {
-        file: file::FileUsers::new(cfg),
-        store,
-    }))
-}
-
-/// Users in the configuration file first, then a managed store. A stored
-/// user with the name of a file user cannot sign in, is not listed, and
-/// cannot be created or changed.
-struct Layered {
-    file: file::FileUsers,
-    store: Option<Box<dyn IdentityProvider>>,
-}
-
-impl Layered {
-    fn changeable(&self, name: &str) -> Result<&dyn IdentityProvider, UserError> {
-        if self.file.contains(name) {
-            return Err(UserError::Unmanaged(format!(
-                "user {name} is defined in the configuration file"
-            )));
-        }
-        self.store.as_deref().ok_or_else(unmanaged)
-    }
-}
-
-#[async_trait]
-impl IdentityProvider for Layered {
-    async fn authenticate(
-        &self,
-        user: &str,
-        password: &str,
-    ) -> Result<Option<Identity>, AuthError> {
-        // A file user with a wrong password fails here.
-        if let Some(i) = self.file.authenticate(user, password).await? {
-            return Ok(Some(i));
-        }
-        match &self.store {
-            Some(s) => s.authenticate(user, password).await,
-            None => Ok(None),
-        }
-    }
-
-    async fn lookup(&self, name: &str) -> Result<Option<NamedUser>, AuthError> {
-        if self.file.contains(name) {
-            return self.file.lookup(name).await;
-        }
-        match &self.store {
-            Some(s) => s.lookup(name).await,
-            None => Ok(None),
-        }
-    }
-
-    fn manages_users(&self) -> bool {
-        self.store.as_ref().is_some_and(|s| s.manages_users())
-    }
-
-    async fn list(&self) -> Result<Vec<User>, UserError> {
-        let mut out = self.file.list().await?;
-        if let Some(s) = &self.store {
-            out.extend(
-                s.list()
-                    .await?
-                    .into_iter()
-                    .filter(|u| !self.file.contains(&u.name)),
-            );
-        }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
-    }
-
-    async fn create(&self, new: NewUser, by: &str) -> Result<User, UserError> {
-        self.changeable(&new.name)?.create(new, by).await
-    }
-
-    async fn update(&self, name: &str, change: UserChange, by: &str) -> Result<User, UserError> {
-        self.changeable(name)?.update(name, change, by).await
-    }
-
-    async fn delete(&self, name: &str, by: &str) -> Result<(), UserError> {
-        self.changeable(name)?.delete(name, by).await
-    }
-
-    async fn create_token(&self, user: &str, new: NewToken) -> Result<(Token, String), UserError> {
-        self.changeable(user)?.create_token(user, new).await
-    }
-
-    async fn tokens(&self, user: &str) -> Result<Vec<Token>, UserError> {
-        match self.changeable(user) {
-            Ok(s) => s.tokens(user).await,
-            Err(_) => Ok(vec![]),
-        }
-    }
-
-    async fn delete_token(&self, user: &str, id: TokenId) -> Result<(), UserError> {
-        self.changeable(user)?.delete_token(user, id).await
-    }
-
-    fn reload(&self, cfg: &Config) {
-        self.file.reload(cfg);
-    }
+/// Connects to the database and brings its schema up to date.
+pub async fn connect(cfg: &crate::config::Config) -> anyhow::Result<PgUsers> {
+    PgUsers::connect(&cfg.database).await
 }
 
 /// User names appear in HTTP Basic credentials and in log entries.
@@ -469,10 +265,6 @@ impl VerifiedHashes {
             verified.insert(key, Instant::now());
         }
         ok
-    }
-
-    fn clear(&self) {
-        self.0.lock().unwrap().clear();
     }
 }
 

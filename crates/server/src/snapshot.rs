@@ -8,13 +8,14 @@
 //! entries up to its base from the head's index.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use worktree_core::cas::{Resolution, resolve_unknown_cas};
 use worktree_core::model::{
-    EntryId, FORMAT_VERSION, LOG_FORMAT_VERSION, LogEntry, Oid, Operation, RepoId, RepoState,
-    RequestId, Snapshot, SnapshotId, now_ms, request_checksum,
+    EntryId, FORMAT_VERSION, LOG_FORMAT_VERSION, LogEntry, Oid, Operation, RepoState, RequestId,
+    Snapshot, SnapshotId, now_ms, request_checksum,
 };
 use worktree_core::storage::CasOutcome;
 
@@ -90,7 +91,7 @@ pub async fn snapshot(c: &Controller, user: &str) -> Result<SnapshotReport, Repo
 
     // 6-7. Maintenance entry after the current latest entry, attached with CAS.
     let request = RequestId::new();
-    for attempt in 1..=svc.limits.push_retry_limit.max(1) * 2 {
+    for attempt in 1..=worktree_core::limits::PUSH_RETRY_LIMIT * 2 {
         let (head, etag) = svc
             .storage
             .load_head(c.repo)
@@ -156,8 +157,7 @@ pub async fn snapshot(c: &Controller, user: &str) -> Result<SnapshotReport, Repo
             CasOutcome::Accepted(_) => true,
             CasOutcome::Conflict => false,
             CasOutcome::Unknown(_) => {
-                let until =
-                    Instant::now() + Duration::from_secs(svc.limits.unknown_result_deadline_secs);
+                let until = Instant::now() + worktree_core::limits::UNKNOWN_RESULT_DEADLINE;
                 match resolve_unknown_cas(&svc.storage, &next, &etag, entry.id, until).await {
                     Resolution::Accepted(_) => true,
                     Resolution::Rejected => false,
@@ -196,29 +196,27 @@ impl Drop for RemoveOnDrop {
 }
 
 /// Creates snapshots for repositories whose history since the last snapshot
-/// reached `after_entries`. Only repositories for which `preferred` is true
-/// are handled, so that one server does this work. Returns the number of
-/// snapshots.
-pub async fn auto_snapshot(
-    registry: &Arc<Registry>,
-    after_entries: u64,
-    preferred: impl Fn(RepoId) -> bool,
-) -> usize {
-    if after_entries == 0 {
-        return 0;
-    }
+/// reached `after_entries`. Only repositories that this server accepted a
+/// push for are handled, so that usually one server does this work; when
+/// two do, CAS keeps one snapshot. Returns the number of snapshots.
+pub async fn auto_snapshot(registry: &Arc<Registry>, after_entries: u64) -> usize {
     let mut n = 0;
     for c in registry.controllers() {
+        if !c.pushed_here.load(Ordering::SeqCst) {
+            continue;
+        }
         let Some(head) = c.cached_head().await else {
             continue;
         };
         let since = head.generation - head.snapshot.as_ref().map_or(0, |s| s.base_generation);
-        if head.state != RepoState::Active || since < after_entries || !preferred(c.repo) {
+        if head.state != RepoState::Active || since < after_entries {
+            c.pushed_here.store(false, Ordering::SeqCst);
             continue;
         }
         match snapshot(&c, "worktree-maintenance").await {
             Ok(r) => {
                 n += 1;
+                c.pushed_here.store(false, Ordering::SeqCst);
                 tracing::info!(repo = %c.repo, base = r.base_generation, "automatic snapshot");
             }
             Err(e) => tracing::warn!(repo = %c.repo, error = %e, "automatic snapshot failed"),

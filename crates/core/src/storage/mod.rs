@@ -86,7 +86,6 @@ pub enum CasOutcome {
 pub struct Storage {
     backend: Arc<dyn Backend>,
     prefix: String,
-    verify_uploads: bool,
     /// Limits simultaneous pack uploads.
     uploads: Option<Arc<tokio::sync::Semaphore>>,
     stats: Arc<StorageStats>,
@@ -116,7 +115,6 @@ impl Storage {
         Self {
             backend,
             prefix,
-            verify_uploads: true,
             uploads: None,
             stats: Default::default(),
         }
@@ -124,10 +122,9 @@ impl Storage {
 
     /// Storage from the configuration.
     pub fn from_config(cfg: &crate::config::Config) -> anyhow::Result<Self> {
-        let backend = Arc::new(ObjectStoreBackend::s3(&cfg.storage.s3)?);
+        let backend = Arc::new(ObjectStoreBackend::s3(&cfg.storage)?);
         Ok(Storage::new(backend, &cfg.storage.prefix)
-            .with_upload_verification(cfg.storage.verify_uploads)
-            .with_upload_limit(cfg.limits.max_concurrent_uploads))
+            .with_upload_limit(crate::limits::MAX_CONCURRENT_UPLOADS))
     }
 
     pub fn stats(&self) -> &StorageStats {
@@ -142,12 +139,6 @@ impl Storage {
 
     pub fn prefix(&self) -> &str {
         &self.prefix
-    }
-
-    /// Whether a stored pack is read back and its checksum compared.
-    pub fn with_upload_verification(mut self, v: bool) -> Self {
-        self.verify_uploads = v;
-        self
     }
 
     pub fn backend(&self) -> &Arc<dyn Backend> {
@@ -409,9 +400,8 @@ impl Storage {
                 Ok(()) => {
                     count(&self.stats.pack_uploads, 1);
                     count(&self.stats.uploaded_bytes, size);
-                    if self.verify_uploads {
-                        self.verify_pack(repo, &pack).await?;
-                    }
+                    // Read back: the checksum is compared, never an ETag.
+                    self.verify_pack(repo, &pack).await?;
                     return Ok(pack);
                 }
                 Err(BackendError::Unavailable(m)) => {

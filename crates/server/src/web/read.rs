@@ -16,9 +16,9 @@ use tokio::process::Command;
 
 use crate::http::AppInner;
 use crate::repository::RepoError;
-use worktree_core::config::{Access, RepoConfig};
 use worktree_core::identity::Identity;
 use worktree_core::model::RefName;
+use worktree_core::repo::{Access, RepoSettings};
 
 /// Files above this size are shown without contents.
 const MAX_BLOB_BYTES: u64 = 1024 * 1024;
@@ -117,18 +117,17 @@ impl From<std::io::Error> for ReadError {
 
 /// The repository for a name if `who` may read it. Unknown repositories
 /// and missing permission look the same.
-pub async fn readable(s: &AppInner, who: &Identity, name: &str) -> Result<RepoConfig, ReadError> {
-    if worktree_core::config::validate_repo_name(name).is_err() {
+pub async fn readable(s: &AppInner, who: &Identity, name: &str) -> Result<RepoSettings, ReadError> {
+    if worktree_core::repo::validate_repo_name(name).is_err() {
         return Err(ReadError::not_found("repository"));
     }
-    s.directory.reload_if_changed();
     let repo = s
         .directory
         .repo(name)
         .await
         .map_err(|e| ReadError::from(RepoError::from(e)))?
         .ok_or_else(|| ReadError::not_found("repository"))?;
-    if s.directory.access(who, &repo).0 < Access::Read {
+    if s.directory.access(who, &repo) < Access::Read {
         return Err(ReadError::not_found("repository"));
     }
     Ok(repo)
@@ -144,11 +143,8 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
         | Query::Commit { repo, .. } => repo.clone(),
     };
     let repo = readable(s, who, &name).await?;
-    s.customers
-        .admit_request(repo.customer.as_deref())
-        .map_err(|e| ReadError::new("busy", format!("customer limit reached: {}", e.0)))?;
     let view = s.registry.controller(repo.id).prepare_read().await?;
-    let _permits = crate::http::process_permit(s, &repo)
+    let _permits = crate::http::process_permit(s)
         .await
         .map_err(|_| ReadError::new("busy", "server busy; retry later"))?;
     let g = Git { s, dir: &view.dir };
@@ -190,25 +186,19 @@ struct RepoSummary {
 }
 
 async fn repos(s: &AppInner, who: &Identity) -> Result<Value, ReadError> {
-    s.directory.reload_if_changed();
-    let all: Vec<RepoConfig> = match s.directory.catalog() {
-        Some(c) => c
-            .list()
-            .await
-            .map_err(|e| ReadError::from(RepoError::from(e)))?
-            .into_iter()
-            .filter(|r| r.state == worktree_core::model::RepoState::Active)
-            .map(|r| r.repo_config())
-            .collect(),
-        None => {
-            let mut v = s.directory.configured_repos();
-            v.sort_by(|a, b| a.name.cmp(&b.name));
-            v
-        }
-    };
+    let all: Vec<RepoSettings> = s
+        .directory
+        .catalog()
+        .list()
+        .await
+        .map_err(|e| ReadError::from(RepoError::from(e)))?
+        .into_iter()
+        .filter(|r| r.state == worktree_core::model::RepoState::Active)
+        .map(|r| r.settings())
+        .collect();
     let repos: Vec<RepoSummary> = all
         .into_iter()
-        .filter(|r| s.directory.access(who, r).0 >= Access::Read)
+        .filter(|r| s.directory.access(who, r) >= Access::Read)
         .map(|r| RepoSummary {
             name: r.name,
             default_branch: r.default_branch,

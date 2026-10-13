@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::cas::{Resolution, resolve_unknown_cas};
-use crate::config::Limits;
 use crate::history::load_entries;
 use crate::model::{
     EntryId, Head, LOG_FORMAT_VERSION, LogEntry, Operation, RepoId, RepoState, RequestId, now_ms,
@@ -70,9 +69,8 @@ impl CleanupOptions {
 
     /// The shortest retention period that protects active pushes and
     /// requests with unknown results: their uploads are younger than this.
-    pub fn minimum_retention(limits: &Limits) -> Duration {
-        Duration::from_secs(limits.push_deadline_secs + limits.unknown_result_deadline_secs)
-            + CLOCK_MARGIN
+    pub fn minimum_retention() -> Duration {
+        crate::limits::PUSH_DEADLINE + crate::limits::UNKNOWN_RESULT_DEADLINE + CLOCK_MARGIN
     }
 }
 

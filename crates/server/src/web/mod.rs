@@ -28,7 +28,6 @@ use worktree_core::identity::{AuthError, TOKEN_PREFIX};
 pub struct Web {
     pub sessions: session::Sessions,
     dir: Option<PathBuf>,
-    origins: Vec<String>,
     /// Ends live connections when the server stops.
     stop: watch::Receiver<bool>,
     /// Open live connections.
@@ -39,17 +38,26 @@ impl Web {
     /// `secure`: the server is reached over HTTPS (session cookies get
     /// `Secure`).
     pub fn new(cfg: &WebConfig, secure: bool, stop: watch::Receiver<bool>) -> Self {
+        let dir = built_interface();
+        match &dir {
+            Some(d) => tracing::info!(dir = %d.display(), "serving the web interface"),
+            None => tracing::info!("web interface not built; serving only its API"),
+        }
         Self {
-            sessions: session::Sessions::new(&cfg.session_secret, cfg.session_days, secure),
-            dir: cfg.dir.clone(),
-            origins: cfg.origins.clone(),
+            sessions: session::Sessions::new(
+                &cfg.session_secret,
+                worktree_core::limits::SESSION_DAYS,
+                secure,
+            ),
+            dir,
             stop,
             connections: AtomicUsize::new(0),
         }
     }
 
     /// Whether a browser request comes from this site: its `Origin` names
-    /// the requested host or a configured origin. Browsers always send
+    /// the requested host. The Vite development server forwards the API
+    /// with its own host, so it passes too. Browsers always send
     /// `Origin` on WebSocket upgrades and on POST requests, so another site
     /// cannot use the session cookie. Requests without `Origin` come from
     /// other programs, which hold no cookie of the user.
@@ -60,9 +68,6 @@ impl Web {
         let Ok(origin) = origin.to_str() else {
             return false;
         };
-        if self.origins.iter().any(|o| o == origin) {
-            return true;
-        }
         let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
         let origin_host = origin
             .strip_prefix("https://")
@@ -228,4 +233,12 @@ pub fn wants_page(headers: &HeaderMap) -> bool {
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|a| a.contains("text/html"))
+}
+
+/// The built interface (`nix build .#web`), installed beside the programs
+/// in `share/worktree/web`. Without it, only the API under `/-/api/` answers.
+fn built_interface() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.parent()?.join("share/worktree/web");
+    dir.join("_shell.html").is_file().then_some(dir)
 }

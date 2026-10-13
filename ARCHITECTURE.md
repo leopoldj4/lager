@@ -328,7 +328,6 @@ Use one Cargo workspace with three crates: `worktree-core` for the shared module
 | `http` | server | Git HTTP requests, identity checks, permissions, and resource limits. |
 | `snapshot` | server | Snapshots and compaction. |
 | `cleanup` | core | Safe data removal. |
-| `routing` | server | Server selection. |
 | `bus` | server | Change events between servers. |
 
 Use [Tokio](https://docs.rs/tokio/latest/tokio/process/struct.Command.html) for asynchronous work and process control. Use [Axum](https://docs.rs/axum/latest/axum/) for HTTP. Use [object_store](https://docs.rs/object_store/latest/object_store/enum.PutMode.html) as the S3 interface library.

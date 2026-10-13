@@ -15,13 +15,12 @@ use crate::disk::DiskReservations;
 use crate::git::Git;
 use crate::git::hook::{HookRequest, HookResponse, HookResult};
 use crate::http::access::Directory;
-use crate::http::limits::CustomerLimits;
 use crate::http::{AppInner, AppState};
 use crate::metrics::Metrics;
 use crate::repository::{Registry, Services};
 use worktree_core::catalog::Catalog;
-use worktree_core::config::{CatalogKind, Config};
-use worktree_core::model::branch_ref;
+use worktree_core::config::Config;
+use worktree_core::limits;
 use worktree_core::storage::Storage;
 
 pub struct RunningServer {
@@ -37,8 +36,6 @@ pub struct RunningServer {
     stop_hooks: watch::Sender<bool>,
     /// Running push procedures.
     pushes: TaskTracker,
-    drain_delay: Duration,
-    shutdown_timeout: Duration,
     socket_path: PathBuf,
 }
 
@@ -71,11 +68,11 @@ impl RunningServer {
     pub async fn shutdown(mut self) {
         self.state.health.start_draining();
         tracing::info!(
-            delay_secs = self.drain_delay.as_secs(),
+            delay_secs = limits::DRAIN_DELAY.as_secs(),
             "stopping: health check fails, requests are still served"
         );
-        tokio::time::sleep(self.drain_delay).await;
-        let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
+        tokio::time::sleep(limits::DRAIN_DELAY).await;
+        let deadline = tokio::time::Instant::now() + limits::SHUTDOWN_TIMEOUT;
         tracing::info!("stopping: no new connections; waiting for running requests");
         let _ = self.stop_http.send(true);
         let http_done = tokio::time::timeout_at(deadline, &mut self.http)
@@ -108,37 +105,28 @@ impl RunningServer {
     }
 }
 
-/// Starts a server with the given storage. `config_path` enables reloading
-/// of the repository and user table.
-pub async fn start(
-    cfg: Config,
-    config_path: Option<PathBuf>,
-    storage: Storage,
-) -> anyhow::Result<RunningServer> {
+/// Starts a server with the given storage.
+pub async fn start(cfg: Config, storage: Storage) -> anyhow::Result<RunningServer> {
     cfg.validate()?;
     let listener = TcpListener::bind(cfg.server.listen).await?;
-    start_with_listener(cfg, config_path, storage, listener).await
+    start_with_listener(cfg, storage, listener).await
 }
 
 pub async fn start_with_listener(
     cfg: Config,
-    config_path: Option<PathBuf>,
     storage: Storage,
     listener: TcpListener,
 ) -> anyhow::Result<RunningServer> {
     let addr = listener.local_addr()?;
     let cache_root = cfg.server.cache_dir.clone();
     std::fs::create_dir_all(&cache_root)?;
-    let hook_binary = match &cfg.server.hook_binary {
-        Some(p) => p.clone(),
-        None => std::env::current_exe()?,
-    };
+    // Git comes from PATH; the Nix package pins its version (flake.nix).
     let git = Git::new(
-        cfg.server.git_binary.clone(),
+        PathBuf::from("git"),
         &cache_root.join("work"),
-        &hook_binary,
+        &std::env::current_exe()?,
     )?
-    .with_process_limits(cfg.limits.git_cpu_secs, cfg.limits.git_memory_bytes);
+    .with_process_limits(limits::GIT_CPU_SECS, limits::GIT_MEMORY_BYTES);
     let version = git.version().await?;
     anyhow::ensure!(
         version >= crate::git::MIN_VERSION,
@@ -148,46 +136,20 @@ pub async fn start_with_listener(
     );
 
     let metrics = Arc::new(Metrics::default());
-    let bus = Arc::new(
-        crate::bus::Bus::connect(cfg.server.id.clone(), cfg.bus.as_ref(), metrics.clone()).await?,
-    );
+    let bus =
+        Arc::new(crate::bus::Bus::connect(server_id(), cfg.bus.as_ref(), metrics.clone()).await?);
     let svc = Arc::new(Services {
         storage,
         git,
         cache_root: cache_root.clone(),
-        limits: cfg.limits.clone(),
         metrics,
         bus: bus.clone(),
-        disk: DiskReservations::new(&cache_root, cfg.limits.min_free_disk_bytes),
+        disk: DiskReservations::new(&cache_root, limits::MIN_FREE_DISK_BYTES),
     });
     let registry = Registry::new(svc.clone())?;
-    let identities = worktree_core::identity::from_config(&cfg).await?;
-    let mut directory = Directory::new(&cfg, config_path, identities);
-    if cfg.catalog.kind == CatalogKind::Storage {
-        directory = directory.with_catalog(Arc::new(Catalog::new(
-            svc.storage.clone(),
-            Duration::from_secs(cfg.catalog.cache_secs),
-        )));
-    }
-    let directory = Arc::new(directory);
-
-    for r in &cfg.repos {
-        let branch = branch_ref(&r.default_branch)?;
-        match worktree_core::admin::ensure_repository(&svc.storage, r.id, &branch).await {
-            Ok(true) => tracing::info!(repo = %r.name, id = %r.id, "created repository"),
-            Ok(false) => {}
-            Err(e) => tracing::warn!(repo = %r.name, error = %e, "could not check repository head"),
-        }
-    }
-
-    let routing = if cfg.routing.servers.is_empty() {
-        None
-    } else {
-        Some(Arc::new(crate::routing::Routing::new(
-            cfg.server.id.clone(),
-            cfg.routing.clone(),
-        )?))
-    };
+    let users = worktree_core::identity::connect(&cfg).await?;
+    let catalog = Catalog::new(svc.storage.clone(), limits::CATALOG_CACHE);
+    let directory = Arc::new(Directory::new(users, catalog));
 
     let socket_path = cfg.socket_path();
     let hook_listener = bind_socket(&socket_path)?;
@@ -201,7 +163,7 @@ pub async fn start_with_listener(
 
     let mut background = Vec::new();
     let reg = registry.clone();
-    let idle = Duration::from_secs(cfg.limits.cache_idle_secs);
+    let idle = limits::CACHE_IDLE;
     let mut stop = stop_http.subscribe();
     background.push(tokio::spawn(async move {
         let mut tick =
@@ -252,53 +214,38 @@ pub async fn start_with_listener(
         }
     }));
 
-    if cfg.maintenance.snapshot_after_entries > 0 {
-        let reg = registry.clone();
-        let routing = routing.clone();
-        let after = cfg.maintenance.snapshot_after_entries;
-        let every = Duration::from_secs(cfg.maintenance.check_interval_secs.max(1));
-        let mut stop = stop_http.subscribe();
-        background.push(tokio::spawn(async move {
-            let mut tick = tokio::time::interval(every);
-            loop {
-                // A snapshot that has started finishes before the loop ends.
-                tokio::select! {
-                    _ = tick.tick() => {}
-                    _ = stopped(&mut stop) => break,
-                }
-                crate::snapshot::auto_snapshot(&reg, after, |repo| {
-                    routing.as_ref().is_none_or(|r| r.is_preferred_self(repo))
-                })
-                .await;
+    let reg = registry.clone();
+    let mut stop = stop_http.subscribe();
+    background.push(tokio::spawn(async move {
+        let mut tick = tokio::time::interval(limits::SNAPSHOT_CHECK_INTERVAL);
+        loop {
+            // A snapshot that has started finishes before the loop ends.
+            tokio::select! {
+                _ = tick.tick() => {}
+                _ = stopped(&mut stop) => break,
             }
-        }));
-    }
+            crate::snapshot::auto_snapshot(&reg, limits::SNAPSHOT_AFTER_ENTRIES).await;
+        }
+    }));
 
     let state: AppState = Arc::new(AppInner {
         registry: registry.clone(),
         directory,
-        processes: Arc::new(Semaphore::new(cfg.limits.max_git_processes)),
-        process_wait: Duration::from_secs(cfg.limits.process_wait_secs),
-        customers: CustomerLimits::new(&cfg.customers),
-        routing,
+        processes: Arc::new(Semaphore::new(limits::MAX_GIT_PROCESSES)),
         socket_path: socket_path.clone(),
         health: crate::http::health::Health::new(svc.storage.clone(), bus),
         web: cfg.web.as_ref().map(|w| {
-            let secure = !cfg.server.listen.ip().is_loopback()
-                || cfg.server.tls_certificate.is_some()
-                || cfg.server.tls_terminated_upstream;
+            // Off the loopback address, clients come through HTTPS.
+            let secure = !cfg.server.listen.ip().is_loopback();
             Arc::new(crate::web::Web::new(w, secure, stop_http.subscribe()))
         }),
     });
     let app = crate::http::router(state.clone());
-    let tls = match (&cfg.server.tls_certificate, &cfg.server.tls_private_key) {
-        (Some(c), Some(k)) => Some(tls_acceptor(c, k)?),
-        _ => None,
-    };
-    let idle_timeout = Duration::from_secs(cfg.limits.client_idle_timeout_secs);
     let stop = stop_http.subscribe();
     let http =
-        tokio::spawn(async move { serve_http(listener, app, tls, idle_timeout, stop).await });
+        tokio::spawn(
+            async move { serve_http(listener, app, limits::CLIENT_IDLE_TIMEOUT, stop).await },
+        );
     tracing::info!(%addr, "worktree listening");
     Ok(RunningServer {
         addr,
@@ -309,8 +256,6 @@ pub async fn start_with_listener(
         stop_http,
         stop_hooks,
         pushes,
-        drain_delay: Duration::from_secs(cfg.server.drain_delay_secs),
-        shutdown_timeout: Duration::from_secs(cfg.server.shutdown_timeout_secs),
         socket_path,
     })
 }
@@ -408,24 +353,22 @@ async fn handle_hook(registry: Arc<Registry>, stream: UnixStream) -> anyhow::Res
     Ok(())
 }
 
-fn tls_acceptor(cert: &Path, key: &Path) -> anyhow::Result<tokio_rustls::TlsAcceptor> {
-    use tokio_rustls::rustls;
-    let certs = rustls_pemfile::certs(&mut std::io::BufReader::new(std::fs::File::open(cert)?))
-        .collect::<Result<Vec<_>, _>>()?;
-    let key = rustls_pemfile::private_key(&mut std::io::BufReader::new(std::fs::File::open(key)?))?
-        .ok_or_else(|| anyhow::anyhow!("no private key in {}", key.display()))?;
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()?
-        .with_no_client_auth()
-        .with_single_cert(certs, key)?;
-    Ok(tokio_rustls::TlsAcceptor::from(Arc::new(config)))
+/// Names this server in change events and its NATS connection: the host
+/// name. It need not be unique.
+fn server_id() -> String {
+    let mut buf = [0u8; 256];
+    // SAFETY: the buffer is valid for its length.
+    let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    match std::str::from_utf8(&buf[..end]) {
+        Ok(name) if ok && !name.is_empty() => name.to_string(),
+        _ => "worktree".into(),
+    }
 }
 
 async fn serve_http(
     listener: TcpListener,
     app: axum::Router,
-    tls: Option<tokio_rustls::TlsAcceptor>,
     idle: Duration,
     mut stop: watch::Receiver<bool>,
 ) {
@@ -444,20 +387,9 @@ async fn serve_http(
         };
         let _ = tcp.set_nodelay(true);
         let app = app.clone();
-        let tls = tls.clone();
         let stop = stop.clone();
         connections.spawn(async move {
-            let result = match tls {
-                Some(acceptor) => {
-                    match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await
-                    {
-                        Ok(Ok(stream)) => serve_connection(stream, app, idle, stop).await,
-                        _ => return,
-                    }
-                }
-                None => serve_connection(tcp, app, idle, stop).await,
-            };
-            if let Err(e) = result {
+            if let Err(e) = serve_connection(tcp, app, idle, stop).await {
                 tracing::debug!(error = %e, "connection ended with error");
             }
         });

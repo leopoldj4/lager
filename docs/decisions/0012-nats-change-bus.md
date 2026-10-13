@@ -1,6 +1,7 @@
 # 12. Change events over NATS
 
 Status: accepted. Date: October 10, 2026.
+`subject_prefix` and `health_grace_secs` are fixed by [decision 15](0015-minimal-configuration.md).
 
 ## Context
 

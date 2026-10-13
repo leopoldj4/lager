@@ -86,22 +86,6 @@ pub async fn create_repository(
     }
 }
 
-/// Ensures the head exists; returns true if this call created it.
-pub async fn ensure_repository(
-    storage: &Storage,
-    repo: RepoId,
-    default_branch: &RefName,
-) -> Result<bool, AdminError> {
-    if storage.load_head(repo).await?.is_some() {
-        return Ok(false);
-    }
-    match create_repository(storage, repo, default_branch, "worktree").await {
-        Ok(_) => Ok(true),
-        Err(AdminError::Exists) => Ok(false),
-        Err(e) => Err(e),
-    }
-}
-
 /// Appends one entry without ref changes, with retries on conflicts.
 pub async fn append_entry(
     storage: &Storage,

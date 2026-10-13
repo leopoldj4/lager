@@ -4,17 +4,19 @@
 //! push. After it, the push is retained, even if local completion fails.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use super::{CacheInstance, Controller, Known, PendingPush, PushAccess, RepoError};
 use crate::git::hook::{HookCommand, HookResponse, HookResult};
 use crate::metrics::StepTimer;
 use worktree_core::cas::{Resolution, jitter, resolve_unknown_cas};
-use worktree_core::config::{Access, ref_rule};
+use worktree_core::limits;
 use worktree_core::model::{
     EntryId, FORMAT_VERSION, Head, LOG_FORMAT_VERSION, LogEntry, ObjectFormat, Oid, Operation,
     PackRef, Receipt, RefName, RefState, RefUpdate, RepoState, RequestId, now_ms, request_checksum,
 };
+use worktree_core::repo::{Access, ref_rule};
 use worktree_core::storage::{CasOutcome, Storage};
 
 /// One push request from the hook.
@@ -93,7 +95,7 @@ impl Controller {
             id: op.request,
             checksum: request_checksum(&op.user, &updates),
             updates,
-            deadline: Instant::now() + Duration::from_secs(self.svc.limits.push_deadline_secs),
+            deadline: Instant::now() + limits::PUSH_DEADLINE,
         };
         let mut pack: AttemptPack = None;
         let mut attempt = 0u32;
@@ -119,7 +121,7 @@ impl Controller {
                     return reject_all(&names, &format!("internal error (request {})", req.id));
                 }
             }
-            if attempt >= self.svc.limits.push_retry_limit || Instant::now() >= req.deadline {
+            if attempt >= limits::PUSH_RETRY_LIMIT || Instant::now() >= req.deadline {
                 self.svc.metrics.inc("push_conflicts_exhausted");
                 return reject_all(&names, "concurrent changes; retry the push");
             }
@@ -230,7 +232,8 @@ impl Controller {
             refs: req.updates.clone(),
             packs,
             user: op.user.clone(),
-            rules_version: access.rules_version,
+            // Permissions are not versioned.
+            rules_version: 0,
             received_at_ms: now_ms(),
         };
         {
@@ -289,8 +292,7 @@ impl Controller {
             CasOutcome::Unknown(m) => {
                 svc.metrics.inc("cas_unknown");
                 tracing::warn!(repo = %self.repo, request = %req.id, error = %m, "CAS result unknown; resolving");
-                let until =
-                    Instant::now() + Duration::from_secs(svc.limits.unknown_result_deadline_secs);
+                let until = Instant::now() + limits::UNKNOWN_RESULT_DEADLINE;
                 match resolve_unknown_cas(&svc.storage, &new_head, &expected, entry.id, until).await
                 {
                     Resolution::Accepted(e) => e,
@@ -390,6 +392,7 @@ impl Controller {
                 }
             }
         }
+        self.pushed_here.store(true, Ordering::SeqCst);
         svc.bus.publish(self.repo, generation);
         Ok(Attempt::Done(HookResponse {
             results: names
@@ -413,7 +416,6 @@ impl Controller {
         access: &PushAccess,
     ) -> Result<Option<Vec<(String, String)>>, RepoError> {
         let git = &self.svc.git;
-        let limits = &self.svc.limits;
         let new_oids: Vec<Oid> = updates.iter().filter_map(|u| u.new.clone()).collect();
         let types = git.object_types(dir, &new_oids).await?;
         let mut bad = Vec::new();
@@ -463,15 +465,15 @@ impl Controller {
         if !new_oids.is_empty() {
             let exclude: Vec<Oid> = base.refs.values().cloned().collect();
             let (total, largest) = git.object_sizes(dir, &new_oids, &exclude).await?;
-            let reason = if largest > limits.max_object_bytes {
+            let reason = if largest > limits::MAX_OBJECT_BYTES {
                 Some(format!(
                     "object larger than {} bytes",
-                    limits.max_object_bytes
+                    limits::MAX_OBJECT_BYTES
                 ))
-            } else if total > limits.max_expanded_bytes {
+            } else if total > limits::MAX_EXPANDED_BYTES {
                 Some(format!(
                     "push expands to more than {} bytes",
-                    limits.max_expanded_bytes
+                    limits::MAX_EXPANDED_BYTES
                 ))
             } else {
                 None

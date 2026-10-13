@@ -35,8 +35,6 @@ pub struct Input {
     pub body: Body,
     pub gzip: bool,
     pub max_bytes: u64,
-    /// Customer traffic budget, charged as the body arrives.
-    pub budget: Option<super::limits::ByteBudget>,
 }
 
 /// Starts `cmd` with the request body as stdin and returns its stdout as a
@@ -80,8 +78,7 @@ pub fn spawn_service(
                 Err(e) => break Err(e),
             };
             total += n as u64;
-            let within_budget = input.budget.as_ref().is_none_or(|b| b(n as u64));
-            if total > input.max_bytes || !within_budget {
+            if total > input.max_bytes {
                 over.store(true, Ordering::SeqCst);
                 break Ok(());
             }

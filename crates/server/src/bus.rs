@@ -96,8 +96,8 @@ impl Bus {
                     .await?;
                 Some(Nats {
                     client,
-                    prefix: cfg.subject_prefix.clone(),
-                    grace: Duration::from_secs(cfg.health_grace_secs),
+                    prefix: worktree_core::limits::BUS_SUBJECT_PREFIX.into(),
+                    grace: worktree_core::limits::BUS_HEALTH_GRACE,
                     link,
                 })
             }

@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use worktree_core::admin;
 use worktree_core::catalog::Catalog;
-use worktree_core::config::{Access, CatalogKind, Config, validate_repo_name};
+use worktree_core::config::Config;
 use worktree_core::identity::{self, NewToken, NewUser, UserChange};
-use worktree_core::model::{RepoId, branch_ref};
+use worktree_core::model::RepoId;
+use worktree_core::repo::{Access, RefRule, RepoSettings};
 use worktree_core::storage::Storage;
 
 #[derive(Parser)]
@@ -25,18 +25,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Users in the database (`[database]`).
+    /// Users in the database.
     User {
         #[command(subcommand)]
         cmd: UserCmd,
     },
-    /// Personal access tokens of database users, for Git in place of the
-    /// password.
+    /// Personal access tokens of users, for Git in place of the password.
     Token {
         #[command(subcommand)]
         cmd: TokenCmd,
     },
-    /// Repository management, directly in storage.
+    /// Repositories in the catalog in storage.
     Repo {
         #[command(subcommand)]
         cmd: RepoCmd,
@@ -57,9 +56,6 @@ enum Cmd {
         #[arg(long, hide = true)]
         unsafe_short_retention: bool,
     },
-    /// Read a password from standard input and print a salted hash for
-    /// `password_hash` in the configuration file.
-    HashPassword,
     /// Backup and recovery.
     Backup {
         #[command(subcommand)]
@@ -69,7 +65,7 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum RepoCmd {
-    /// Create a repository and add it to the configuration file.
+    /// Create a repository.
     Create {
         name: String,
         #[arg(long, default_value = "main")]
@@ -86,6 +82,25 @@ enum RepoCmd {
         #[arg(action = clap::ArgAction::Set)]
         public: bool,
     },
+    /// Add or replace the ref rule for a pattern: a ref name, or a prefix
+    /// ending in `*` such as refs/heads/release/*. Levels not given keep
+    /// their defaults (write, force, write).
+    SetRefRule {
+        name: String,
+        pattern: String,
+        /// Creation and fast-forward updates.
+        #[arg(long)]
+        update: Option<Access>,
+        /// Non-fast-forward updates and tag moves.
+        #[arg(long)]
+        force: Option<Access>,
+        #[arg(long)]
+        delete: Option<Access>,
+    },
+    /// Remove the ref rule for a pattern.
+    DeleteRefRule { name: String, pattern: String },
+    /// Show a repository's settings.
+    Show { name: String },
     /// List the repositories.
     List,
 }
@@ -100,7 +115,7 @@ enum UserCmd {
         #[arg(long, value_name = "REPO=LEVEL")]
         access: Vec<String>,
     },
-    /// List the users of the configuration file and the database.
+    /// List the users.
     List,
     /// Change a user's password. Asks for it.
     SetPassword { name: String },
@@ -141,7 +156,7 @@ enum BackupCmd {
         name: String,
         out: PathBuf,
     },
-    /// Import into the configured storage. With --name, add it to the configuration.
+    /// Import into the configured storage. With --name, give it that name.
     Import {
         dir: PathBuf,
         #[arg(long)]
@@ -165,29 +180,18 @@ fn main() {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
-    let cmd = cli.cmd;
     let config_path = cli.config.unwrap_or_else(|| DEFAULT_CONFIG.into());
-    if let Cmd::HashPassword = cmd {
-        let mut password = String::new();
-        std::io::stdin().read_line(&mut password)?;
-        let password = password.trim_end_matches(['\r', '\n']);
-        anyhow::ensure!(!password.is_empty(), "empty password");
-        let hash = worktree_core::password::PasswordHash::new(
-            password,
-            worktree_core::password::DEFAULT_ITERATIONS,
-        );
-        println!("{hash}");
-        return Ok(());
-    }
     let cfg = Config::load(&config_path)?;
-    let cmd = match cmd {
+    let cmd = match cli.cmd {
         Cmd::User { cmd } => return user_cmd(&cfg, cmd).await,
         Cmd::Token { cmd } => return token_cmd(&cfg, cmd).await,
         cmd => cmd,
     };
     let storage = Storage::from_config(&cfg)?;
+    // Every command reads the current record, never a cached one.
+    let catalog = Catalog::new(storage.clone(), Duration::ZERO);
     match cmd {
-        Cmd::Repo { cmd } => repo_cmd(&config_path, &cfg, &storage, cmd).await?,
+        Cmd::Repo { cmd } => repo_cmd(&catalog, cmd).await?,
         Cmd::Cleanup {
             name,
             pack_retention_hours,
@@ -195,7 +199,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             delete,
             unsafe_short_retention,
         } => {
-            let id = repo_id(&cfg, &storage, &name).await?;
+            let id = repo_id(&catalog, &name).await?;
             let opts = worktree_core::cleanup::CleanupOptions {
                 pack_retention: Duration::from_secs(pack_retention_hours * 3600),
                 record_retention: Duration::from_secs(record_retention_hours * 3600),
@@ -203,7 +207,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 clock_margin: worktree_core::cleanup::CLOCK_MARGIN,
                 report_only: !delete,
             };
-            let min = worktree_core::cleanup::CleanupOptions::minimum_retention(&cfg.limits);
+            let min = worktree_core::cleanup::CleanupOptions::minimum_retention();
             anyhow::ensure!(
                 unsafe_short_retention || opts.pack_retention.min(opts.record_retention) >= min,
                 "retention periods must be at least {} seconds",
@@ -212,18 +216,14 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let report = worktree_core::cleanup::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        Cmd::HashPassword | Cmd::User { .. } | Cmd::Token { .. } => {
-            unreachable!("handled before the configuration loads")
+        Cmd::User { .. } | Cmd::Token { .. } => {
+            unreachable!("handled before storage is opened")
         }
         Cmd::Backup {
             cmd: BackupCmd::Export { name, out },
         } => {
-            let m = worktree_core::backup::export(
-                &storage,
-                repo_id(&cfg, &storage, &name).await?,
-                &out,
-            )
-            .await?;
+            let m = worktree_core::backup::export(&storage, repo_id(&catalog, &name).await?, &out)
+                .await?;
             println!(
                 "exported generation {} ({} records, {} packs)",
                 m.generation,
@@ -236,13 +236,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             let head = worktree_core::backup::import(&storage, &dir).await?;
             if let Some(name) = name {
-                validate_repo_name(&name)?;
-                anyhow::ensure!(
-                    cfg.catalog.kind == CatalogKind::Config,
-                    "--name adds the repository to the configuration file; \
-                     the storage catalog assigns new UUIDs to new names"
-                );
-                add_repo_to_config(&config_path, &name, head.repository, "main")?;
+                catalog
+                    .attach(&RepoSettings::new(&name, head.repository))
+                    .await?;
+                println!("named it {name}");
             }
             println!(
                 "imported repository {} at generation {}",
@@ -253,93 +250,21 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn catalog(cfg: &Config, storage: &Storage) -> Option<Catalog> {
-    (cfg.catalog.kind == CatalogKind::Storage)
-        .then(|| Catalog::new(storage.clone(), Duration::ZERO))
+async fn repo_id(catalog: &Catalog, name: &str) -> anyhow::Result<RepoId> {
+    catalog
+        .lookup(name)
+        .await?
+        .map(|r| r.id)
+        .ok_or_else(|| anyhow::anyhow!("unknown repository {name}"))
 }
 
-async fn repo_id(cfg: &Config, storage: &Storage, name: &str) -> anyhow::Result<RepoId> {
-    let found = match catalog(cfg, storage) {
-        Some(c) => c.lookup(name).await?.map(|r| r.id),
-        None => cfg.repos.iter().find(|r| r.name == name).map(|r| r.id),
-    };
-    found.ok_or_else(|| anyhow::anyhow!("unknown repository {name}"))
-}
-
-async fn repo_cmd(
-    path: &Path,
-    cfg: &Config,
-    storage: &Storage,
-    cmd: RepoCmd,
-) -> anyhow::Result<()> {
-    if let Some(catalog) = catalog(cfg, storage) {
-        return catalog_cmd(&catalog, cmd).await;
-    }
+async fn repo_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
     match cmd {
         RepoCmd::Create {
             name,
             default_branch,
         } => {
-            validate_repo_name(&name)?;
-            let branch = branch_ref(&default_branch)?;
-            let id = RepoId::new();
-            if let Some(existing) = cfg.repos.iter().find(|r| r.name == name) {
-                // A reused name gets a new UUID. The old repository must be deleted.
-                match storage.load_head(existing.id).await? {
-                    Some((h, _)) if h.state == worktree_core::model::RepoState::Deleted => {}
-                    None => {}
-                    Some(_) => anyhow::bail!("repository {name} exists"),
-                }
-                admin::create_repository(storage, id, &branch, "cli").await?;
-                let text = std::fs::read_to_string(path)?;
-                std::fs::write(
-                    path,
-                    text.replace(&existing.id.to_string(), &id.to_string()),
-                )?;
-            } else {
-                admin::create_repository(storage, id, &branch, "cli").await?;
-                add_repo_to_config(path, &name, id, &default_branch)?;
-            }
-            println!("created {name} ({id})");
-        }
-        RepoCmd::Delete { name } => {
-            let head =
-                admin::delete_repository(storage, repo_id(cfg, storage, &name).await?, "cli")
-                    .await?;
-            println!("deleted {name} at generation {}", head.generation);
-        }
-        RepoCmd::SetDefaultBranch { name, branch } => {
-            let head = admin::set_default_branch(
-                storage,
-                repo_id(cfg, storage, &name).await?,
-                branch_ref(&branch)?,
-                "cli",
-            )
-            .await?;
-            println!(
-                "default branch of {name} is {branch} (generation {})",
-                head.generation
-            );
-        }
-        RepoCmd::SetPublic { name, .. } => {
-            anyhow::bail!("set anonymous_read for {name} in its [[repos]] table");
-        }
-        RepoCmd::List => {
-            for r in &cfg.repos {
-                println!("{}\t{}", r.name, r.id);
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn catalog_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
-    match cmd {
-        RepoCmd::Create {
-            name,
-            default_branch,
-        } => {
-            let mut settings = worktree_core::config::RepoConfig::new(&name, RepoId::new());
+            let mut settings = RepoSettings::new(&name, RepoId::new());
             settings.default_branch = default_branch;
             let r = catalog.create(&settings, "cli").await?;
             println!("created {name} ({})", r.id);
@@ -356,6 +281,51 @@ async fn catalog_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
             catalog.update(&name, |r| r.anonymous_read = public).await?;
             println!("{name} is {}", if public { "public" } else { "private" });
         }
+        RepoCmd::SetRefRule {
+            name,
+            pattern,
+            update,
+            force,
+            delete,
+        } => {
+            let mut rule = RefRule::new(&pattern);
+            rule.update = update.unwrap_or(rule.update);
+            rule.force = force.unwrap_or(rule.force);
+            rule.delete = delete.unwrap_or(rule.delete);
+            worktree_core::repo::validate_ref_rule(&rule)?;
+            let r = catalog
+                .update(&name, |r| {
+                    r.ref_rules.retain(|x| x.pattern != rule.pattern);
+                    r.ref_rules.push(rule.clone());
+                })
+                .await?;
+            print_ref_rules(&r);
+        }
+        RepoCmd::DeleteRefRule { name, pattern } => {
+            let before = catalog
+                .lookup(&name)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("unknown repository {name}"))?;
+            anyhow::ensure!(
+                before.ref_rules.iter().any(|x| x.pattern == pattern),
+                "{name} has no ref rule for {pattern}"
+            );
+            let r = catalog
+                .update(&name, |r| r.ref_rules.retain(|x| x.pattern != pattern))
+                .await?;
+            print_ref_rules(&r);
+        }
+        RepoCmd::Show { name } => {
+            let r = catalog
+                .lookup(&name)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("unknown repository {name}"))?;
+            println!("name\t{}", r.name);
+            println!("id\t{}", r.id);
+            println!("default branch\t{}", r.default_branch);
+            println!("public\t{}", r.anonymous_read);
+            print_ref_rules(&r);
+        }
         RepoCmd::List => {
             for r in catalog.list().await? {
                 println!("{}\t{}\t{:?}", r.name, r.repository, r.state);
@@ -363,6 +333,21 @@ async fn catalog_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_ref_rules(r: &RepoSettings) {
+    if r.ref_rules.is_empty() {
+        println!("ref rules\tnone");
+    }
+    for rule in &r.ref_rules {
+        println!(
+            "ref rule\t{}\tupdate={} force={} delete={}",
+            rule.pattern,
+            rule.update.as_str(),
+            rule.force.as_str(),
+            rule.delete.as_str()
+        );
+    }
 }
 
 const DEFAULT_CONFIG: &str = "worktree.toml";
@@ -421,10 +406,7 @@ fn new_password_hash() -> anyhow::Result<String> {
 }
 
 async fn user_cmd(cfg: &Config, cmd: UserCmd) -> anyhow::Result<()> {
-    let ids = identity::from_config(cfg).await?;
-    if !matches!(cmd, UserCmd::List) && !ids.manages_users() {
-        return Err(identity::unmanaged().into());
-    }
+    let ids = identity::connect(cfg).await?;
     match cmd {
         UserCmd::Create { name, access } => {
             identity::validate_user_name(&name)?;
@@ -440,12 +422,7 @@ async fn user_cmd(cfg: &Config, cmd: UserCmd) -> anyhow::Result<()> {
         }
         UserCmd::List => {
             for u in ids.list().await? {
-                println!(
-                    "{}\t{}\t{}",
-                    u.name,
-                    u.source.as_str(),
-                    format_access(&u.access)
-                );
+                println!("{}\t{}", u.name, format_access(&u.access));
             }
         }
         UserCmd::SetPassword { name } => {
@@ -473,7 +450,7 @@ async fn user_cmd(cfg: &Config, cmd: UserCmd) -> anyhow::Result<()> {
 }
 
 async fn token_cmd(cfg: &Config, cmd: TokenCmd) -> anyhow::Result<()> {
-    let ids = identity::from_config(cfg).await?;
+    let ids = identity::connect(cfg).await?;
     match cmd {
         TokenCmd::Create {
             user,
@@ -581,19 +558,4 @@ fn echo_off() -> Option<libc::termios> {
         t.c_lflag |= libc::ECHONL;
         (libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t) == 0).then_some(saved)
     }
-}
-
-fn add_repo_to_config(
-    path: &Path,
-    name: &str,
-    id: RepoId,
-    default_branch: &str,
-) -> anyhow::Result<()> {
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new().append(true).open(path)?;
-    write!(
-        f,
-        "\n[[repos]]\nname = {name:?}\nid = \"{id}\"\ndefault_branch = {default_branch:?}\n"
-    )?;
-    Ok(())
 }

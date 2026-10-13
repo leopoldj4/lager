@@ -2,6 +2,7 @@
 
 Status: accepted; users are managed with `worktree user` instead of the
 admin API since [decision 10](0010-no-admin-api.md). Date: October 9, 2026.
+Users in the configuration file are removed by [decision 15](0015-minimal-configuration.md); the database is the only user store.
 
 ## Context
 

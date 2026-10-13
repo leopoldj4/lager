@@ -41,7 +41,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let config_path = cli.config.unwrap_or_else(|| DEFAULT_CONFIG.into());
     let cfg = Config::load(&config_path)?;
     let storage = Storage::from_config(&cfg)?;
-    let server = worktree_server::server::start(cfg, Some(config_path), storage).await?;
+    let server = worktree_server::server::start(cfg, storage).await?;
     eprintln!("worktree serving on {}", server.url());
     use tokio::signal::unix::{SignalKind, signal};
     let mut term = signal(SignalKind::terminate())?;

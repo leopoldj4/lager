@@ -1,5 +1,5 @@
 //! Users in PostgreSQL (`[database]`), managed with `worktree user` and
-//! `worktree token`.
+//! `worktree token`. They are the only users.
 //!
 //! `worktree_users` holds one row per user with a salted password hash;
 //! `worktree_user_access` holds its access levels. Every lookup reads the
@@ -9,9 +9,7 @@
 //! The schema is brought up to date when the server starts.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
-use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
@@ -19,10 +17,12 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::{Connection, PgConnection};
 
 use super::{
-    AuthError, Identity, IdentityProvider, NamedUser, NewToken, NewUser, TOKEN_PREFIX, Token,
-    TokenId, User, UserChange, UserError, UserSource, VerifiedHashes, password_stamp, restrict,
+    AuthError, Identity, NamedUser, NewToken, NewUser, TOKEN_PREFIX, Token, TokenId, User,
+    UserChange, UserError, VerifiedHashes, password_stamp, restrict,
 };
-use crate::config::{Access, DatabaseConfig};
+use crate::config::DatabaseConfig;
+use crate::limits::{DATABASE_CONNECTIONS, DATABASE_TIMEOUT};
+use crate::repo::Access;
 
 /// Schema changes, applied in order and recorded in `worktree_schema`.
 /// Never edit an applied entry; append a new one.
@@ -145,8 +145,8 @@ impl PgUsers {
             .parse()
             .map_err(|e| anyhow::anyhow!("database.url: {e}"))?;
         let pool = PgPoolOptions::new()
-            .max_connections(cfg.max_connections)
-            .acquire_timeout(Duration::from_secs(cfg.timeout_secs))
+            .max_connections(DATABASE_CONNECTIONS)
+            .acquire_timeout(DATABASE_TIMEOUT)
             .connect_with(options)
             .await
             .map_err(|e| anyhow::anyhow!("database: {e}"))?;
@@ -250,9 +250,9 @@ async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[async_trait]
-impl IdentityProvider for PgUsers {
-    async fn authenticate(
+impl PgUsers {
+    /// Checks a user name and a password or token. `Ok(None)`: no such user.
+    pub async fn authenticate(
         &self,
         user: &str,
         password: &str,
@@ -291,7 +291,8 @@ impl IdentityProvider for PgUsers {
         }))
     }
 
-    async fn lookup(&self, name: &str) -> Result<Option<NamedUser>, AuthError> {
+    /// The user with this name and its current access, for web sessions.
+    pub async fn lookup(&self, name: &str) -> Result<Option<NamedUser>, AuthError> {
         let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
             "SELECT u.password_hash, a.repository, a.level
              FROM worktree_users u
@@ -324,15 +325,12 @@ impl IdentityProvider for PgUsers {
         }))
     }
 
-    fn manages_users(&self) -> bool {
-        true
-    }
-
-    async fn list(&self) -> Result<Vec<User>, UserError> {
+    /// All users, sorted by name.
+    pub async fn list(&self) -> Result<Vec<User>, UserError> {
         users(&mut *self.conn().await?, None).await
     }
 
-    async fn create(&self, new: NewUser, by: &str) -> Result<User, UserError> {
+    pub async fn create(&self, new: NewUser, by: &str) -> Result<User, UserError> {
         let mut conn = self.conn().await?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
         let inserted = sqlx::query(
@@ -355,7 +353,12 @@ impl IdentityProvider for PgUsers {
         Ok(user)
     }
 
-    async fn update(&self, name: &str, change: UserChange, by: &str) -> Result<User, UserError> {
+    pub async fn update(
+        &self,
+        name: &str,
+        change: UserChange,
+        by: &str,
+    ) -> Result<User, UserError> {
         let mut conn = self.conn().await?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
         // Also locks the row until the end of the change.
@@ -388,7 +391,7 @@ impl IdentityProvider for PgUsers {
         Ok(user)
     }
 
-    async fn delete(&self, name: &str, _by: &str) -> Result<(), UserError> {
+    pub async fn delete(&self, name: &str, _by: &str) -> Result<(), UserError> {
         let deleted = sqlx::query("DELETE FROM worktree_users WHERE name = $1")
             .bind(name)
             .execute(&self.pool)
@@ -400,7 +403,13 @@ impl IdentityProvider for PgUsers {
         Ok(())
     }
 
-    async fn create_token(&self, user: &str, new: NewToken) -> Result<(Token, String), UserError> {
+    /// Creates a personal access token for a user. Answers with the token,
+    /// which is not kept.
+    pub async fn create_token(
+        &self,
+        user: &str,
+        new: NewToken,
+    ) -> Result<(Token, String), UserError> {
         let secret = format!(
             "{TOKEN_PREFIX}{}",
             URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>())
@@ -461,11 +470,12 @@ impl IdentityProvider for PgUsers {
         Ok((token, secret))
     }
 
-    async fn tokens(&self, user: &str) -> Result<Vec<Token>, UserError> {
+    /// A user's tokens, oldest first, without expired ones.
+    pub async fn tokens(&self, user: &str) -> Result<Vec<Token>, UserError> {
         tokens(&mut *self.conn().await?, user, None).await
     }
 
-    async fn delete_token(&self, user: &str, id: TokenId) -> Result<(), UserError> {
+    pub async fn delete_token(&self, user: &str, id: TokenId) -> Result<(), UserError> {
         let deleted = sqlx::query("DELETE FROM worktree_tokens WHERE id = $1 AND user_name = $2")
             .bind(id)
             .bind(user)
@@ -549,7 +559,6 @@ async fn users(conn: &mut PgConnection, name: Option<&str>) -> Result<Vec<User>,
             out.push(User {
                 name,
                 access: BTreeMap::new(),
-                source: UserSource::Database,
                 created_ms: Some(created_ms as u64),
                 updated_ms: Some(updated_ms as u64),
                 updated_by: Some(updated_by),

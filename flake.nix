@@ -60,18 +60,20 @@
             inherit cargoArtifacts;
             doCheck = false;
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
-            # The server runs Git for clients; the command line runs it for
-            # snapshots.
+            # The server runs Git for clients. It serves the web interface
+            # from share/worktree/web beside the programs.
             postInstall = ''
               for bin in worktree worktree-server; do
                 wrapProgram $out/bin/$bin --prefix PATH : ${lib.makeBinPath [ git ]}
               done
+              mkdir -p $out/share/worktree
+              ln -s ${web} $out/share/worktree/web
             '';
             meta.mainProgram = "worktree";
           }
         );
         # The web interface (docs/decisions/0014-web-interface.md): static
-        # files that the server serves with `[web] dir`. Dependencies come
+        # files that the server serves from share/worktree/web. Dependencies come
         # from web/package-lock.json.
         web = pkgs.buildNpmPackage {
           pname = "worktree-web";
@@ -94,9 +96,8 @@
 
         # Local mode (IMPLEMENTATION_PLAN.md, Stage 1): `nix run .#local`
         # starts the pinned SeaweedFS as the S3-compatible service,
-        # PostgreSQL for managed users, NATS for change events, and one
-        # server with development
-        # credentials. Storage data, database, and caches use separate
+        # PostgreSQL for users, NATS for change events, and one server with
+        # a development user. Storage data, database, and caches use separate
         # directories under $WORKTREE_LOCAL_DIR (default: ./.local). Stored
         # data is kept between runs. Remove the cache directory at any time:
         # the server recovers from storage.
@@ -121,8 +122,6 @@
             nats_port="''${WORKTREE_NATS_PORT:-4222}"
             pg_dir="$root/postgres"
             mkdir -p "$storage_dir" "$cache_dir"
-            # The built interface of this flake, also for an older config file.
-            ln -sfn ${web} "$root/web"
 
             s3_config="$root/s3.json"
             cat >"$s3_config" <<'EOF'
@@ -134,27 +133,17 @@
             config="$root/worktree.toml"
             if [[ ! -f "$config" ]]; then
               cat >"$config" <<EOF
-            # Local development configuration. Plain passwords work only on the
-            # loopback address; use password_hash (worktree hash-password) elsewhere.
+            # Local development configuration.
             [server]
             listen = "$listen"
             cache_dir = "$cache_dir"
-            drain_delay_secs = 0
 
             [storage]
-            prefix = "local"
-
-            [storage.s3]
             endpoint = "http://127.0.0.1:$s3_port"
             bucket = "worktree"
             access_key_id = "worktree-dev"
             secret_access_key = "worktree-dev-secret"
-            allow_http = true
-
-            [catalog]
-            kind = "storage"                  # repositories and managed users in storage
-            cache_secs = 1
-            create_on_push = "write"          # git push to a new name creates the repository
+            prefix = "local"
 
             [database]                        # users for worktree user / worktree token
             url = "postgres://worktree@127.0.0.1:$pg_port/worktree"
@@ -163,14 +152,7 @@
             url = "nats://127.0.0.1:$nats_port"
 
             [web]                             # web interface on http://$listen/
-            dir = "$root/web"
             session_secret = "$(head -c 32 /dev/urandom | base64)"
-            origins = ["http://localhost:3000"] # npm run dev in web/
-
-            [[users]]
-            name = "dev"
-            password = "dev"
-            access = { "*" = "force" }
             EOF
             fi
 
@@ -217,19 +199,17 @@
             if ! grep -q '^demo' <<<"$repos"; then
               worktree -c "$config" repo create demo
             fi
+            if ! worktree -c "$config" user list | grep -q '^dev\b'; then
+              echo dev-password | worktree -c "$config" user create dev --access '*=force'
+            fi
 
-            echo "clone with: git clone http://dev:dev@$listen/demo.git"
-            echo "web interface: http://$listen/ (sign in as dev / dev)"
+            echo "clone with: git clone http://dev:dev-password@$listen/demo.git"
+            echo "web interface: http://$listen/ (sign in as dev / dev-password)"
             worktree-server -c "$config" &
             server_pid=$!
             wait "$server_pid"
           '';
         };
-        # The built web interface at /share/worktree/web, for `[web] dir`.
-        webShare = pkgs.runCommand "worktree-web-share" { } ''
-          mkdir -p $out/share/worktree
-          ln -s ${web} $out/share/worktree/web
-        '';
         # Container image (Linux only). `nix build .#docker` gives a script
         # that streams the image: `./result | docker load`; deploy/ has a
         # Compose file for it. tini is PID 1 because Git starts processes
@@ -242,7 +222,6 @@
           contents = [
             pkgs.dockerTools.caCertificates
             worktree
-            webShare
           ];
           fakeRootCommands = ''
             mkdir -p etc tmp var/cache/worktree var/empty

@@ -90,17 +90,17 @@ impl ObjectStoreBackend {
     /// An S3-compatible service. Conditional puts use `If-Match` and
     /// `If-None-Match`. Client retries are disabled so that a lost response
     /// reaches the caller as an unknown result instead of a false conflict.
-    pub fn s3(cfg: &crate::config::S3Config) -> anyhow::Result<Self> {
+    pub fn s3(cfg: &crate::config::StorageConfig) -> anyhow::Result<Self> {
         use object_store::aws::{AmazonS3Builder, S3ConditionalPut};
         use object_store::{ClientOptions, RetryConfig};
-        let mut client = ClientOptions::new()
-            .with_timeout(Duration::from_secs(cfg.request_timeout_secs))
+        let allow_http = cfg
+            .endpoint
+            .as_ref()
+            .is_some_and(|e| e.starts_with("http://"));
+        let client = ClientOptions::new()
+            .with_timeout(crate::limits::STORAGE_REQUEST_TIMEOUT)
             .with_connect_timeout(Duration::from_secs(5))
-            .with_allow_http(cfg.allow_http);
-        if let Some(ca) = &cfg.ca_certificate {
-            let pem = std::fs::read(ca)?;
-            client = client.with_root_certificate(object_store::Certificate::from_pem(&pem)?);
-        }
+            .with_allow_http(allow_http);
         let retry = RetryConfig {
             max_retries: 0,
             ..Default::default()
@@ -111,7 +111,6 @@ impl ObjectStoreBackend {
             .with_access_key_id(&cfg.access_key_id)
             .with_secret_access_key(&cfg.secret_access_key)
             .with_conditional_put(S3ConditionalPut::ETagMatch)
-            .with_virtual_hosted_style_request(cfg.virtual_hosted_style)
             .with_client_options(client)
             .with_retry(retry);
         if let Some(ep) = &cfg.endpoint {

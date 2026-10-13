@@ -1,6 +1,7 @@
 # 5. Repositories created by a push
 
 Status: accepted. Date: September 29, 2026.
+`catalog.create_on_push` is fixed at `write` by [decision 15](0015-minimal-configuration.md).
 
 ## Context
 

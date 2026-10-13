@@ -18,8 +18,8 @@ use tokio::sync::Mutex;
 
 use crate::git::Git;
 use crate::metrics::Metrics;
-use worktree_core::config::{Access, Limits, RefRule};
 use worktree_core::model::{Head, ObjectFormat, RefName, RefState, RepoId, RepoState, RequestId};
+use worktree_core::repo::{Access, RefRule};
 use worktree_core::storage::{ETag, HeadRead, Storage, StorageError};
 
 #[derive(Debug, thiserror::Error)]
@@ -63,7 +63,6 @@ pub struct Services {
     pub storage: Storage,
     pub git: Git,
     pub cache_root: PathBuf,
-    pub limits: Limits,
     pub metrics: Arc<Metrics>,
     /// Change events of this and the other servers.
     pub bus: Arc<crate::bus::Bus>,
@@ -103,7 +102,6 @@ pub struct PushAccess {
     /// The repository that the name maps to now.
     pub repo: RepoId,
     pub level: Access,
-    pub rules_version: u64,
     pub ref_rules: Vec<RefRule>,
 }
 
@@ -112,7 +110,6 @@ impl PushAccess {
         Self {
             repo: RepoId(uuid::Uuid::nil()),
             level: Access::None,
-            rules_version: 0,
             ref_rules: vec![],
         }
     }
@@ -306,6 +303,9 @@ pub struct Controller {
     pub(crate) state: Mutex<CacheState>,
     last_etag: StdMutex<Option<ETag>>,
     last_used_ms: AtomicU64,
+    /// This server accepted a push since the last snapshot check, so it
+    /// creates the next automatic snapshot.
+    pub(crate) pushed_here: AtomicBool,
 }
 
 impl Controller {
@@ -317,6 +317,7 @@ impl Controller {
             state: Mutex::new(CacheState::default()),
             last_etag: StdMutex::new(None),
             last_used_ms: AtomicU64::new(worktree_core::model::now_ms()),
+            pushed_here: AtomicBool::new(false),
         }
     }
 

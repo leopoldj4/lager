@@ -18,9 +18,9 @@ use super::read::{self, ReadError};
 use super::{Web, session};
 use crate::bus::Change;
 use crate::http::AppState;
-use worktree_core::config::Access;
 use worktree_core::identity::{AuthError, Identity};
 use worktree_core::model::RepoId;
+use worktree_core::repo::Access;
 
 pub const VERSION: u32 = 1;
 const HEARTBEAT: Duration = Duration::from_secs(25);
@@ -438,7 +438,7 @@ impl Connection {
             match self.s.directory.repo(&sub.name).await {
                 Ok(Some(r))
                     if r.id == *id
-                        && self.s.directory.access(&self.identity, &r).0 >= Access::Read => {}
+                        && self.s.directory.access(&self.identity, &r) >= Access::Read => {}
                 Ok(_) => lost.push(*id),
                 Err(_) => {}
             }
