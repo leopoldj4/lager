@@ -150,6 +150,11 @@ export function useTree(repo: string, rev: string, path: string) {
   })
 }
 
+const blobQuery = (repo: string, rev: string, path: string) => ({
+  queryKey: ["repo", repo, "blob", rev, path],
+  queryFn: () => live.request<Blob>({ op: "blob", repo, rev, path }),
+})
+
 export function useBlob(
   repo: string,
   rev: string,
@@ -157,10 +162,13 @@ export function useBlob(
   enabled = true
 ) {
   return useQuery({
-    queryKey: ["repo", repo, "blob", rev, path],
-    queryFn: () => live.request<Blob>({ op: "blob", repo, rev, path }),
+    ...blobQuery(repo, rev, path),
     enabled: enabled && rev !== "",
   })
+}
+
+export function fetchBlob(repo: string, rev: string, path: string) {
+  return queryClient.fetchQuery(blobQuery(repo, rev, path))
 }
 
 export function useLog(repo: string, rev: string, path: string) {

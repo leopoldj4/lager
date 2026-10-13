@@ -1,20 +1,57 @@
+import type { FileDiffContentsLoader } from "@pierre/diffs"
+import { FileDiff as PatchFileDiff } from "@pierre/diffs/react"
 import { Link } from "@tanstack/react-router"
-import { useMemo } from "react"
+import { useCallback, useMemo, useState } from "react"
 
-import { useCommit } from "@/lib/api"
+import { fetchBlob, useCommit } from "@/lib/api"
 import { fullDate, short } from "@/lib/format"
 import { href } from "@/lib/paths"
-import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { QueryError } from "@/components/query-error"
 import { Avatar } from "./avatar"
 import { CopyButton } from "./clone"
-import { parseDiff, type DiffFile } from "./diff"
+import { codeOptions, codeStyle, parseDiff, type DiffFile } from "./diff"
+
+type DiffStyle = "unified" | "split"
+
+function useDiffStyle() {
+  const [style, setStyle] = useState<DiffStyle>(() =>
+    localStorage.getItem("diff-style") === "split" ? "split" : "unified"
+  )
+  const set = (s: DiffStyle) => {
+    localStorage.setItem("diff-style", s)
+    setStyle(s)
+  }
+  return [style, set] as const
+}
 
 export function CommitView({ repo, rev }: { repo: string; rev: string }) {
   const q = useCommit(repo, rev)
   const files = useMemo(() => (q.data ? parseDiff(q.data.diff) : []), [q.data])
+  const [diffStyle, setDiffStyle] = useDiffStyle()
+  // Expanding unchanged lines needs both whole files: the first parent's and
+  // this commit's.
+  const oid = q.data?.commit.oid
+  const parent = q.data?.commit.parents[0]
+  const loadDiffFiles = useCallback<FileDiffContentsLoader>(
+    async (diff) => {
+      const text = async (rev: string | undefined, path: string) => {
+        if (!rev) throw new Error("no such revision")
+        const b = await fetchBlob(repo, rev, path)
+        if (b.text === null) throw new Error(`${path} is not shown as text`)
+        return { name: path, contents: b.text }
+      }
+      const newFile = await text(oid, diff.name)
+      if (diff.type === "rename-pure") return { oldFile: null, newFile }
+      return {
+        oldFile: await text(parent, diff.prevName ?? diff.name),
+        newFile,
+      }
+    },
+    [repo, oid, parent]
+  )
   if (q.error) return <QueryError error={q.error} />
   if (!q.data) return <Skeleton className="h-96" />
   const { commit, truncated } = q.data
@@ -73,14 +110,31 @@ export function CommitView({ repo, rev }: { repo: string; rev: string }) {
           </span>
         </div>
       </div>
-      <p className="text-sm text-muted-foreground">
-        {files.length} {files.length === 1 ? "file" : "files"} changed,{" "}
-        <span className="text-emerald-600">+{adds}</span>{" "}
-        <span className="text-red-600">−{dels}</span>
-        {commit.parents.length > 1 && " (against the first parent)"}
-      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-sm text-muted-foreground">
+          {files.length} {files.length === 1 ? "file" : "files"} changed,{" "}
+          <span className="text-emerald-600">+{adds}</span>{" "}
+          <span className="text-red-600">−{dels}</span>
+          {commit.parents.length > 1 && " (against the first parent)"}
+        </p>
+        <Tabs
+          value={diffStyle}
+          onValueChange={(v) => setDiffStyle(v as DiffStyle)}
+          className="ml-auto"
+        >
+          <TabsList>
+            <TabsTrigger value="unified">Unified</TabsTrigger>
+            <TabsTrigger value="split">Split</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
       {files.map((f, i) => (
-        <FileDiff key={i} file={f} />
+        <FileView
+          key={i}
+          file={f}
+          diffStyle={diffStyle}
+          loadDiffFiles={loadDiffFiles}
+        />
       ))}
       {truncated && (
         <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -91,58 +145,35 @@ export function CommitView({ repo, rev }: { repo: string; rev: string }) {
   )
 }
 
-function FileDiff({ file }: { file: DiffFile }) {
+function FileView({
+  file,
+  diffStyle,
+  loadDiffFiles,
+}: {
+  file: DiffFile
+  diffStyle: DiffStyle
+  loadDiffFiles: FileDiffContentsLoader
+}) {
+  const { diff } = file
+  // The options must keep their identity: new ones render the diff again.
+  const options = useMemo(
+    () => ({ ...codeOptions, diffStyle, loadDiffFiles }),
+    [diffStyle, loadDiffFiles]
+  )
+  const note = file.binary
+    ? "Binary file changed."
+    : diff.hunks.length > 0
+      ? null
+      : diff.type === "rename-pure"
+        ? "File renamed without changes."
+        : diff.prevMode && diff.prevMode !== diff.mode
+          ? `File mode changed from ${diff.prevMode} to ${diff.mode}.`
+          : "No content changes."
   return (
     <div className="overflow-hidden rounded-lg border">
-      <div className="flex items-center gap-3 border-b bg-muted/40 px-4 py-2 font-mono text-sm">
-        <span className="min-w-0 truncate">
-          {file.oldPath && file.oldPath !== file.path
-            ? `${file.oldPath} → ${file.path}`
-            : file.path}
-        </span>
-        {file.status && (
-          <span className="rounded bg-muted px-1.5 text-xs text-muted-foreground">
-            {file.status}
-          </span>
-        )}
-        <span className="ml-auto text-xs">
-          <span className="text-emerald-600">+{file.adds}</span>{" "}
-          <span className="text-red-600">−{file.dels}</span>
-        </span>
-      </div>
-      {file.binary ? (
-        <p className="p-4 text-sm text-muted-foreground">
-          Binary file changed.
-        </p>
-      ) : file.lines.length === 0 ? (
-        <p className="p-4 text-sm text-muted-foreground">No content changes.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full font-mono text-[13px] leading-5">
-            <tbody>
-              {file.lines.map((l, i) => (
-                <tr
-                  key={i}
-                  className={cn(
-                    l.kind === "add" && "bg-emerald-500/10",
-                    l.kind === "del" && "bg-red-500/10",
-                    l.kind === "hunk" && "bg-sky-500/10 text-muted-foreground"
-                  )}
-                >
-                  <td className="w-px px-2 text-right text-muted-foreground select-none">
-                    {l.old ?? ""}
-                  </td>
-                  <td className="w-px px-2 text-right text-muted-foreground select-none">
-                    {l.new ?? ""}
-                  </td>
-                  <td className="pr-4 whitespace-pre">
-                    {l.kind === "hunk" ? l.text : l.text || " "}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <PatchFileDiff fileDiff={diff} options={options} style={codeStyle} />
+      {note && (
+        <p className="border-t p-4 text-sm text-muted-foreground">{note}</p>
       )}
     </div>
   )
