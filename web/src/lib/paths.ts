@@ -6,6 +6,7 @@
 //   /<repo>/-/commits/<rev>/<path>   history
 //   /<repo>/-/commit/<oid>           one commit
 //   /<repo>/-/branches, /-/tags
+//   /<repo>/-/raw/<rev>/<path>       a file's bytes, from the server
 // Branch names can contain "/" too; the page splits <rev>/<path> with the
 // repository's refs.
 
@@ -58,4 +59,24 @@ export function href(repo: string, view?: View, rev?: string, path?: string) {
   if (rev) s += `/${rev}`
   if (path) s += `/${path}`
   return s
+}
+
+/** The address of a file's bytes, which the server answers. */
+export function rawHref(repo: string, rev: string, path: string) {
+  const enc = (s: string) => s.split("/").map(encodeURIComponent).join("/")
+  return `/${repo}/-/raw/${enc(rev)}/${enc(path)}`
+}
+
+/**
+ * The repository path a relative link in the file at `from` names, or null
+ * when it leaves the repository. A leading "/" starts at the root.
+ */
+export function resolvePath(from: string, target: string): string | null {
+  const parts = target.startsWith("/") ? [] : from.split("/").slice(0, -1)
+  for (const seg of target.split("/")) {
+    if (seg === "" || seg === ".") continue
+    if (seg !== "..") parts.push(seg)
+    else if (parts.pop() === undefined) return null
+  }
+  return parts.join("/")
 }

@@ -22,6 +22,8 @@ use worktree_core::repo::{Access, RepoSettings};
 
 /// Files above this size are shown without contents.
 const MAX_BLOB_BYTES: u64 = 1024 * 1024;
+/// The raw route refuses larger files.
+const MAX_RAW_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TREE_ENTRIES: usize = 5000;
 const MAX_LOG: u32 = 100;
@@ -176,6 +178,52 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
     };
     out["generation"] = json!(view.generation);
     Ok(out)
+}
+
+/// A file for the raw route.
+pub struct RawFile {
+    pub path: String,
+    /// The blob's object ID.
+    pub blob: String,
+    /// `None` when the browser already holds this blob.
+    pub data: Option<Vec<u8>>,
+}
+
+/// A file of `<rev>/<path>` for the raw route. The address is split at the
+/// longest branch or tag name, as the pages split theirs. `cached`: the blob
+/// the browser holds; its contents are not read again.
+pub async fn raw(
+    s: &AppInner,
+    who: &Identity,
+    name: &str,
+    rest: &str,
+    cached: Option<&str>,
+) -> Result<RawFile, ReadError> {
+    let repo = readable(s, who, name).await?;
+    let view = s.registry.controller(repo.id).prepare_read().await?;
+    let _permits = crate::http::process_permit(s)
+        .await
+        .map_err(|_| ReadError::new("busy", "server busy; retry later"))?;
+    let g = Git { s, dir: &view.dir };
+    let (rev, path) = g.split_rev(rest).await?;
+    let oid = g.resolve(rev).await?;
+    let path = check_path(path)?;
+    if path.is_empty() {
+        return Err(ReadError::bad("path required"));
+    }
+    let (blob, size) = g.blob_info(&oid, path).await?;
+    let data = if cached == Some(blob.as_str()) {
+        None
+    } else if size > MAX_RAW_BYTES {
+        return Err(ReadError::new("too_large", "file too large"));
+    } else {
+        Some(g.run(&["cat-file", "blob", &blob], None).await?)
+    };
+    Ok(RawFile {
+        path: path.to_string(),
+        blob,
+        data,
+    })
 }
 
 #[derive(Serialize)]
@@ -368,6 +416,39 @@ impl Git<'_> {
         Err(ReadError::not_found("branch or tag"))
     }
 
+    /// Splits `<rev>/<path>` at the longest branch or tag name, else after
+    /// the first segment.
+    async fn split_rev<'r>(&self, rest: &'r str) -> Result<(&'r str, &'r str), ReadError> {
+        let first = rest.split_once('/').unwrap_or((rest, ""));
+        if !first.1.contains('/') {
+            return Ok(first);
+        }
+        let out = self
+            .run(
+                &[
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "refs/heads/",
+                    "refs/tags/",
+                ],
+                None,
+            )
+            .await?;
+        let out = String::from_utf8_lossy(&out);
+        let names: std::collections::HashSet<&str> = out
+            .lines()
+            .filter_map(|l| {
+                l.strip_prefix("refs/heads/")
+                    .or_else(|| l.strip_prefix("refs/tags/"))
+            })
+            .collect();
+        let longest = rest
+            .rmatch_indices('/')
+            .map(|(i, _)| i)
+            .find(|&i| names.contains(&rest[..i]));
+        Ok(longest.map_or(first, |i| (&rest[..i], &rest[i + 1..])))
+    }
+
     async fn refs(&self) -> Result<Value, ReadError> {
         let out = self
             .run(
@@ -505,11 +586,8 @@ impl Git<'_> {
         Ok((!s.ends_with("missing") && !s.contains(' ')).then_some(s))
     }
 
-    async fn blob(&self, oid: &str, path: &str) -> Result<Value, ReadError> {
-        let path = check_path(path)?;
-        if path.is_empty() {
-            return Err(ReadError::bad("path required"));
-        }
+    /// The object ID and size of the file at `path`.
+    async fn blob_info(&self, oid: &str, path: &str) -> Result<(String, u64), ReadError> {
         let spec = format!("{oid}:{path}");
         let out = self
             .run(
@@ -528,7 +606,16 @@ impl Git<'_> {
         if kind != "blob" {
             return Err(ReadError::new("not_a_file", "path is a directory"));
         }
-        let size: u64 = size.parse().unwrap_or(u64::MAX);
+        Ok((blob.to_string(), size.parse().unwrap_or(u64::MAX)))
+    }
+
+    async fn blob(&self, oid: &str, path: &str) -> Result<Value, ReadError> {
+        let path = check_path(path)?;
+        if path.is_empty() {
+            return Err(ReadError::bad("path required"));
+        }
+        let (blob, size) = self.blob_info(oid, path).await?;
+        let blob = blob.as_str();
         let mut text = None;
         let mut binary = false;
         if size <= MAX_BLOB_BYTES {

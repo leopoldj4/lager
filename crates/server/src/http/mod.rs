@@ -376,6 +376,14 @@ async fn git_handler(State(s): State<AppState>, req: Request) -> Response {
         .copied()
         .unwrap_or(RequestTag(uuid::Uuid::new_v4()));
     let (parts, body) = req.into_parts();
+    if let Some((name, rest)) = crate::web::raw::parse(parts.uri.path())
+        && s.web.is_some()
+    {
+        if parts.method != Method::GET {
+            return plain(StatusCode::METHOD_NOT_ALLOWED, "method not allowed");
+        }
+        return crate::web::raw::serve(&s, &parts.headers, name, rest).await;
+    }
     let Some(route) = parse_git_path(parts.uri.path()) else {
         if parts.method == Method::GET
             && crate::web::wants_page(&parts.headers)

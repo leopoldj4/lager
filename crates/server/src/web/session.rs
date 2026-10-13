@@ -14,8 +14,11 @@ use worktree_core::identity::{AuthError, Identity};
 use worktree_core::password::{constant_time_eq, hmac_sha256};
 
 pub const COOKIE: &str = "worktree_session";
-/// The cookie is sent only to the API, never with Git requests.
-pub const COOKIE_PATH: &str = "/-/api";
+/// The whole site: the API and the raw files under each repository. Git
+/// requests carry the cookie too, but Git authentication ignores it.
+pub const COOKIE_PATH: &str = "/";
+/// Earlier cookies covered only the API; signing in and out removes them.
+const OLD_COOKIE_PATH: &str = "/-/api";
 
 pub struct Sessions {
     secret: Vec<u8>,
@@ -63,9 +66,18 @@ impl Sessions {
         self.cookie("", 0)
     }
 
+    /// The `Set-Cookie` value that removes a session of an earlier path.
+    pub fn clear_old(&self) -> String {
+        self.cookie_at(OLD_COOKIE_PATH, "", 0)
+    }
+
     fn cookie(&self, value: &str, max_age: u64) -> String {
+        self.cookie_at(COOKIE_PATH, value, max_age)
+    }
+
+    fn cookie_at(&self, path: &str, value: &str, max_age: u64) -> String {
         format!(
-            "{COOKIE}={value}; Path={COOKIE_PATH}; Max-Age={max_age}; HttpOnly; SameSite=Lax{}",
+            "{COOKIE}={value}; Path={path}; Max-Age={max_age}; HttpOnly; SameSite=Lax{}",
             if self.secure { "; Secure" } else { "" }
         )
     }

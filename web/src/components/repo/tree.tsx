@@ -10,6 +10,7 @@ import { QueryError } from "@/components/query-error"
 import { CommitLine } from "./commit-line"
 import { PathCrumbs } from "./path-crumbs"
 import { RevPicker } from "./rev-picker"
+import { isMarkdown, MarkdownView } from "./markdown"
 
 const icons = {
   tree: Folder,
@@ -169,9 +170,13 @@ function Readme({
       <div className="border-b px-4 py-2 text-sm font-medium">
         {path.split("/").pop()}
       </div>
-      <pre className="overflow-x-auto p-6 font-mono text-sm leading-relaxed whitespace-pre-wrap">
-        {blob.data.text}
-      </pre>
+      {isMarkdown(path) ? (
+        <MarkdownView repo={repo} rev={rev} path={path} text={blob.data.text} />
+      ) : (
+        <pre className="overflow-x-auto p-6 font-mono text-sm leading-relaxed whitespace-pre-wrap">
+          {blob.data.text}
+        </pre>
+      )}
     </div>
   )
 }

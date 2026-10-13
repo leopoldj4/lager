@@ -1,12 +1,13 @@
 import type { SelectedLineRange } from "@pierre/diffs"
 import { File } from "@pierre/diffs/react"
-import { Link } from "@tanstack/react-router"
-import { History } from "lucide-react"
+import { Link, Navigate } from "@tanstack/react-router"
+import { FileDown, History } from "lucide-react"
 import { useMemo, useState, type ReactNode } from "react"
 
 import { useBlob, type Refs } from "@/lib/api"
 import { bytes } from "@/lib/format"
-import { href } from "@/lib/paths"
+import { LiveError } from "@/lib/live"
+import { href, rawHref } from "@/lib/paths"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
@@ -15,6 +16,7 @@ import { PathCrumbs } from "./path-crumbs"
 import { RevPicker } from "./rev-picker"
 import { CopyButton } from "./clone"
 import { codeOptions, codeStyle } from "./diff"
+import { isMarkdown, MarkdownView } from "./markdown"
 
 export function BlobView({
   repo,
@@ -28,17 +30,37 @@ export function BlobView({
   refs: Refs
 }) {
   const blob = useBlob(repo, rev, path)
+  const markdown = isMarkdown(path)
+  const [source, setSource] = useState(false)
+  // Relative links in Markdown files name directories as files too.
+  if (blob.error instanceof LiveError && blob.error.code === "not_a_file") {
+    return (
+      <Navigate
+        to="/$"
+        params={{ _splat: href(repo, "tree", rev, path) }}
+        replace
+      />
+    )
+  }
   return (
     <div className="grid grid-cols-1 gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <RevPicker repo={repo} view="blob" rev={rev} path={path} refs={refs} />
         <PathCrumbs repo={repo} rev={rev} path={path} />
-        <Button asChild variant="ghost" size="sm" className="ml-auto">
-          <Link to="/$" params={{ _splat: href(repo, "commits", rev, path) }}>
-            <History />
-            History
-          </Link>
-        </Button>
+        <div className="ml-auto flex gap-1">
+          <Button asChild variant="ghost" size="sm">
+            <a href={rawHref(repo, rev, path)}>
+              <FileDown />
+              Raw
+            </a>
+          </Button>
+          <Button asChild variant="ghost" size="sm">
+            <Link to="/$" params={{ _splat: href(repo, "commits", rev, path) }}>
+              <History />
+              History
+            </Link>
+          </Button>
+        </div>
       </div>
       {blob.error ? (
         <QueryError error={blob.error} />
@@ -47,11 +69,33 @@ export function BlobView({
       ) : (
         <div className="overflow-hidden rounded-lg border">
           <CommitLine repo={repo} commit={blob.data.last_commit} />
-          {blob.data.text !== null ? (
+          {blob.data.text !== null && markdown && !source ? (
+            <>
+              <FileInfo
+                size={blob.data.size}
+                text={blob.data.text}
+                source={source}
+                onSource={setSource}
+              />
+              <MarkdownView
+                repo={repo}
+                rev={rev}
+                path={blob.data.path}
+                text={blob.data.text}
+              />
+            </>
+          ) : blob.data.text !== null ? (
             <Code
               path={blob.data.path}
               text={blob.data.text}
-              header={<FileInfo size={blob.data.size} text={blob.data.text} />}
+              header={
+                <FileInfo
+                  size={blob.data.size}
+                  text={blob.data.text}
+                  source={markdown ? source : undefined}
+                  onSource={setSource}
+                />
+              }
             />
           ) : (
             <>
@@ -69,9 +113,38 @@ export function BlobView({
   )
 }
 
-function FileInfo({ size, text }: { size: number; text: string | null }) {
+function FileInfo({
+  size,
+  text,
+  source,
+  onSource,
+}: {
+  size: number
+  text: string | null
+  /** For Markdown files: whether the source shows instead of the page. */
+  source?: boolean
+  onSource?: (source: boolean) => void
+}) {
   return (
     <div className="flex items-center gap-3 border-b px-4 py-2 text-xs text-muted-foreground">
+      {source !== undefined && onSource && (
+        <span className="flex gap-1">
+          <Button
+            variant={source ? "ghost" : "secondary"}
+            size="xs"
+            onClick={() => onSource(false)}
+          >
+            Preview
+          </Button>
+          <Button
+            variant={source ? "secondary" : "ghost"}
+            size="xs"
+            onClick={() => onSource(true)}
+          >
+            Code
+          </Button>
+        </span>
+      )}
       {text !== null && (
         <span>{text.replace(/\n$/, "").split("\n").length} lines</span>
       )}

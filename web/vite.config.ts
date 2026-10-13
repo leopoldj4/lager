@@ -16,6 +16,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/-/api": { target: server, ws: true, changeOrigin: false },
+      "^/.+/-/raw/": { target: server, changeOrigin: false },
     },
   },
   plugins: [
