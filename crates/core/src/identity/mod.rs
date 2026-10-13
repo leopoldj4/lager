@@ -9,6 +9,7 @@
 //! (docs/decisions/0009-personal-access-tokens.md): the token takes the
 //! place of the password, and can limit the user's access further.
 
+pub mod passkeys;
 pub mod postgres;
 
 pub use postgres::PgUsers;

@@ -1,7 +1,12 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import { signIn } from "@/lib/api"
+import {
+  signInWithPasskey,
+  passkeyError,
+  supportsPasskeys,
+} from "@/lib/passkeys"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,6 +33,36 @@ function SignIn() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
+  const [user, setUser] = useState("")
+  const [passkeySupported, setPasskeySupported] = useState(false)
+  useEffect(() => setPasskeySupported(supportsPasskeys()), [])
+
+  function destination() {
+    return next &&
+      !next.startsWith("//") &&
+      !next.includes("\\") &&
+      (!next.startsWith("/-/") || next === "/-/passkeys")
+      ? next
+      : "/"
+  }
+
+  async function passkey() {
+    if (!user.trim()) {
+      setError("Enter your user name to sign in with a passkey.")
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await signInWithPasskey(user)
+      navigate({ href: destination() })
+    } catch (err) {
+      setError(passkeyError(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
@@ -35,7 +70,7 @@ function SignIn() {
     setError(null)
     try {
       await signIn(String(form.get("user")), String(form.get("password")))
-      navigate({ href: next && !next.startsWith("/-/") ? next : "/" })
+      navigate({ href: destination() })
     } catch (err) {
       setError(err instanceof Error ? err.message : "sign-in failed")
     } finally {
@@ -49,7 +84,7 @@ function SignIn() {
         <CardHeader>
           <CardTitle>Sign in</CardTitle>
           <CardDescription>
-            With the user name and password you use for Git.
+            Use your password or a registered passkey.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -64,6 +99,8 @@ function SignIn() {
               <Input
                 id="user"
                 name="user"
+                value={user}
+                onChange={(e) => setUser(e.target.value)}
                 autoComplete="username"
                 required
                 autoFocus
@@ -82,6 +119,16 @@ function SignIn() {
             <Button type="submit" disabled={busy}>
               {busy ? "Signing in…" : "Sign in"}
             </Button>
+            {passkeySupported && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={passkey}
+              >
+                Sign in with a passkey
+              </Button>
+            )}
           </form>
         </CardContent>
       </Card>

@@ -8,6 +8,7 @@
 //! application shell, which routes in the browser.
 
 pub mod live;
+mod passkeys;
 pub mod raw;
 pub mod read;
 pub mod session;
@@ -29,6 +30,7 @@ use worktree_core::identity::{AuthError, Identity, TOKEN_PREFIX};
 
 pub struct Web {
     pub sessions: session::Sessions,
+    passkey_origin: Option<String>,
     dir: Option<PathBuf>,
     /// Ends live connections when the server stops.
     stop: watch::Receiver<bool>,
@@ -46,10 +48,15 @@ impl Web {
             None => tracing::info!("web interface not built; serving only its API"),
         }
         Self {
+            passkey_origin: cfg.passkey_origin.clone(),
             sessions: session::Sessions::new(
                 &cfg.session_secret,
                 worktree_core::limits::SESSION_DAYS,
-                secure,
+                secure
+                    || cfg
+                        .passkey_origin
+                        .as_deref()
+                        .is_some_and(|o| o.starts_with("https://")),
             ),
             dir,
             stop,
@@ -118,6 +125,7 @@ impl Web {
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(passkeys::router())
         .route("/-/api/session", post(sign_in).delete(sign_out))
         .route("/-/api/live", get(live::upgrade))
         .route("/-/assets/{*file}", get(asset))

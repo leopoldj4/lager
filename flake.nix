@@ -49,7 +49,7 @@
           version = "0.1.0";
           strictDeps = true;
           nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
+          buildInputs = [ pkgs.openssl ] ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;

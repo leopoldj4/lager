@@ -77,6 +77,9 @@ pub struct WebConfig {
     /// Signs session cookies: at least 32 characters, the same on every
     /// server. A new secret signs every user out.
     pub session_secret: String,
+    /// Public origin for passkeys, e.g. https://git.example.com.
+    #[serde(default)]
+    pub passkey_origin: Option<String>,
 }
 
 fn default_cache_dir() -> PathBuf {
@@ -100,6 +103,9 @@ impl Config {
             anyhow::ensure!(!b.url.is_empty(), "bus.url is empty");
         }
         if let Some(w) = &self.web {
+            if let Some(origin) = &w.passkey_origin {
+                crate::identity::passkeys::webauthn(origin)?;
+            }
             anyhow::ensure!(
                 w.session_secret.chars().count() >= 32,
                 "web.session_secret needs at least 32 characters"

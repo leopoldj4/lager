@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router"
-import { GitBranch, LogOut, User } from "lucide-react"
+import { GitBranch, KeyRound, LogOut, User } from "lucide-react"
 
 import { signOut, useLive } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -41,6 +41,12 @@ export function Header() {
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Signed in as {state.user}</DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/-/passkeys">
+                  <KeyRound />
+                  Passkeys
+                </Link>
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={async () => {
                   await signOut()

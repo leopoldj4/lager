@@ -131,6 +131,7 @@ url = "nats://nats.internal:4222"  # without [bus], events stay on this server
 
 [web]                              # web interface and its API under /-/
 session_secret = "..."             # at least 32 characters, the same on every server
+passkey_origin = "https://git.example.com" # optional; exact public origin, no trailing slash
 ```
 
 Every server is plain HTTP behind a load balancer that terminates HTTPS
@@ -260,3 +261,30 @@ The Cargo workspace has three crates:
 purpose other than a product or service that competes with it. Each version
 becomes available under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)
 two years after it is released.
+
+### Passkey login
+
+Set `web.passkey_origin` to the exact public origin (for example
+`https://git.example.com`) on every server and restart. HTTPS is required;
+`http://localhost:8080` is allowed for local development. For the Vite UI,
+use its origin instead, for example `http://localhost:3000`, and open that
+same address in the browser. The RP ID is the origin's hostname; changing
+that hostname requires enrolling new passkeys.
+
+Sign in with your password, open **Passkeys** in the user menu, then name
+and add a passkey after confirming your password. On later visits, enter
+your user name and choose **Sign in with a passkey**. The same account page
+lists and removes passkeys (up to 20 per account). Password and Git token
+login remain available. Removing a passkey blocks future logins with it;
+it does not revoke existing sessions. Changing the account password ends
+sessions and pending ceremonies, but enrolled passkeys remain valid.
+
+Schema migrations run at startup. Public credentials and five-minute,
+single-use ceremony state live in PostgreSQL, so no sticky sessions are
+needed. The serialization feature of
+[`webauthn-rs`](https://docs.rs/webauthn-rs/0.5.5/webauthn_rs/)
+is used only for server-side state, never browser storage.
+
+The passkey integration test uses a software authenticator and a disposable
+PostgreSQL database: `WORKTREE_TEST_DATABASE_URL=postgres://... nix develop
+--command cargo test -p worktree-core passkey_lifecycle -- --ignored`.

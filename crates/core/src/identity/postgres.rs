@@ -26,7 +26,8 @@ use crate::repo::Access;
 
 /// Schema changes, applied in order and recorded in `worktree_schema`.
 /// Never edit an applied entry; append a new one.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE worktree_users (
     name text PRIMARY KEY,
     password_hash text NOT NULL,
@@ -61,7 +62,27 @@ CREATE TABLE worktree_token_access (
     level text NOT NULL CHECK (level IN ('none', 'read', 'write', 'force')),
     PRIMARY KEY (token_id, repository)
 );
-"#];
+"#,
+    r#"
+ALTER TABLE worktree_users ADD COLUMN passkey_user_id text NOT NULL DEFAULT gen_random_uuid()::text;
+CREATE TABLE worktree_passkeys (
+    credential_id text PRIMARY KEY,
+    user_name text NOT NULL REFERENCES worktree_users(name) ON DELETE CASCADE,
+    name text NOT NULL,
+    credential text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX worktree_passkeys_user ON worktree_passkeys(user_name);
+CREATE TABLE worktree_passkey_challenges (
+    id text PRIMARY KEY,
+    user_name text NOT NULL REFERENCES worktree_users(name) ON DELETE CASCADE,
+    state text NOT NULL,
+    expires_at timestamptz NOT NULL DEFAULT now() + interval '5 minutes'
+);
+CREATE INDEX worktree_passkey_challenges_user ON worktree_passkey_challenges(user_name);
+CREATE INDEX worktree_passkey_challenges_expiry ON worktree_passkey_challenges(expires_at);
+"#,
+];
 
 /// Tokens a user can have at the same time.
 const MAX_TOKENS: i64 = 100;
@@ -133,8 +154,8 @@ ORDER BY u.name";
 type UserRow = (String, i64, i64, String, Option<String>, Option<String>);
 
 pub struct PgUsers {
-    pool: PgPool,
-    verified: VerifiedHashes,
+    pub(super) pool: PgPool,
+    pub(super) verified: VerifiedHashes,
 }
 
 impl PgUsers {

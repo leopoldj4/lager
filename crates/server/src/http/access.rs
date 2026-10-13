@@ -27,6 +27,10 @@ impl Directory {
         Self { users, catalog }
     }
 
+    pub fn users(&self) -> &PgUsers {
+        &self.users
+    }
+
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
     }

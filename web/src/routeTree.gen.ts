@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SplatRouteImport } from './routes/$'
+import { Route as Char91Char93PasskeysRouteImport } from './routes/[-].passkeys'
 import { Route as Char91Char93SignInRouteImport } from './routes/[-].sign-in'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +24,11 @@ const SplatRoute = SplatRouteImport.update({
   path: '/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const Char91Char93PasskeysRoute = Char91Char93PasskeysRouteImport.update({
+  id: '/-/passkeys',
+  path: '/-/passkeys',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const Char91Char93SignInRoute = Char91Char93SignInRouteImport.update({
   id: '/-/sign-in',
   path: '/-/sign-in',
@@ -32,30 +38,34 @@ const Char91Char93SignInRoute = Char91Char93SignInRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/-/passkeys': typeof Char91Char93PasskeysRoute
   '/-/sign-in': typeof Char91Char93SignInRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/-/passkeys': typeof Char91Char93PasskeysRoute
   '/-/sign-in': typeof Char91Char93SignInRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/-/passkeys': typeof Char91Char93PasskeysRoute
   '/-/sign-in': typeof Char91Char93SignInRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$' | '/-/sign-in'
+  fullPaths: '/' | '/$' | '/-/passkeys' | '/-/sign-in'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$' | '/-/sign-in'
-  id: '__root__' | '/' | '/$' | '/-/sign-in'
+  to: '/' | '/$' | '/-/passkeys' | '/-/sign-in'
+  id: '__root__' | '/' | '/$' | '/-/passkeys' | '/-/sign-in'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SplatRoute: typeof SplatRoute
+  Char91Char93PasskeysRoute: typeof Char91Char93PasskeysRoute
   Char91Char93SignInRoute: typeof Char91Char93SignInRoute
 }
 
@@ -75,6 +85,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/-/passkeys': {
+      id: '/-/passkeys'
+      path: '/-/passkeys'
+      fullPath: '/-/passkeys'
+      preLoaderRoute: typeof Char91Char93PasskeysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/-/sign-in': {
       id: '/-/sign-in'
       path: '/-/sign-in'
@@ -88,6 +105,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SplatRoute: SplatRoute,
+  Char91Char93PasskeysRoute: Char91Char93PasskeysRoute,
   Char91Char93SignInRoute: Char91Char93SignInRoute,
 }
 export const routeTree = rootRouteImport

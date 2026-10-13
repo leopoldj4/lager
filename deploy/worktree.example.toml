@@ -25,3 +25,6 @@ url = "nats://nats:4222"
 [web]
 # At least 32 characters: openssl rand -base64 32
 session_secret = "CHANGE"
+
+# Enable passkeys for the browser-facing HTTPS origin, without a trailing slash.
+# passkey_origin = "https://git.example.com"
