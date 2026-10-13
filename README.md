@@ -245,6 +245,8 @@ above `drain_delay_secs` plus `shutdown_timeout_secs`, and keep
 `deploy/` runs it on one host with Docker Compose: Caddy for HTTPS, worktree,
 NATS, and PostgreSQL, with repositories in an external S3-compatible service.
 
+For updates to an existing deployment, see the [deployment update guide](deploy/README.md).
+
 ```bash
 nix build .#docker && ./result | docker load      # note the image name
 cd deploy
