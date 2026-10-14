@@ -27,4 +27,4 @@ url = "nats://nats:4222"
 session_secret = "CHANGE"
 
 # Enable passkeys for the browser-facing HTTPS origin, without a trailing slash.
-# passkey_origin = "https://git.example.com"
+# public_origin = "https://git.example.com"

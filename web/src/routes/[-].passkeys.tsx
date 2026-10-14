@@ -46,18 +46,13 @@ function Passkeys() {
     setError(null)
     setMessage(null)
     try {
-      await addPasskey(String(data.get("name")), String(data.get("password")))
+      await addPasskey(String(data.get("name")))
       form.reset()
       setMessage("Passkey added. You can use it the next time you sign in.")
       await qc.invalidateQueries({ queryKey: ["passkeys"] })
     } catch (err) {
       setError(passkeyError(err))
     } finally {
-      // Do not leave the confirmation password in the form after a failed ceremony.
-      const password = form.elements.namedItem(
-        "password"
-      ) as HTMLInputElement | null
-      if (password) password.value = ""
       setBusy(false)
     }
   }
@@ -159,19 +154,6 @@ function Passkeys() {
                       placeholder="Personal laptop"
                       required
                       maxLength={100}
-                      disabled={busy}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="confirm-password">
-                      Confirm your password
-                    </Label>
-                    <Input
-                      id="confirm-password"
-                      name="password"
-                      type="password"
-                      autoComplete="current-password"
-                      required
                       disabled={busy}
                     />
                   </div>

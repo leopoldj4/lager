@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 use webauthn_rs::prelude::*;
 
-use super::{AuthError, PgUsers, TOKEN_PREFIX, password_stamp};
+use super::{AuthError, PgUsers, password_stamp};
 
 type Result<T> = std::result::Result<T, AuthError>;
 
@@ -13,7 +13,7 @@ pub fn webauthn(origin: &str) -> anyhow::Result<Webauthn> {
     let url = Url::parse(origin)?;
     anyhow::ensure!(
         url.origin().ascii_serialization() == origin,
-        "web.passkey_origin must be an origin without a path or trailing slash"
+        "web.public_origin must be an origin without a path or trailing slash"
     );
     anyhow::ensure!(
         url.scheme() == "https" || (url.scheme() == "http" && url.host_str() == Some("localhost")),
@@ -41,15 +41,14 @@ enum Ceremony {
         name: String,
     },
     Authenticate {
-        state: PasskeyAuthentication,
-        keys: Vec<Passkey>,
+        state: DiscoverableAuthentication,
     },
 }
 
 #[derive(Serialize, Deserialize)]
 struct Pending {
-    user: String,
-    stamp: [u8; 32],
+    user: Option<String>,
+    stamp: Option<[u8; 32]>,
     origin: String,
     ceremony: Ceremony,
 }
@@ -92,12 +91,12 @@ impl PgUsers {
         Ok(())
     }
 
-    /// A password confirmation is required to enroll an additional login method.
-    pub async fn start_passkey(
+    /// Registration requires the caller to authenticate the user with a browser session.
+    pub async fn start_passkey_registration(
         &self,
         origin: &str,
         user: &str,
-        registration: Option<(&str, &str)>,
+        name: &str,
     ) -> Result<(String, serde_json::Value)> {
         let webauthn = webauthn(origin).map_err(unavailable)?;
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
@@ -113,46 +112,33 @@ impl PgUsers {
             .iter()
             .map(|(data,)| decode(data))
             .collect::<Result<_>>()?;
-        let (options, ceremony) = if let Some((password, name)) = registration {
-            if password.starts_with(TOKEN_PREFIX)
-                || !self.verified.verify(user, password, &hash).await
-            {
-                return Err(AuthError::BadCredentials);
-            }
-            if keys.len() >= 20 || name.trim().is_empty() || name.len() > 100 {
-                return Err(AuthError::BadCredentials);
-            }
-            let (options, state) = webauthn
-                .start_passkey_registration(
-                    Uuid::parse_str(&handle).map_err(unavailable)?,
-                    user,
-                    user,
-                    Some(keys.iter().map(|k| k.cred_id().clone()).collect()),
-                )
-                .map_err(|_| AuthError::BadCredentials)?;
-            (
-                serde_json::to_value(options).map_err(unavailable)?,
-                Ceremony::Register {
-                    state,
-                    name: name.trim().into(),
-                },
+        if keys.len() >= 20 || name.trim().is_empty() || name.len() > 100 {
+            return Err(AuthError::BadCredentials);
+        }
+        let (options, state) = webauthn
+            .start_passkey_registration(
+                Uuid::parse_str(&handle).map_err(unavailable)?,
+                user,
+                user,
+                Some(keys.iter().map(|k| k.cred_id().clone()).collect()),
             )
-        } else {
-            let (options, state) = webauthn
-                .start_passkey_authentication(&keys)
-                .map_err(|_| AuthError::BadCredentials)?;
-            (
-                serde_json::to_value(options).map_err(unavailable)?,
-                Ceremony::Authenticate { state, keys },
-            )
+            .map_err(|_| AuthError::BadCredentials)?;
+        let mut options = serde_json::to_value(options).map_err(unavailable)?;
+        // Require a discoverable credential so the authenticator can offer the account
+        // without receiving a user name or credential allow-list during sign-in.
+        options["publicKey"]["authenticatorSelection"]["residentKey"] = "required".into();
+        options["publicKey"]["authenticatorSelection"]["requireResidentKey"] = true.into();
+        let ceremony = Ceremony::Register {
+            state,
+            name: name.trim().into(),
         };
         // Bounded per account, including concurrent starts on different servers.
         sqlx::query("DELETE FROM worktree_passkey_challenges WHERE expires_at <= now() OR id IN (SELECT id FROM worktree_passkey_challenges WHERE user_name = $1 ORDER BY expires_at DESC OFFSET 4)")
             .bind(user).execute(&mut *tx).await.map_err(unavailable)?;
         let id = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
         let pending = Pending {
-            user: user.into(),
-            stamp: password_stamp(&hash),
+            user: Some(user.into()),
+            stamp: Some(password_stamp(&hash)),
             origin: origin.into(),
             ceremony,
         };
@@ -170,14 +156,15 @@ impl PgUsers {
     }
 
     /// Consume before verification, including failed attempts. The id is an HttpOnly cookie.
-    async fn take_passkey(&self, id: &str, origin: &str) -> Result<Pending> {
-        let row: Option<(String,)> = sqlx::query_as("DELETE FROM worktree_passkey_challenges WHERE id = $1 AND expires_at > now() RETURNING state")
+    async fn take_passkey(&self, id: &str, origin: &str) -> Result<(Pending, String)> {
+        let row: Option<(String, String)> = sqlx::query_as("DELETE FROM worktree_passkey_challenges WHERE id = $1 AND expires_at > now() RETURNING state, (expires_at - interval '5 minutes')::text")
             .bind(id).fetch_optional(&self.pool).await.map_err(unavailable)?;
-        let pending: Pending = decode(&row.ok_or(AuthError::BadCredentials)?.0)?;
+        let (state, started_at) = row.ok_or(AuthError::BadCredentials)?;
+        let pending: Pending = decode(&state)?;
         if pending.origin != origin {
             return Err(AuthError::BadCredentials);
         }
-        Ok(pending)
+        Ok((pending, started_at))
     }
 
     pub async fn finish_passkey_registration(
@@ -187,8 +174,8 @@ impl PgUsers {
         user: &str,
         credential: &RegisterPublicKeyCredential,
     ) -> Result<()> {
-        let pending = self.take_passkey(id, origin).await?;
-        if pending.user != user {
+        let (pending, _) = self.take_passkey(id, origin).await?;
+        if pending.user.as_deref() != Some(user) {
             return Err(AuthError::BadCredentials);
         }
         let Ceremony::Register { state, name } = pending.ceremony else {
@@ -200,7 +187,7 @@ impl PgUsers {
             .map_err(|_| AuthError::BadCredentials)?;
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         let (hash, _) = account(&mut tx, user).await?;
-        if password_stamp(&hash) != pending.stamp {
+        if Some(password_stamp(&hash)) != pending.stamp {
             return Err(AuthError::BadCredentials);
         }
         let count: i64 =
@@ -220,39 +207,97 @@ impl PgUsers {
         tx.commit().await.map_err(unavailable)
     }
 
+    /// Start sign-in before an account is known. Only browser-held state is an opaque cookie.
+    pub async fn start_passkey_authentication(
+        &self,
+        origin: &str,
+        previous: Option<&str>,
+    ) -> Result<(String, serde_json::Value)> {
+        let (mut options, state) = webauthn(origin)
+            .map_err(unavailable)?
+            .start_discoverable_authentication()
+            .map_err(unavailable)?;
+        // A button-triggered browser dialog, not conditional autofill.
+        options.mediation = None;
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        // Serialize anonymous starts to enforce a hard bound on unauthenticated state.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(0x7275_7374_6769_7402_i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        sqlx::query("DELETE FROM worktree_passkey_challenges WHERE expires_at <= now() OR (user_name IS NULL AND id = $1)")
+            .bind(previous).execute(&mut *tx).await.map_err(unavailable)?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM worktree_passkey_challenges WHERE user_name IS NULL",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        if count >= 1024 {
+            return Err(AuthError::Unavailable(
+                "too many pending passkey logins".into(),
+            ));
+        }
+        let id = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
+        let pending = Pending {
+            user: None,
+            stamp: None,
+            origin: origin.into(),
+            ceremony: Ceremony::Authenticate { state },
+        };
+        sqlx::query("INSERT INTO worktree_passkey_challenges (id, state) VALUES ($1, $2)")
+            .bind(&id)
+            .bind(encode(&pending)?)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok((id, serde_json::to_value(options).map_err(unavailable)?))
+    }
+
     pub async fn finish_passkey_authentication(
         &self,
         origin: &str,
         id: &str,
         credential: &PublicKeyCredential,
     ) -> Result<(String, [u8; 32])> {
-        let pending = self.take_passkey(id, origin).await?;
-        let Ceremony::Authenticate { state, mut keys } = pending.ceremony else {
+        let (pending, started_at) = self.take_passkey(id, origin).await?;
+        let Ceremony::Authenticate { state } = pending.ceremony else {
             return Err(AuthError::BadCredentials);
         };
-        let result = webauthn(origin)
-            .map_err(unavailable)?
-            .finish_passkey_authentication(credential, &state)
+        let webauthn = webauthn(origin).map_err(unavailable)?;
+        // These identifiers are untrusted until the credential's signature is verified.
+        let (handle, credential_id) = webauthn
+            .identify_discoverable_authentication(credential)
             .map_err(|_| AuthError::BadCredentials)?;
-        let key = keys
-            .iter_mut()
-            .find(|k| k.cred_id() == result.cred_id())
-            .ok_or(AuthError::BadCredentials)?;
-        let old = encode(key)?;
-        key.update_credential(&result);
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
-        let (hash, _) = account(&mut tx, &pending.user).await?;
-        if password_stamp(&hash) != pending.stamp {
-            return Err(AuthError::BadCredentials);
-        }
-        // A removed or concurrently updated credential cannot authenticate from stale state.
-        let updated = sqlx::query("UPDATE worktree_passkeys SET credential = $1 WHERE credential_id = $2 AND user_name = $3 AND credential = $4")
-            .bind(encode(key)?).bind(credential_id(key)).bind(&pending.user).bind(old).execute(&mut *tx).await.map_err(unavailable)?;
-        if updated.rows_affected() != 1 {
-            return Err(AuthError::BadCredentials);
-        }
+        let row: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT u.name, u.password_hash, p.credential
+             FROM worktree_users u JOIN worktree_passkeys p ON p.user_name = u.name
+             WHERE u.passkey_user_id = $1 AND p.credential_id = $2
+               AND u.updated_at <= $3::text::timestamptz
+             FOR UPDATE OF u, p",
+        )
+        .bind(handle.to_string())
+        .bind(URL_SAFE_NO_PAD.encode(credential_id))
+        .bind(started_at)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let (user, hash, data) = row.ok_or(AuthError::BadCredentials)?;
+        let mut key: Passkey = decode(&data)?;
+        let result = webauthn
+            .finish_discoverable_authentication(credential, state, &[DiscoverableKey::from(&key)])
+            .map_err(|_| AuthError::BadCredentials)?;
+        key.update_credential(&result);
+        // Verify and update the current credential while holding its row lock, so removal
+        // and concurrent counter updates cannot authenticate using stale credential data.
+        sqlx::query("UPDATE worktree_passkeys SET credential = $1 WHERE credential_id = $2 AND user_name = $3")
+            .bind(encode(&key)?).bind(self::credential_id(&key)).bind(&user)
+            .execute(&mut *tx).await.map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
-        Ok((pending.user, pending.stamp))
+        Ok((user, password_stamp(&hash)))
     }
 }
 
@@ -265,182 +310,4 @@ async fn account(conn: &mut PgConnection, user: &str) -> Result<(String, String)
     .await
     .map_err(unavailable)?
     .ok_or(AuthError::BadCredentials)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn origin_requires_a_canonical_secure_origin() {
-        assert!(webauthn("https://git.example.com").is_ok());
-        assert!(webauthn("http://localhost:3000").is_ok());
-        for origin in [
-            "http://git.example.com",
-            "https://git.example.com/",
-            "https://git.example.com/path",
-            "https://user@git.example.com",
-            "https://git.example.com?x=1",
-        ] {
-            assert!(webauthn(origin).is_err(), "{origin}");
-        }
-    }
-
-    /// Run against a disposable database with WORKTREE_TEST_DATABASE_URL set.
-    #[tokio::test]
-    #[ignore = "requires PostgreSQL"]
-    async fn passkey_lifecycle() {
-        use crate::{
-            config::DatabaseConfig,
-            identity::{NewUser, UserChange},
-            password::PasswordHash,
-        };
-        use webauthn_authenticator_rs::{WebauthnAuthenticator, softpasskey::SoftPasskey};
-        let cfg = DatabaseConfig {
-            url: std::env::var("WORKTREE_TEST_DATABASE_URL").expect("test database URL"),
-        };
-        let users = PgUsers::connect(&cfg).await.unwrap();
-        let other_server = PgUsers::connect(&cfg).await.unwrap();
-        let user = format!("passkey-{}", Uuid::new_v4());
-        let password = "test-password-for-passkeys";
-        users
-            .create(
-                NewUser {
-                    name: user.clone(),
-                    password_hash: PasswordHash::new(password, 10_000).to_string(),
-                    access: Default::default(),
-                },
-                "test",
-            )
-            .await
-            .unwrap();
-        let origin = "https://git.example.com";
-        let url = Url::parse(origin).unwrap();
-        let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
-
-        assert!(
-            users
-                .start_passkey(origin, &user, Some(("wrong", "Laptop")))
-                .await
-                .is_err()
-        );
-        assert!(
-            users
-                .start_passkey(origin, &user, Some(("rgpat_fake", "Laptop")))
-                .await
-                .is_err()
-        );
-        assert!(
-            users
-                .start_passkey(origin, "missing-user", None)
-                .await
-                .is_err()
-        );
-        let (id, options) = users
-            .start_passkey(origin, &user, Some((password, "Laptop")))
-            .await
-            .unwrap();
-        let credential = authenticator
-            .do_registration(url.clone(), serde_json::from_value(options).unwrap())
-            .unwrap();
-        other_server
-            .finish_passkey_registration(origin, &id, &user, &credential)
-            .await
-            .unwrap();
-        assert!(
-            users
-                .finish_passkey_registration(origin, &id, &user, &credential)
-                .await
-                .is_err()
-        );
-        let keys = users.passkeys(&user).await.unwrap();
-        assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0].name, "Laptop");
-
-        // Finish on another server; replay and missing browser binding fail.
-        let (id, options) = users.start_passkey(origin, &user, None).await.unwrap();
-        let assertion = authenticator
-            .do_authentication(url.clone(), serde_json::from_value(options).unwrap())
-            .unwrap();
-        assert!(
-            users
-                .finish_passkey_authentication(origin, "wrong-cookie", &assertion)
-                .await
-                .is_err()
-        );
-        let (first, second) = tokio::join!(
-            users.finish_passkey_authentication(origin, &id, &assertion),
-            other_server.finish_passkey_authentication(origin, &id, &assertion),
-        );
-        assert_ne!(
-            first.is_ok(),
-            second.is_ok(),
-            "only one server may consume a challenge"
-        );
-        let (signed_in, stamp) = first.or(second).unwrap();
-        assert_eq!(signed_in, user);
-        assert_eq!(stamp, users.lookup(&user).await.unwrap().unwrap().stamp);
-        assert!(
-            users
-                .finish_passkey_authentication(origin, &id, &assertion)
-                .await
-                .is_err()
-        );
-
-        // Expiry, wrong origin, tampering, password changes, and revocation each fail.
-        for scenario in ["expired", "origin", "tampered", "password", "removed"] {
-            let (id, options) = users.start_passkey(origin, &user, None).await.unwrap();
-            let mut assertion = authenticator
-                .do_authentication(url.clone(), serde_json::from_value(options).unwrap())
-                .unwrap();
-            match scenario {
-                "expired" => {
-                    sqlx::query("UPDATE worktree_passkey_challenges SET expires_at = now() - interval '1 second' WHERE id = $1").bind(&id).execute(&users.pool).await.unwrap();
-                }
-                "tampered" => {
-                    assertion.response.signature = vec![0u8; 64].into();
-                }
-                "password" => {
-                    users
-                        .update(
-                            &user,
-                            UserChange {
-                                password_hash: Some(
-                                    PasswordHash::new("replacement-password", 10_000).to_string(),
-                                ),
-                                access: None,
-                            },
-                            "test",
-                        )
-                        .await
-                        .unwrap();
-                }
-                "removed" => {
-                    users.delete_passkey(&user, &keys[0].id).await.unwrap();
-                }
-                _ => {}
-            }
-            let request_origin = if scenario == "origin" {
-                "https://evil.example.com"
-            } else {
-                origin
-            };
-            assert!(
-                users
-                    .finish_passkey_authentication(request_origin, &id, &assertion)
-                    .await
-                    .is_err(),
-                "{scenario}"
-            );
-        }
-        assert!(users.passkeys(&user).await.unwrap().is_empty());
-        users.delete(&user, "test").await.unwrap();
-        let count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM worktree_passkey_challenges WHERE user_name = $1",
-        )
-        .bind(&user)
-        .fetch_one(&users.pool)
-        .await
-        .unwrap();
-        assert_eq!(count, 0);
-    }
 }

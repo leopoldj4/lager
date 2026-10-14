@@ -82,6 +82,11 @@ CREATE TABLE worktree_passkey_challenges (
 CREATE INDEX worktree_passkey_challenges_user ON worktree_passkey_challenges(user_name);
 CREATE INDEX worktree_passkey_challenges_expiry ON worktree_passkey_challenges(expires_at);
 "#,
+    r#"
+ALTER TABLE worktree_passkey_challenges ALTER COLUMN user_name DROP NOT NULL;
+-- Pending login state changes shape for account discovery.
+DELETE FROM worktree_passkey_challenges;
+"#,
 ];
 
 /// Tokens a user can have at the same time.
@@ -155,7 +160,7 @@ type UserRow = (String, i64, i64, String, Option<String>, Option<String>);
 
 pub struct PgUsers {
     pub(super) pool: PgPool,
-    pub(super) verified: VerifiedHashes,
+    verified: VerifiedHashes,
 }
 
 impl PgUsers {

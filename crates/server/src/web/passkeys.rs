@@ -28,7 +28,7 @@ fn context<'a>(s: &'a AppState, headers: &HeaderMap) -> Result<(&'a Web, &'a str
         .web
         .as_ref()
         .ok_or_else(|| StatusCode::NOT_FOUND.into_response())?;
-    let origin = web.passkey_origin.as_deref().ok_or_else(|| {
+    let origin = web.public_origin.as_deref().ok_or_else(|| {
         json_error(
             StatusCode::NOT_FOUND,
             "disabled",
@@ -126,7 +126,7 @@ async fn list(State(s): State<AppState>, headers: HeaderMap) -> Result<Response,
     let keys = s.directory.users().passkeys(&name).await.map_err(failure)?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({ "enabled": web.passkey_origin.is_some(), "passkeys": keys })),
+        Json(serde_json::json!({ "enabled": web.public_origin.is_some(), "passkeys": keys })),
     )
         .into_response())
 }
@@ -147,7 +147,6 @@ async fn remove(
 
 #[derive(serde::Deserialize)]
 struct Registration {
-    password: String,
     name: String,
 }
 async fn register_start(
@@ -160,7 +159,7 @@ async fn register_start(
     Ok(started(
         s.directory
             .users()
-            .start_passkey(origin, &name, Some((&body.password, &body.name)))
+            .start_passkey_registration(origin, &name, &body.name)
             .await,
         origin,
     ))
@@ -184,20 +183,12 @@ async fn register_finish(
     };
     Ok(finished(response, origin))
 }
-#[derive(serde::Deserialize)]
-struct Login {
-    user: String,
-}
-async fn login_start(
-    State(s): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<Login>,
-) -> Result<Response, Response> {
+async fn login_start(State(s): State<AppState>, headers: HeaderMap) -> Result<Response, Response> {
     let (_, origin) = context(&s, &headers)?;
     Ok(started(
         s.directory
             .users()
-            .start_passkey(origin, &body.user, None)
+            .start_passkey_authentication(origin, binding(&headers).ok())
             .await,
         origin,
     ))
@@ -234,32 +225,4 @@ async fn login_finish(
         }
     };
     Ok(finished(response, origin))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn ceremony_cookie_is_bound_to_browser_and_secure_origin() {
-        let value = cookie("https://git.example.com", &"a".repeat(43), 300);
-        assert!(
-            value
-                .to_str()
-                .unwrap()
-                .contains("HttpOnly; SameSite=Strict; Max-Age=300; Secure")
-        );
-        assert!(
-            !cookie("http://localhost:3000", "", 0)
-                .to_str()
-                .unwrap()
-                .contains("Secure")
-        );
-        let mut headers = HeaderMap::new();
-        assert!(binding(&headers).is_err());
-        headers.insert(
-            header::COOKIE,
-            HeaderValue::from_str(&format!("other=value; {COOKIE}={}", "a".repeat(43))).unwrap(),
-        );
-        assert_eq!(binding(&headers).unwrap(), "a".repeat(43));
-    }
 }

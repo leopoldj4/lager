@@ -33,7 +33,6 @@ function SignIn() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const [user, setUser] = useState("")
   const [passkeySupported, setPasskeySupported] = useState(false)
   useEffect(() => setPasskeySupported(supportsPasskeys()), [])
 
@@ -47,14 +46,10 @@ function SignIn() {
   }
 
   async function passkey() {
-    if (!user.trim()) {
-      setError("Enter your user name to sign in with a passkey.")
-      return
-    }
     setBusy(true)
     setError(null)
     try {
-      await signInWithPasskey(user)
+      await signInWithPasskey()
       navigate({ href: destination() })
     } catch (err) {
       setError(passkeyError(err))
@@ -94,17 +89,24 @@ function SignIn() {
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
+            {passkeySupported && (
+              <Button
+                type="button"
+                variant="default"
+                disabled={busy}
+                onClick={passkey}
+              >
+                Sign in with a passkey
+              </Button>
+            )}
+            {passkeySupported && (
+              <p className="text-center text-sm text-muted-foreground">
+                Or sign in with your password
+              </p>
+            )}
             <div className="grid gap-2">
               <Label htmlFor="user">User name</Label>
-              <Input
-                id="user"
-                name="user"
-                value={user}
-                onChange={(e) => setUser(e.target.value)}
-                autoComplete="username"
-                required
-                autoFocus
-              />
+              <Input id="user" name="user" autoComplete="username" required />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="password">Password</Label>
@@ -116,19 +118,9 @@ function SignIn() {
                 required
               />
             </div>
-            <Button type="submit" disabled={busy}>
+            <Button type="submit" variant="outline" disabled={busy}>
               {busy ? "Signing in…" : "Sign in"}
             </Button>
-            {passkeySupported && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busy}
-                onClick={passkey}
-              >
-                Sign in with a passkey
-              </Button>
-            )}
           </form>
         </CardContent>
       </Card>

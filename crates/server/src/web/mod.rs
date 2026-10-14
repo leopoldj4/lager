@@ -30,7 +30,7 @@ use worktree_core::identity::{AuthError, Identity, TOKEN_PREFIX};
 
 pub struct Web {
     pub sessions: session::Sessions,
-    passkey_origin: Option<String>,
+    public_origin: Option<String>,
     dir: Option<PathBuf>,
     /// Ends live connections when the server stops.
     stop: watch::Receiver<bool>,
@@ -48,13 +48,13 @@ impl Web {
             None => tracing::info!("web interface not built; serving only its API"),
         }
         Self {
-            passkey_origin: cfg.passkey_origin.clone(),
+            public_origin: cfg.public_origin.clone(),
             sessions: session::Sessions::new(
                 &cfg.session_secret,
                 worktree_core::limits::SESSION_DAYS,
                 secure
                     || cfg
-                        .passkey_origin
+                        .public_origin
                         .as_deref()
                         .is_some_and(|o| o.starts_with("https://")),
             ),

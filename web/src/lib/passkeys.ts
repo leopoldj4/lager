@@ -94,9 +94,9 @@ export function passkeyError(error: unknown) {
   return error instanceof Error ? error.message : "Passkey request failed."
 }
 
-export async function signInWithPasskey(user: string) {
+export async function signInWithPasskey() {
   requireSupport()
-  const { publicKey } = await request("/login/start", { user })
+  const { publicKey } = await request("/login/start")
   const credential = (await navigator.credentials.get({
     publicKey: {
       ...publicKey,
@@ -110,9 +110,9 @@ export async function signInWithPasskey(user: string) {
   queryClient.clear()
 }
 
-export async function addPasskey(name: string, password: string) {
+export async function addPasskey(name: string) {
   requireSupport()
-  const { publicKey } = await request("/register/start", { name, password })
+  const { publicKey } = await request("/register/start", { name })
   const credential = (await navigator.credentials.create({
     publicKey: {
       ...publicKey,
