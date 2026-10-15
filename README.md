@@ -222,6 +222,22 @@ docker compose exec worktree worktree user create <name> --access '*=force'
 docker compose exec worktree worktree token create <name> laptop
 ```
 
+To run storage on the same host instead (for example SeaweedFS on the
+Docker bridge, 172.17.0.1), add a `compose.override.yaml` that gives the
+server a name for the host, set `endpoint = "http://s3:8333"`, and let the
+containers through the host firewall:
+
+```yaml
+services:
+  worktree:
+    extra_hosts:
+      - "s3:host-gateway"
+```
+
+```bash
+ufw allow from 172.16.0.0/12 to 172.17.0.1 port 8333 proto tcp
+```
+
 On a Mac, build for x86_64 servers with
 `docker build --platform linux/amd64 ...`; it runs under emulation and is
 slow.
