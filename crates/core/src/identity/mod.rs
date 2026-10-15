@@ -32,6 +32,9 @@ pub enum Identity {
     User {
         name: String,
         access: BTreeMap<String, Access>,
+        /// The levels of the token used to sign in, if it has any: the user
+        /// then has at most these.
+        token: Option<BTreeMap<String, Access>>,
     },
 }
 
@@ -45,15 +48,28 @@ impl Identity {
         }
     }
 
-    /// The access level for a repository: its own entry, else `"*"`.
+    /// The access level for a repository: `force` for the user's own
+    /// repositories (`<user>/...`), else its own entry, else `"*"`; never
+    /// more than the token allows.
     pub fn access(&self, repo: &str) -> Access {
         match self {
             Identity::Anonymous => Access::None,
-            Identity::User { access, .. } => access
-                .get(repo)
-                .or_else(|| access.get("*"))
-                .copied()
-                .unwrap_or(Access::None),
+            Identity::User {
+                name,
+                access,
+                token,
+            } => {
+                let own = repo.split_once('/').is_some_and(|(owner, _)| owner == name);
+                let user = if own {
+                    Access::Force
+                } else {
+                    level(access, repo)
+                };
+                match token {
+                    Some(token) => user.min(level(token, repo)),
+                    None => user,
+                }
+            }
         }
     }
 }
@@ -130,24 +146,12 @@ pub struct NewToken {
     pub expires_days: Option<u32>,
 }
 
-/// The lower of two access levels for every repository: a token never
-/// grants more than its user has. Repositories that neither map names fall
-/// back to the lower `"*"` level, as [`Identity::access`] does.
-pub fn restrict(
-    user: &BTreeMap<String, Access>,
-    token: &BTreeMap<String, Access>,
-) -> BTreeMap<String, Access> {
-    let level = |m: &BTreeMap<String, Access>, k: &str| {
-        m.get(k)
-            .or_else(|| m.get("*"))
-            .copied()
-            .unwrap_or(Access::None)
-    };
-    user.keys()
-        .chain(token.keys())
-        .chain(std::iter::once(&"*".to_string()))
-        .map(|k| (k.clone(), level(user, k).min(level(token, k))))
-        .collect()
+fn level(access: &BTreeMap<String, Access>, repo: &str) -> Access {
+    access
+        .get(repo)
+        .or_else(|| access.get("*"))
+        .copied()
+        .unwrap_or(Access::None)
 }
 
 /// A user found by name, for web sessions

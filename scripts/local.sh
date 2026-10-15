@@ -81,14 +81,14 @@ for _ in $(seq 60); do
 done
 repos=$(worktree -c "$config" repo list)
 
-if ! grep -q '^demo' <<<"$repos"; then
-  worktree -c "$config" repo create demo
+if ! grep -q '^dev/demo' <<<"$repos"; then
+  worktree -c "$config" repo create dev/demo
 fi
 if ! worktree -c "$config" user list | grep -q '^dev\b'; then
   echo dev-password | worktree -c "$config" user create dev --access '*=force'
 fi
 
-echo "clone with: git clone http://dev:dev-password@$listen/demo.git"
+echo "clone with: git clone http://dev:dev-password@$listen/dev/demo.git"
 echo "web interface: http://$listen/ (sign in as dev / dev-password)"
 worktree-server -c "$config" &
 server_pid=$!

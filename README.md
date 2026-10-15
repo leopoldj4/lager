@@ -22,7 +22,7 @@ scripts/local.sh
 ```
 
 ```bash
-git clone http://dev:dev-password@127.0.0.1:8080/demo.git
+git clone http://dev:dev-password@127.0.0.1:8080/dev/demo.git
 ```
 
 The web interface is at http://127.0.0.1:8080/ (sign in as `dev` / `dev-password`).
@@ -75,6 +75,13 @@ next request on every server. The server creates and updates its tables
 when it starts. See [decision 8](docs/decisions/0008-users-in-postgres.md).
 Access levels are `none`, `read`, `write`, and `force` (also
 non-fast-forward updates and tag moves), per repository name or `*`.
+Every user has `force` on their own repositories (`<user>/...`), which also
+lets them create one with a push; a token limited to other repositories
+does not reach them.
+
+Repository names start with the owning user's name and have at least one
+more segment: `alice/app` or `alice/tools/app`, but not `app` or `alice`
+([decision 18](docs/decisions/0018-repositories-under-users.md)).
 
 Repositories live only in the catalog in storage
 (`<prefix>catalog/<sha256 of the name>.json`): the name, the repository

@@ -131,12 +131,19 @@ impl std::str::FromStr for Access {
 }
 
 /// Repository names: segments of `[A-Za-z0-9._-]`, separated by `/`, never
-/// starting with `.`. A segment `-` is reserved for the web interface
-/// (`/-/api/`, `/<name>/-/tree/...`). The name is never used as a disk path or storage key.
+/// starting with `.`. The first segment is the owning user's name and at
+/// least one more follows (`alice/app`, `alice/tools/app`). A segment `-` is
+/// reserved for the web interface (`/-/api/`, `/<name>/-/tree/...`). The name
+/// is never used as a disk path or storage key.
 pub fn validate_repo_name(name: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         !name.is_empty() && name.len() <= 200,
         "invalid repository name"
+    );
+    let owner = name.split_once('/').map(|(owner, _)| owner);
+    anyhow::ensure!(
+        owner.is_some_and(|o| crate::identity::validate_user_name(o).is_ok()),
+        "invalid repository name {name:?}: use <user>/<name>, such as alice/app"
     );
     for seg in name.split('/') {
         anyhow::ensure!(

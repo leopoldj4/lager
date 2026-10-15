@@ -18,7 +18,7 @@ use sqlx::{Connection, PgConnection};
 
 use super::{
     AuthError, Identity, NamedUser, NewToken, NewUser, TOKEN_PREFIX, Token, TokenId, User,
-    UserChange, UserError, VerifiedHashes, password_stamp, restrict,
+    UserChange, UserError, VerifiedHashes, password_stamp,
 };
 use crate::config::DatabaseConfig;
 use crate::limits::{DATABASE_CONNECTIONS, DATABASE_TIMEOUT};
@@ -229,14 +229,10 @@ impl PgUsers {
                 }
             });
         }
-        let access = if token_access.is_empty() {
-            user_access
-        } else {
-            restrict(&user_access, &token_access)
-        };
         Ok(Identity::User {
             name: user.to_string(),
-            access,
+            access: user_access,
+            token: (!token_access.is_empty()).then_some(token_access),
         })
     }
 }
@@ -314,6 +310,7 @@ impl PgUsers {
         Ok(Some(Identity::User {
             name: user.to_string(),
             access,
+            token: None,
         }))
     }
 
@@ -346,6 +343,7 @@ impl PgUsers {
             identity: Identity::User {
                 name: name.to_string(),
                 access,
+                token: None,
             },
             stamp,
         }))
