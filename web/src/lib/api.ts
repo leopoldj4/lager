@@ -189,6 +189,16 @@ export function useRepos() {
   })
 }
 
+/** Creates an empty repository with the chosen visibility. */
+export function useCreateRepo() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (repo: { name: string; public: boolean }) =>
+      live.request<{ repo: RepoSummary }>({ op: "repo_create", ...repo }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["repos"] }),
+  })
+}
+
 /**
  * Watches a repository while the page shows it. Answers the time of the
  * last push seen, to show that the page changed.
