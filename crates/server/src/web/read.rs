@@ -17,6 +17,7 @@ use tokio::process::Command;
 
 use crate::http::AppInner;
 use crate::repository::RepoError;
+use worktree_core::catalog::CatalogError;
 use worktree_core::identity::Identity;
 use worktree_core::model::RefName;
 use worktree_core::repo::{Access, RepoSettings};
@@ -34,6 +35,13 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
     Repos,
+    /// Creates an empty repository; needs a session.
+    RepoCreate {
+        name: String,
+        /// Anyone may read it, also without signing in.
+        #[serde(default)]
+        public: bool,
+    },
     Refs {
         repo: String,
     },
@@ -196,6 +204,7 @@ pub async fn readable(s: &AppInner, who: &Identity, name: &str) -> Result<RepoSe
 pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadError> {
     let name = match &q {
         Query::Repos => return repos(s, who).await,
+        Query::RepoCreate { name, public } => return create(s, who, name, *public).await,
         Query::Refs { repo }
         | Query::Log { repo, .. }
         | Query::Tree { repo, .. }
@@ -228,6 +237,7 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
     let g = Git { s, dir: &view.dir };
     let mut out = match q {
         Query::Repos
+        | Query::RepoCreate { .. }
         | Query::Pulls { .. }
         | Query::Pull { .. }
         | Query::Compare { .. }
@@ -338,6 +348,52 @@ async fn repos(s: &AppInner, who: &Identity) -> Result<Value, ReadError> {
         })
         .collect();
     Ok(json!({ "repos": repos }))
+}
+
+/// Creates a repository as a push to a missing name would
+/// (docs/decisions/0005-create-on-push.md), with the chosen visibility.
+async fn create(
+    s: &AppInner,
+    who: &Identity,
+    name: &str,
+    public: bool,
+) -> Result<Value, ReadError> {
+    if *who == Identity::Anonymous {
+        return Err(ReadError::new("unauthorized", "sign in first"));
+    }
+    worktree_core::repo::validate_repo_name(name).map_err(|e| ReadError::bad(e.to_string()))?;
+    if !s.directory.may_create_on_push(who, name) {
+        return Err(ReadError::new(
+            "forbidden",
+            format!("you cannot create repositories under {name}"),
+        ));
+    }
+    let mut settings = RepoSettings::new(name, worktree_core::model::RepoId::new());
+    settings.anonymous_read = public;
+    let repo = match s.directory.catalog().create(&settings, who.name()).await {
+        Ok(r) => r,
+        Err(CatalogError::Exists(_)) => {
+            return Err(ReadError::new("exists", format!("{name} exists already")));
+        }
+        Err(CatalogError::Invalid(m)) => return Err(ReadError::bad(m)),
+        Err(CatalogError::Storage(e)) => return Err(RepoError::from(e).into()),
+        Err(e) => {
+            tracing::warn!(error = %e, "repository catalog unavailable");
+            return Err(ReadError::new(
+                "unavailable",
+                "repository catalog unavailable; retry later",
+            ));
+        }
+    };
+    s.registry.svc.metrics.inc("repositories_created_on_web");
+    tracing::info!(repo = %name, id = %repo.id, user = %who.name(), public, "created repository on the web");
+    Ok(json!({
+        "repo": RepoSummary {
+            name: repo.name,
+            default_branch: repo.default_branch,
+            anonymous_read: repo.anonymous_read,
+        }
+    }))
 }
 
 /// Commit fields for `--format`, separated by NUL; records end with RS.

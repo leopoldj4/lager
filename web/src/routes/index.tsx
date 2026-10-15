@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
+import { CreateRepoDialog } from "@/components/create-repo-dialog"
 
 export const Route = createFileRoute("/")({ component: Repositories })
 
@@ -23,7 +24,10 @@ function Repositories() {
     <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-6">
       <div className="flex flex-wrap items-center gap-4">
         <h1 className="text-xl font-semibold">Repositories</h1>
-        <div className="relative ml-auto w-full sm:w-72">
+        <div className="ml-auto">
+          <CreateRepoDialog />
+        </div>
+        <div className="relative w-full sm:w-72">
           <Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Find a repository"
@@ -46,7 +50,7 @@ function Repositories() {
           {filter
             ? "No repository matches."
             : state?.user
-              ? "No repositories yet. Push to a new name to create one."
+              ? "No repositories yet. Create one or push to a new name."
               : "No public repositories. Sign in to see yours."}
         </p>
       ) : (

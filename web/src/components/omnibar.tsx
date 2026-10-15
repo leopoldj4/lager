@@ -88,9 +88,11 @@ function match(value: string, search: string, keywords?: string[]) {
 export function Omnibar({
   open,
   onOpenChange,
+  onCreateRepo,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  onCreateRepo: () => void
 }) {
   const repo = useCurrentRepo()
   const navigate = useNavigate()
@@ -165,6 +167,7 @@ export function Omnibar({
         <CommandList className="max-h-[min(28rem,60vh)]">
           <CommandEmpty>Nothing found.</CommandEmpty>
           {scope && <RepoGroups repo={scope} go={go} run={run} />}
+          <Actions run={run} onCreateRepo={onCreateRepo} />
           <RepoList go={go} />
           <Account run={run} />
         </CommandList>
@@ -175,6 +178,29 @@ export function Omnibar({
 
 type Go = (splat: string) => void
 type Run = (action: () => void) => void
+
+function Actions({
+  run,
+  onCreateRepo,
+}: {
+  run: Run
+  onCreateRepo: () => void
+}) {
+  const user = useLive()?.user
+  if (!user) return null
+  return (
+    <CommandGroup heading="Actions">
+      <CommandItem
+        value="action new repository"
+        keywords={["new repository", "create repo"]}
+        onSelect={() => run(onCreateRepo)}
+      >
+        <Plus />
+        New repository
+      </CommandItem>
+    </CommandGroup>
+  )
+}
 
 function RepoGroups({ repo, go, run }: { repo: string; go: Go; run: Run }) {
   const refs = useRefs(repo).data

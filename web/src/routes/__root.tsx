@@ -15,6 +15,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar, MobileHeader } from "@/components/app-sidebar"
 import { Omnibar } from "@/components/omnibar"
+import { CreateRepoDialog } from "@/components/create-repo-dialog"
 
 // Follows the system color scheme before the first paint.
 const theme = `(() => {
@@ -56,6 +57,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 function Root() {
   useEffect(() => live.start(), [])
   const [search, setSearch] = useState(false)
+  const [createRepo, setCreateRepo] = useState(false)
   const openSearch = () => setSearch(true)
   return (
     <QueryClientProvider client={queryClient}>
@@ -68,7 +70,16 @@ function Root() {
               <Outlet />
             </div>
           </SidebarInset>
-          <Omnibar open={search} onOpenChange={setSearch} />
+          <Omnibar
+            open={search}
+            onOpenChange={setSearch}
+            onCreateRepo={() => setCreateRepo(true)}
+          />
+          <CreateRepoDialog
+            open={createRepo}
+            onOpenChange={setCreateRepo}
+            trigger={false}
+          />
         </SidebarProvider>
       </TooltipProvider>
     </QueryClientProvider>
