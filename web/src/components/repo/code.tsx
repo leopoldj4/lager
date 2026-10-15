@@ -8,6 +8,7 @@ import {
 
 import type { Refs } from "@/lib/api"
 import { href, rawHref } from "@/lib/paths"
+import { cn } from "@/lib/utils"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { Button } from "@/components/ui/button"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
@@ -54,6 +55,8 @@ export function CodeView({
   const mobile = useIsMobile()
   const [sheet, setSheet] = useState(false)
   const panel = useRef<PanelImperativeHandle>(null)
+  // A hidden tree leaves no divider and no gap beside the preview.
+  const [collapsed, setCollapsed] = useState(false)
   const layout = useDefaultLayout({ id: "worktree-code" })
   const toggle = () => {
     if (mobile) return setSheet((s) => !s)
@@ -154,6 +157,7 @@ export function CodeView({
             <ResizablePanel
               id="files"
               panelRef={panel}
+              onResize={(size) => setCollapsed(size.inPixels === 0)}
               collapsible
               defaultSize={280}
               minSize={180}
@@ -162,8 +166,12 @@ export function CodeView({
             >
               {tree()}
             </ResizablePanel>
-            <ResizableHandle />
-            <ResizablePanel id="preview" minSize="40" className="pl-4">
+            <ResizableHandle className={cn(collapsed && "bg-transparent")} />
+            <ResizablePanel
+              id="preview"
+              minSize="40"
+              className={cn(!collapsed && "pl-4")}
+            >
               {preview}
             </ResizablePanel>
           </ResizablePanelGroup>
