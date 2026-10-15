@@ -1,7 +1,8 @@
 # 20. Repository overview and the application frame
 
 Status: accepted; implemented in `web/src/components/repo/overview.tsx`,
-`web/src/components/app-sidebar.tsx`, and `web/src/components/omnibar.tsx`.
+`web/src/components/repo/code.tsx`, `web/src/components/app-sidebar.tsx`,
+and `web/src/components/omnibar.tsx`.
 Date: October 15, 2026.
 
 ## Context
@@ -25,6 +26,13 @@ that opens one, and the latest tag. It reads the existing queries (`refs`,
 default branch without a `<rev>`. The tabs are Overview, Pull requests,
 Code, and Tags. History and branches have no tab: the overview and the
 code link to them, and they mark the Code tab. Addresses are unchanged.
+
+**Code view.** The Code tab uses the whole width: a file tree beside the
+directory or file the address names, in panels the user can resize and
+hide (`⌘\` or `Ctrl+\`); the browser keeps their sizes. The tree loads a
+directory when it opens, with the `tree` query, and opens the directories
+above the current path. Both panels scroll on their own. On narrow screens
+the tree opens in a sheet.
 
 **Sidebar.** The header is replaced by a sidebar on every page (shadcn
 `Sidebar`): the product name, search, the list of repositories, the user's

@@ -64,7 +64,7 @@ function Root() {
           <AppSidebar onSearch={openSearch} />
           <SidebarInset>
             <MobileHeader onSearch={openSearch} />
-            <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+            <div className="w-full flex-1 px-4 py-6">
               <Outlet />
             </div>
           </SidebarInset>

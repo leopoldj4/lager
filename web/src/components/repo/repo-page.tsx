@@ -7,8 +7,7 @@ import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
 import { CloneButton } from "./clone"
-import { TreeView } from "./tree"
-import { BlobView } from "./blob"
+import { CodeView } from "./code"
 import { CommitList } from "./commits"
 import { CommitView } from "./commit"
 import { RefList } from "./refs"
@@ -29,9 +28,16 @@ export function RepoPage({ loc }: { loc: Location }) {
   const split = splitRev(loc.rest, names)
   const rev = split.rev || refs.data?.head || ""
   const empty = refs.data && refs.data.branches.length === 0
+  // The code uses the whole width, for the file tree beside the file.
+  const wide = loc.view === "tree" || loc.view === "blob"
 
   return (
-    <div className="grid grid-cols-1 gap-6">
+    <div
+      className={cn(
+        "mx-auto grid w-full grid-cols-1 gap-6",
+        !wide && "max-w-6xl"
+      )}
+    >
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="flex min-w-0 items-center gap-2 text-xl break-all">
           <BookMarked className="size-5 text-muted-foreground" />
@@ -92,19 +98,13 @@ export function RepoPage({ loc }: { loc: Location }) {
           path={split.path}
           refs={refs.data}
         />
-      ) : loc.view === "blob" ? (
-        <BlobView
-          repo={loc.repo}
-          rev={rev}
-          path={split.path}
-          refs={refs.data}
-        />
       ) : (
-        <TreeView
+        <CodeView
           repo={loc.repo}
           rev={rev}
           path={split.path}
           refs={refs.data}
+          view={loc.view === "blob" ? "blob" : "tree"}
         />
       )}
     </div>

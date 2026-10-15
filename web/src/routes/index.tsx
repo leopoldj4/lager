@@ -20,7 +20,7 @@ function Repositories() {
   )
 
   return (
-    <div className="grid grid-cols-1 gap-6">
+    <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-6">
       <div className="flex flex-wrap items-center gap-4">
         <h1 className="text-xl font-semibold">Repositories</h1>
         <div className="relative ml-auto w-full sm:w-72">
