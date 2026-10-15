@@ -9,6 +9,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitPullRequest,
+  Key,
   KeyRound,
   LayoutDashboard,
   LogIn,
@@ -347,6 +348,14 @@ function Account({ run }: { run: Run }) {
           >
             <KeyRound />
             Passkeys
+          </CommandItem>
+          <CommandItem
+            value="account access tokens"
+            keywords={["tokens", "personal access token", "pat"]}
+            onSelect={() => run(() => navigate({ to: "/-/tokens" }))}
+          >
+            <Key />
+            Access tokens
           </CommandItem>
           <CommandItem
             value="account sign out"

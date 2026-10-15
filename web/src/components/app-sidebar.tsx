@@ -6,6 +6,7 @@ import {
   ChevronsUpDown,
   GitBranch,
   House,
+  Key,
   KeyRound,
   LogIn,
   LogOut,
@@ -288,6 +289,12 @@ function UserMenu() {
               <Link to="/-/passkeys" onClick={close}>
                 <KeyRound />
                 Passkeys
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/-/tokens" onClick={close}>
+                <Key />
+                Access tokens
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem

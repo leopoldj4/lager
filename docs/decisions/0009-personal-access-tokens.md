@@ -41,10 +41,10 @@ changes.
 | `GET users/<name>/tokens` | Admins: a user's tokens |
 | `DELETE users/<name>/tokens/<id>` | Admins: 204 |
 
-`POST tokens` needs the password: a token, perhaps limited to reading one
-repository, must not create a broader one. Listing and deleting work with a
-token, so `logout` can delete its own. `GET me` also answers `token`, the id
-the caller signed in with.
+Browser token creation uses the signed-in web session and the same-origin
+check used by other changes. Listing and deleting work with a token, so
+`logout` can delete its own. `GET me` also answers `token`, the id the caller
+signed in with.
 
 **Command line.** `worktree login` checks the credentials, creates a token
 named after the computer, and keeps the token instead of the password;
