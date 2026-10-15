@@ -18,7 +18,9 @@ use tokio::sync::Mutex;
 
 use crate::git::Git;
 use crate::metrics::Metrics;
-use worktree_core::model::{Head, ObjectFormat, RefName, RefState, RepoId, RepoState, RequestId};
+use worktree_core::model::{
+    Head, ObjectFormat, Oid, Operation, RefName, RefState, RepoId, RepoState, RequestId,
+};
 use worktree_core::repo::{Access, RefRule};
 use worktree_core::storage::{ETag, HeadRead, Storage, StorageError};
 
@@ -124,7 +126,18 @@ pub type AccessCheck =
 pub type DefaultBranchChanged =
     Arc<dyn Fn(RepoId, RefName) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
 
+/// Who asks for a ref change.
+#[derive(Clone, Debug)]
+pub enum Origin {
+    /// A Git client through `receive-pack`. Clients cannot change the refs
+    /// of pull requests.
+    Client,
+    /// The server itself, for pull requests: the operation of the entry.
+    Server(Operation),
+}
+
 /// A push operation that waits for the hook. Found by its access token.
+/// The server's own ref changes use it too, without the hook.
 #[derive(Clone)]
 pub struct PendingPush {
     pub repo: RepoId,
@@ -135,6 +148,9 @@ pub struct PendingPush {
     /// The cache the objects were received into.
     pub cache: Arc<CacheInstance>,
     pub default_branch_changed: Option<DefaultBranchChanged>,
+    pub origin: Origin,
+    /// Read dependencies checked against each CAS attempt without changing refs.
+    pub ref_guards: Vec<(RefName, Option<Oid>)>,
 }
 
 pub struct Registry {
@@ -255,6 +271,12 @@ pub struct ReadView {
     pub dir: PathBuf,
     pub generation: u64,
     _cache: Arc<CacheInstance>,
+}
+
+impl ReadView {
+    pub fn format(&self) -> ObjectFormat {
+        self._cache.format
+    }
 }
 
 impl Drop for ReadView {
@@ -430,6 +452,26 @@ impl Controller {
             .clone()
             .ok_or_else(|| RepoError::Internal("no cache".into()))?;
         Ok((cache, view))
+    }
+
+    /// For a ref change by the server: syncs the cache and returns it, a
+    /// read view, and the refs of the view's generation.
+    pub async fn prepare_change(
+        &self,
+    ) -> Result<(Arc<CacheInstance>, Arc<ReadView>, RefState), RepoError> {
+        let mut st = self.sync_to_storage().await?;
+        let view = self.view(&mut st).await?;
+        let cache = st
+            .cache
+            .clone()
+            .ok_or_else(|| RepoError::Internal("no cache".into()))?;
+        let refs = st
+            .known
+            .as_ref()
+            .ok_or_else(|| RepoError::Internal("cache not ready".into()))?
+            .refs
+            .clone();
+        Ok((cache, view, refs))
     }
 
     async fn view(&self, st: &mut CacheState) -> Result<Arc<ReadView>, RepoError> {

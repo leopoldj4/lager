@@ -93,6 +93,6 @@ Require documented storage guarantees from each provider. A local service cannot
 
 Keep SSH, Git LFS, partial clone, user hooks, SHA-256, and the management API as later work.
 
-Keep transactions across repositories, the user interface, and pull requests as later work. User hooks need process isolation. Partial clone needs object-access rules.
+Keep transactions across repositories as later work. Pull requests from forks and line comments follow [decision 19](docs/decisions/0019-pull-requests.md). User hooks need process isolation. Partial clone needs object-access rules.
 
 Consider push groups and early change notifications when measurements show a benefit. Writes across regions need storage guarantees that preserve the same transaction rules.

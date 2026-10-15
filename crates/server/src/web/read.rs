@@ -1,5 +1,6 @@
 //! Read queries of the web interface: repositories, refs, history, trees,
-//! files, and commits (docs/decisions/0014-web-interface.md).
+//! files, and commits (docs/decisions/0014-web-interface.md). Queries of
+//! pull requests are in [`super::pulls`].
 //!
 //! Each query reads a [`ReadView`](crate::repository::ReadView), so it sees
 //! every push accepted before it, and answers with the view's generation.
@@ -24,7 +25,7 @@ use worktree_core::repo::{Access, RepoSettings};
 const MAX_BLOB_BYTES: u64 = 1024 * 1024;
 /// The raw route refuses larger files.
 const MAX_RAW_BYTES: u64 = 20 * 1024 * 1024;
-const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
+pub(super) const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TREE_ENTRIES: usize = 5000;
 const MAX_LOG: u32 = 100;
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -61,6 +62,63 @@ pub enum Query {
         repo: String,
         rev: String,
     },
+    // Pull requests (docs/decisions/0019-pull-requests.md), answered by
+    // `super::pulls`. The ones that change something need a session.
+    Pulls {
+        repo: String,
+        /// Closed and merged ones instead of open ones.
+        #[serde(default)]
+        closed: bool,
+        #[serde(default)]
+        skip: u32,
+        #[serde(default = "default_limit")]
+        limit: u32,
+    },
+    Pull {
+        repo: String,
+        number: u64,
+    },
+    /// The commits and changes of `head` since its merge base with `base`.
+    Compare {
+        repo: String,
+        base: String,
+        head: String,
+    },
+    PullCreate {
+        repo: String,
+        source: String,
+        target: String,
+        title: String,
+        #[serde(default)]
+        body: String,
+        /// A UUID: a retry opens no second pull request.
+        #[serde(default)]
+        request: Option<String>,
+    },
+    PullComment {
+        repo: String,
+        number: u64,
+        body: String,
+        #[serde(default)]
+        request: Option<String>,
+    },
+    PullClose {
+        repo: String,
+        number: u64,
+    },
+    PullReopen {
+        repo: String,
+        number: u64,
+    },
+    PullMerge {
+        repo: String,
+        number: u64,
+        /// The source commit the page showed.
+        head: String,
+        #[serde(default)]
+        squash: bool,
+        request: String,
+    },
 }
 
 fn default_limit() -> u32 {
@@ -80,10 +138,10 @@ impl ReadError {
             message: message.into(),
         }
     }
-    fn not_found(what: &str) -> Self {
+    pub(super) fn not_found(what: &str) -> Self {
         Self::new("not_found", format!("{what} not found"))
     }
-    fn bad(message: impl Into<String>) -> Self {
+    pub(super) fn bad(message: impl Into<String>) -> Self {
         Self::new("bad_request", message)
     }
 }
@@ -142,16 +200,42 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
         | Query::Log { repo, .. }
         | Query::Tree { repo, .. }
         | Query::Blob { repo, .. }
-        | Query::Commit { repo, .. } => repo.clone(),
+        | Query::Commit { repo, .. }
+        | Query::Pulls { repo, .. }
+        | Query::Pull { repo, .. }
+        | Query::Compare { repo, .. }
+        | Query::PullCreate { repo, .. }
+        | Query::PullComment { repo, .. }
+        | Query::PullClose { repo, .. }
+        | Query::PullReopen { repo, .. }
+        | Query::PullMerge { repo, .. } => repo.clone(),
     };
     let repo = readable(s, who, &name).await?;
+    if !matches!(
+        q,
+        Query::Refs { .. }
+            | Query::Log { .. }
+            | Query::Tree { .. }
+            | Query::Blob { .. }
+            | Query::Commit { .. }
+    ) {
+        return super::pulls::run(s, who, &repo, q).await;
+    }
     let view = s.registry.controller(repo.id).prepare_read().await?;
     let _permits = crate::http::process_permit(s)
         .await
         .map_err(|_| ReadError::new("busy", "server busy; retry later"))?;
     let g = Git { s, dir: &view.dir };
     let mut out = match q {
-        Query::Repos => unreachable!(),
+        Query::Repos
+        | Query::Pulls { .. }
+        | Query::Pull { .. }
+        | Query::Compare { .. }
+        | Query::PullCreate { .. }
+        | Query::PullComment { .. }
+        | Query::PullClose { .. }
+        | Query::PullReopen { .. }
+        | Query::PullMerge { .. } => unreachable!(),
         Query::Refs { .. } => g.refs().await?,
         Query::Log {
             rev,
@@ -257,9 +341,10 @@ async fn repos(s: &AppInner, who: &Identity) -> Result<Value, ReadError> {
 }
 
 /// Commit fields for `--format`, separated by NUL; records end with RS.
-const COMMIT_FORMAT: &str = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%s%x1e";
+pub(super) const COMMIT_FORMAT: &str =
+    "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%s%x1e";
 
-fn parse_commits(out: &[u8]) -> Vec<Value> {
+pub(super) fn parse_commits(out: &[u8]) -> Vec<Value> {
     String::from_utf8_lossy(out)
         .split('\x1e')
         .filter_map(|rec| {
@@ -296,9 +381,9 @@ fn check_path(path: &str) -> Result<&str, ReadError> {
     }
 }
 
-struct Git<'a> {
-    s: &'a AppInner,
-    dir: &'a Path,
+pub(super) struct Git<'a> {
+    pub(super) s: &'a AppInner,
+    pub(super) dir: &'a Path,
 }
 
 impl Git<'_> {
@@ -308,7 +393,11 @@ impl Git<'_> {
         c
     }
 
-    async fn run(&self, args: &[&str], input: Option<Vec<u8>>) -> Result<Vec<u8>, ReadError> {
+    pub(super) async fn run(
+        &self,
+        args: &[&str],
+        input: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, ReadError> {
         let mut c = self.cmd();
         c.args(args);
         match tokio::time::timeout(GIT_TIMEOUT, crate::git::run(&mut c, input)).await {
@@ -319,7 +408,11 @@ impl Git<'_> {
 
     /// Like [`run`](Self::run), but keeps at most `max` bytes of output and
     /// stops Git when there is more.
-    async fn run_limited(&self, args: &[&str], max: usize) -> Result<(Vec<u8>, bool), ReadError> {
+    pub(super) async fn run_limited(
+        &self,
+        args: &[&str],
+        max: usize,
+    ) -> Result<(Vec<u8>, bool), ReadError> {
         let mut c = self.cmd();
         c.args(args)
             .stdout(std::process::Stdio::piped())
@@ -354,7 +447,7 @@ impl Git<'_> {
     }
 
     /// Whether `spec` names a commit; answers its object ID.
-    async fn commit_oid(&self, spec: &str) -> Option<String> {
+    pub(super) async fn commit_oid(&self, spec: &str) -> Option<String> {
         let spec = format!("{spec}^{{commit}}");
         let out = self
             .run(
@@ -374,7 +467,7 @@ impl Git<'_> {
 
     /// The commit for a branch name, a tag name, a full ref name, or the
     /// object ID of a commit that a ref reaches.
-    async fn resolve(&self, rev: &str) -> Result<String, ReadError> {
+    pub(super) async fn resolve(&self, rev: &str) -> Result<String, ReadError> {
         let is_oid =
             (rev.len() == 40 || rev.len() == 64) && rev.bytes().all(|b| b.is_ascii_hexdigit());
         if is_oid {
@@ -447,6 +540,28 @@ impl Git<'_> {
             .map(|(i, _)| i)
             .find(|&i| names.contains(&rest[..i]));
         Ok(longest.map_or(first, |i| (&rest[..i], &rest[i + 1..])))
+    }
+
+    /// The best common ancestor of two commits; `None` without one.
+    pub(super) async fn merge_base(&self, a: &str, b: &str) -> Result<Option<String>, ReadError> {
+        let out = self
+            .cmd()
+            .args(["merge-base", a, b])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output();
+        let out = match tokio::time::timeout(GIT_TIMEOUT, out).await {
+            Ok(r) => r?,
+            Err(_) => return Err(ReadError::new("unavailable", "query took too long")),
+        };
+        match out.status.code() {
+            Some(0) => Ok(Some(
+                String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            )),
+            Some(1) => Ok(None),
+            _ => Err(RepoError::Internal("git merge-base failed".into()).into()),
+        }
     }
 
     async fn refs(&self) -> Result<Value, ReadError> {

@@ -12,6 +12,7 @@ pub mod git;
 pub mod http;
 pub mod metrics;
 pub mod proc_receive;
+pub mod pulls;
 pub mod repository;
 pub mod server;
 pub mod snapshot;

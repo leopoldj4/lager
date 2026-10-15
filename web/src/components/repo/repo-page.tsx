@@ -1,7 +1,13 @@
 import { Link } from "@tanstack/react-router"
-import { BookMarked, GitCommitHorizontal, GitBranch, Tag } from "lucide-react"
+import {
+  BookMarked,
+  GitCommitHorizontal,
+  GitBranch,
+  GitPullRequest,
+  Tag,
+} from "lucide-react"
 
-import { useRefs, useWatch } from "@/lib/api"
+import { usePullCounts, useRefs, useWatch } from "@/lib/api"
 import { href, splitRev, type Location, type View } from "@/lib/paths"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -13,10 +19,14 @@ import { CommitList } from "./commits"
 import { CommitView } from "./commit"
 import { RefList } from "./refs"
 import { EmptyRepo } from "./empty"
+import { PullList } from "./pulls"
+import { PullView } from "./pull"
+import { ComparePage } from "./compare"
 
 export function RepoPage({ loc }: { loc: Location }) {
   useWatch(loc.repo)
   const refs = useRefs(loc.repo)
+  const pulls = usePullCounts(loc.repo)
   const names = refs.data && [
     ...refs.data.branches.map((b) => b.name),
     ...refs.data.tags.map((t) => t.name),
@@ -38,11 +48,19 @@ export function RepoPage({ loc }: { loc: Location }) {
       </div>
       <Tabs
         loc={loc}
-        rev={loc.view === "commit" ? "" : split.rev}
+        rev={
+          loc.view === "commit" ||
+          loc.view === "pulls" ||
+          loc.view === "pull" ||
+          loc.view === "compare"
+            ? ""
+            : split.rev
+        }
         counts={
           refs.data && {
             branches: refs.data.branches.length,
             tags: refs.data.tags.length,
+            pulls: pulls.data?.open,
           }
         }
       />
@@ -57,6 +75,16 @@ export function RepoPage({ loc }: { loc: Location }) {
         <RefList repo={loc.repo} kind="branch" refs={refs.data} />
       ) : loc.view === "tags" ? (
         <RefList repo={loc.repo} kind="tag" refs={refs.data} />
+      ) : loc.view === "pulls" ? (
+        <PullList
+          repo={loc.repo}
+          closed={loc.rest[0] === "closed"}
+          refs={refs.data}
+        />
+      ) : loc.view === "pull" ? (
+        <PullView repo={loc.repo} rest={loc.rest} />
+      ) : loc.view === "compare" ? (
+        <ComparePage repo={loc.repo} rest={loc.rest} refs={refs.data} />
       ) : empty ? (
         <EmptyRepo repo={loc.repo} />
       ) : loc.view === "commit" ? (
@@ -108,7 +136,7 @@ function Tabs({
 }: {
   loc: Location
   rev: string
-  counts?: { branches: number; tags: number }
+  counts?: { branches: number; tags: number; pulls?: number }
 }) {
   const tabs: {
     view: View
@@ -119,6 +147,12 @@ function Tabs({
     { view: "tree", label: "Code", icon: BookMarked },
     { view: "commits", label: "Commits", icon: GitCommitHorizontal },
     {
+      view: "pulls",
+      label: "Pull requests",
+      icon: GitPullRequest,
+      count: counts?.pulls,
+    },
+    {
       view: "branches",
       label: "Branches",
       icon: GitBranch,
@@ -127,7 +161,13 @@ function Tabs({
     { view: "tags", label: "Tags", icon: Tag, count: counts?.tags },
   ]
   const active =
-    loc.view === "blob" ? "tree" : loc.view === "commit" ? "commits" : loc.view
+    loc.view === "blob"
+      ? "tree"
+      : loc.view === "commit"
+        ? "commits"
+        : loc.view === "pull" || loc.view === "compare"
+          ? "pulls"
+          : loc.view
   return (
     <nav className="-mt-2 flex [scrollbar-width:none] gap-1 overflow-x-auto border-b">
       {tabs.map((t) => (

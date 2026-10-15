@@ -148,8 +148,14 @@ pub async fn start_with_listener(
     });
     let registry = Registry::new(svc.clone())?;
     let users = worktree_core::identity::connect(&cfg).await?;
+    let pull_db = worktree_core::pulls::Pulls::new(users.pool().clone());
     let catalog = Catalog::new(svc.storage.clone(), limits::CATALOG_CACHE);
     let directory = Arc::new(Directory::new(users, catalog));
+    let pulls = Arc::new(crate::pulls::PullService::new(
+        pull_db,
+        registry.clone(),
+        directory.clone(),
+    ));
 
     let socket_path = cfg.socket_path();
     let hook_listener = bind_socket(&socket_path)?;
@@ -199,7 +205,7 @@ pub async fn start_with_listener(
                 _ = stopped(&mut stop) => break,
             };
             match change {
-                Ok(c) if c.remote => {
+                Ok(crate::bus::Event::Changed(c)) if c.remote => {
                     let controller = reg.controller(c.repo);
                     tokio::spawn(async move {
                         let _ = controller.sync_to_storage().await;
@@ -213,6 +219,10 @@ pub async fn start_with_listener(
             }
         }
     }));
+
+    // Refs and commits of pull requests after this server's pushes.
+    let (p, stop) = (pulls.clone(), stop_http.subscribe());
+    background.push(tokio::spawn(async move { p.run(stop).await }));
 
     let reg = registry.clone();
     let mut stop = stop_http.subscribe();
@@ -231,6 +241,7 @@ pub async fn start_with_listener(
     let state: AppState = Arc::new(AppInner {
         registry: registry.clone(),
         directory,
+        pulls,
         processes: Arc::new(Semaphore::new(limits::MAX_GIT_PROCESSES)),
         socket_path: socket_path.clone(),
         health: crate::http::health::Health::new(svc.storage.clone(), bus),

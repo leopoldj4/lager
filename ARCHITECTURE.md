@@ -97,7 +97,7 @@ If the storage service is unavailable, fail new reads and writes. Do not use an 
 
 The storage service determines protection against permanent data loss. A local service on one disk does not provide redundant storage.
 
-SSH, Git LFS, partial clone, user hooks, and SHA-256 remain later extensions. Transactions across repositories, a user interface, and pull requests also remain later extensions.
+SSH, Git LFS, partial clone, user hooks, and SHA-256 remain later extensions. Transactions across repositories remain a later extension. Pull requests within one repository are in [decision 19](docs/decisions/0019-pull-requests.md).
 
 ## 5. Storage interface
 
@@ -160,7 +160,7 @@ A log entry contains these data:
 - Format version, repository UUID, and incarnation UUID.
 - Entry UUID and generation.
 - Request UUID and checksum of the request contents.
-- Operation type: push, snapshot, default-branch change, or deletion.
+- Operation type: push, snapshot, default-branch change, deletion, merge of a pull request, or a move of pull request refs ([decision 19](docs/decisions/0019-pull-requests.md)).
 - Each ref name, expected old OID, and new OID.
 - Each pack key, checksum, and byte count.
 - User identifier, permission-rule version, and receipt time.

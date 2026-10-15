@@ -7,10 +7,22 @@
 //   /<repo>/-/commit/<oid>           one commit
 //   /<repo>/-/branches, /-/tags
 //   /<repo>/-/raw/<rev>/<path>       a file's bytes, from the server
+//   /<repo>/-/pulls, /-/pulls/closed    pull requests
+//   /<repo>/-/pull/<n>[/commits|/files]  one pull request
+//   /<repo>/-/compare/<base>...<head>   a comparison, to open a pull request
 // Branch names can contain "/" too; the page splits <rev>/<path> with the
 // repository's refs.
 
-export type View = "tree" | "blob" | "commits" | "commit" | "branches" | "tags"
+export type View =
+  | "tree"
+  | "blob"
+  | "commits"
+  | "commit"
+  | "branches"
+  | "tags"
+  | "pulls"
+  | "pull"
+  | "compare"
 
 export interface Location {
   repo: string
@@ -26,6 +38,9 @@ const views = new Set<string>([
   "commit",
   "branches",
   "tags",
+  "pulls",
+  "pull",
+  "compare",
 ])
 
 export function parse(splat: string): Location | null {
@@ -79,4 +94,10 @@ export function resolvePath(from: string, target: string): string | null {
     else if (parts.pop() === undefined) return null
   }
   return parts.join("/")
+}
+
+/** Splits <base>...<head>; ref names never contain "..". */
+export function splitCompare(rest: string[]) {
+  const [base = "", head = ""] = rest.join("/").split("...")
+  return { base, head }
 }
