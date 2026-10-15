@@ -1,10 +1,12 @@
 import type { FileDiffContentsLoader } from "@pierre/diffs"
 import { FileDiff as PatchFileDiff } from "@pierre/diffs/react"
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { fetchBlob } from "@/lib/api"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { codeOptions, codeStyle, parseDiff, type DiffFile } from "./diff"
+import { DiffTree } from "./diff-tree"
+import { SidePanelLayout } from "./side-panel"
 
 type DiffStyle = "unified" | "split"
 
@@ -21,7 +23,8 @@ function useDiffStyle() {
 
 /**
  * The files of a patch between two revisions, with a count of changed
- * lines. Expanding unchanged lines loads both whole files.
+ * lines. Expanding unchanged lines loads both whole files. With `tree`, a
+ * tree of the files beside them leads to each.
  */
 export function ChangedFiles({
   repo,
@@ -30,6 +33,7 @@ export function ChangedFiles({
   oldRev,
   newRev,
   note,
+  tree,
 }: {
   repo: string
   diff: string
@@ -39,6 +43,8 @@ export function ChangedFiles({
   newRev: string
   /** Appended to the summary. */
   note?: string
+  /** Keeps the tree's width across visits; absent for no tree. */
+  tree?: string
 }) {
   const files = useMemo(() => parseDiff(diff), [diff])
   const [diffStyle, setDiffStyle] = useDiffStyle()
@@ -62,33 +68,46 @@ export function ChangedFiles({
   const adds = files.reduce((n, f) => n + f.adds, 0)
   const dels = files.reduce((n, f) => n + f.dels, 0)
 
-  return (
+  const views = useRef<(HTMLDivElement | null)[]>([])
+  const [current, setCurrent] = useCurrentFile(views, files)
+
+  const summary = (
+    <>
+      <p className="text-sm text-muted-foreground">
+        {files.length} {files.length === 1 ? "file" : "files"} changed,{" "}
+        <span className="text-emerald-600">+{adds}</span>{" "}
+        <span className="text-red-600">−{dels}</span>
+        {note}
+      </p>
+      <Tabs
+        value={diffStyle}
+        onValueChange={(v) => setDiffStyle(v as DiffStyle)}
+        className="ml-auto"
+      >
+        <TabsList>
+          <TabsTrigger value="unified">Unified</TabsTrigger>
+          <TabsTrigger value="split">Split</TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </>
+  )
+  const diffs = (
     <div className="grid grid-cols-1 gap-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="text-sm text-muted-foreground">
-          {files.length} {files.length === 1 ? "file" : "files"} changed,{" "}
-          <span className="text-emerald-600">+{adds}</span>{" "}
-          <span className="text-red-600">−{dels}</span>
-          {note}
-        </p>
-        <Tabs
-          value={diffStyle}
-          onValueChange={(v) => setDiffStyle(v as DiffStyle)}
-          className="ml-auto"
-        >
-          <TabsList>
-            <TabsTrigger value="unified">Unified</TabsTrigger>
-            <TabsTrigger value="split">Split</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </div>
       {files.map((f, i) => (
-        <FileView
+        <div
           key={i}
-          file={f}
-          diffStyle={diffStyle}
-          loadDiffFiles={loadDiffFiles}
-        />
+          ref={(el) => {
+            views.current[i] = el
+          }}
+          // Below the sticky header on phones.
+          className="max-md:scroll-mt-14"
+        >
+          <FileView
+            file={f}
+            diffStyle={diffStyle}
+            loadDiffFiles={loadDiffFiles}
+          />
+        </div>
       ))}
       {truncated && (
         <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -97,6 +116,64 @@ export function ChangedFiles({
       )}
     </div>
   )
+
+  if (!tree) {
+    return (
+      <div className="grid grid-cols-1 gap-6">
+        <div className="flex flex-wrap items-center gap-3">{summary}</div>
+        {diffs}
+      </div>
+    )
+  }
+  return (
+    <SidePanelLayout
+      id={tree}
+      title="Changed files"
+      toolbar={summary}
+      side={(onNavigate) => (
+        <DiffTree
+          files={files}
+          current={current}
+          onSelect={(i) => {
+            onNavigate?.()
+            // The last files may not reach the top, so mark the choice.
+            setCurrent(i)
+            views.current[i]?.scrollIntoView({ block: "start" })
+          }}
+        />
+      )}
+    >
+      {diffs}
+    </SidePanelLayout>
+  )
+}
+
+/** The index of the topmost file diff in view, until another is chosen. */
+function useCurrentFile(
+  views: React.RefObject<(HTMLDivElement | null)[]>,
+  files: DiffFile[]
+) {
+  const [current, setCurrent] = useState<number>()
+  useEffect(() => {
+    const visible = new Set<number>()
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const i = views.current.indexOf(e.target as HTMLDivElement)
+          if (e.isIntersecting) visible.add(i)
+          else visible.delete(i)
+        }
+        setCurrent(visible.size ? Math.min(...visible) : undefined)
+      },
+      // Not under the sticky header on phones.
+      { rootMargin: "-64px 0px 0px 0px" }
+    )
+    for (const el of views.current.slice(0, files.length)) {
+      if (el) io.observe(el)
+    }
+    return () => io.disconnect()
+  }, [views, files])
+  return [current, setCurrent] as const
 }
 
 function FileView({

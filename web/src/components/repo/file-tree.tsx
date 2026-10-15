@@ -71,7 +71,9 @@ function join(dir: string, name: string) {
   return dir ? `${dir}/${name}` : name
 }
 
-const indent = (depth: number) => ({ paddingLeft: `${0.5 + depth * 0.75}rem` })
+export const indent = (depth: number) => ({
+  paddingLeft: `${0.5 + depth * 0.75}rem`,
+})
 
 function Directory({
   tree,
@@ -119,7 +121,7 @@ function Directory({
   )
 }
 
-const row =
+export const row =
   "flex h-7 min-w-0 items-center gap-1.5 rounded-md pr-2 hover:bg-muted"
 
 function Node({
