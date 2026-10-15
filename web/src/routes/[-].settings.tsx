@@ -17,7 +17,6 @@ import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -80,11 +79,6 @@ function Github({ error }: { error?: string }) {
           <GithubMark className="size-5" />
           GitHub
         </CardTitle>
-        <CardDescription>
-          Repositories you connect are copied here and kept up to date with
-          GitHub. They are read-only: push to GitHub, and the copy follows
-          within a minute.
-        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-6">
         {error && (
