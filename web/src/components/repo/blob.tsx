@@ -1,33 +1,29 @@
 import type { SelectedLineRange } from "@pierre/diffs"
 import { File } from "@pierre/diffs/react"
-import { Link, Navigate } from "@tanstack/react-router"
-import { FileDown, History } from "lucide-react"
+import { Navigate } from "@tanstack/react-router"
 import { useMemo, useState, type ReactNode } from "react"
 
-import { useBlob, type Refs } from "@/lib/api"
+import { useBlob } from "@/lib/api"
 import { bytes } from "@/lib/format"
 import { LiveError } from "@/lib/live"
-import { href, rawHref } from "@/lib/paths"
+import { href } from "@/lib/paths"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
 import { CommitLine } from "./commit-line"
-import { PathCrumbs } from "./path-crumbs"
-import { RevPicker } from "./rev-picker"
 import { CopyButton } from "./clone"
 import { codeOptions, codeStyle } from "./diff"
 import { isMarkdown, MarkdownView } from "./markdown"
 
+/** A file: its code, its rendered Markdown, or why it is not shown. */
 export function BlobView({
   repo,
   rev,
   path,
-  refs,
 }: {
   repo: string
   rev: string
   path: string
-  refs: Refs
 }) {
   const blob = useBlob(repo, rev, path)
   const markdown = isMarkdown(path)
@@ -44,24 +40,6 @@ export function BlobView({
   }
   return (
     <div className="grid grid-cols-1 gap-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <RevPicker repo={repo} view="blob" rev={rev} path={path} refs={refs} />
-        <PathCrumbs repo={repo} rev={rev} path={path} />
-        <div className="ml-auto flex gap-1">
-          <Button asChild variant="ghost" size="sm">
-            <a href={rawHref(repo, rev, path)}>
-              <FileDown />
-              Raw
-            </a>
-          </Button>
-          <Button asChild variant="ghost" size="sm">
-            <Link to="/$" params={{ _splat: href(repo, "commits", rev, path) }}>
-              <History />
-              History
-            </Link>
-          </Button>
-        </div>
-      </div>
       {blob.error ? (
         <QueryError error={blob.error} />
       ) : !blob.data ? (

@@ -1,11 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import {
-  BookMarked,
-  GitCommitHorizontal,
-  GitBranch,
-  GitPullRequest,
-  Tag,
-} from "lucide-react"
+import { BookMarked, GitPullRequest, LayoutDashboard, Tag } from "lucide-react"
 
 import { usePullCounts, useRefs, useWatch } from "@/lib/api"
 import { href, splitRev, type Location, type View } from "@/lib/paths"
@@ -13,8 +7,7 @@ import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
 import { CloneButton } from "./clone"
-import { TreeView } from "./tree"
-import { BlobView } from "./blob"
+import { CodeView } from "./code"
 import { CommitList } from "./commits"
 import { CommitView } from "./commit"
 import { RefList } from "./refs"
@@ -22,6 +15,7 @@ import { EmptyRepo } from "./empty"
 import { PullList } from "./pulls"
 import { PullView } from "./pull"
 import { ComparePage } from "./compare"
+import { Overview } from "./overview"
 
 export function RepoPage({ loc }: { loc: Location }) {
   useWatch(loc.repo)
@@ -34,9 +28,16 @@ export function RepoPage({ loc }: { loc: Location }) {
   const split = splitRev(loc.rest, names)
   const rev = split.rev || refs.data?.head || ""
   const empty = refs.data && refs.data.branches.length === 0
+  // The code uses the whole width, for the file tree beside the file.
+  const wide = loc.view === "tree" || loc.view === "blob"
 
   return (
-    <div className="grid grid-cols-1 gap-6">
+    <div
+      className={cn(
+        "mx-auto grid w-full grid-cols-1 gap-6",
+        !wide && "max-w-6xl"
+      )}
+    >
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="flex min-w-0 items-center gap-2 text-xl break-all">
           <BookMarked className="size-5 text-muted-foreground" />
@@ -58,7 +59,6 @@ export function RepoPage({ loc }: { loc: Location }) {
         }
         counts={
           refs.data && {
-            branches: refs.data.branches.length,
             tags: refs.data.tags.length,
             pulls: pulls.data?.open,
           }
@@ -87,6 +87,8 @@ export function RepoPage({ loc }: { loc: Location }) {
         <ComparePage repo={loc.repo} rest={loc.rest} refs={refs.data} />
       ) : empty ? (
         <EmptyRepo repo={loc.repo} />
+      ) : loc.view === "overview" ? (
+        <Overview repo={loc.repo} refs={refs.data} />
       ) : loc.view === "commit" ? (
         <CommitView repo={loc.repo} rev={loc.rest.join("/")} />
       ) : loc.view === "commits" ? (
@@ -96,19 +98,13 @@ export function RepoPage({ loc }: { loc: Location }) {
           path={split.path}
           refs={refs.data}
         />
-      ) : loc.view === "blob" ? (
-        <BlobView
-          repo={loc.repo}
-          rev={rev}
-          path={split.path}
-          refs={refs.data}
-        />
       ) : (
-        <TreeView
+        <CodeView
           repo={loc.repo}
           rev={rev}
           path={split.path}
           refs={refs.data}
+          view={loc.view === "blob" ? "blob" : "tree"}
         />
       )}
     </div>
@@ -136,38 +132,35 @@ function Tabs({
 }: {
   loc: Location
   rev: string
-  counts?: { branches: number; tags: number; pulls?: number }
+  counts?: { tags: number; pulls?: number }
 }) {
   const tabs: {
     view: View
     label: string
-    icon: typeof GitBranch
+    icon: typeof Tag
     count?: number
   }[] = [
-    { view: "tree", label: "Code", icon: BookMarked },
-    { view: "commits", label: "Commits", icon: GitCommitHorizontal },
+    { view: "overview", label: "Overview", icon: LayoutDashboard },
     {
       view: "pulls",
       label: "Pull requests",
       icon: GitPullRequest,
       count: counts?.pulls,
     },
-    {
-      view: "branches",
-      label: "Branches",
-      icon: GitBranch,
-      count: counts?.branches,
-    },
+    { view: "tree", label: "Code", icon: BookMarked },
     { view: "tags", label: "Tags", icon: Tag, count: counts?.tags },
   ]
+  // History and branches are reached from the overview and the code; they
+  // count as part of the code.
   const active =
-    loc.view === "blob"
+    loc.view === "blob" ||
+    loc.view === "commits" ||
+    loc.view === "commit" ||
+    loc.view === "branches"
       ? "tree"
-      : loc.view === "commit"
-        ? "commits"
-        : loc.view === "pull" || loc.view === "compare"
-          ? "pulls"
-          : loc.view
+      : loc.view === "pull" || loc.view === "compare"
+        ? "pulls"
+        : loc.view
   return (
     <nav className="-mt-2 flex [scrollbar-width:none] gap-1 overflow-x-auto border-b">
       {tabs.map((t) => (
@@ -176,13 +169,9 @@ function Tabs({
           to="/$"
           params={{
             _splat:
-              t.view === "tree" && !rev
+              t.view === "overview"
                 ? href(loc.repo)
-                : href(
-                    loc.repo,
-                    t.view,
-                    t.view === "tree" || t.view === "commits" ? rev : undefined
-                  ),
+                : href(loc.repo, t.view, t.view === "tree" ? rev : undefined),
           }}
           className={cn(
             "-mb-px flex shrink-0 items-center gap-2 border-b-2 px-2.5 py-2 text-sm whitespace-nowrap sm:px-3",

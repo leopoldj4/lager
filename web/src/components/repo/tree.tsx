@@ -1,15 +1,12 @@
 import { Link } from "@tanstack/react-router"
-import { File, FileSymlink, Folder, FolderGit2, History } from "lucide-react"
+import { File, FileSymlink, Folder, FolderGit2 } from "lucide-react"
 
-import { useBlob, useTree, type Refs, type TreeEntry } from "@/lib/api"
+import { useBlob, useTree, type TreeEntry } from "@/lib/api"
 import { bytes } from "@/lib/format"
 import { href } from "@/lib/paths"
-import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
 import { CommitLine } from "./commit-line"
-import { PathCrumbs } from "./path-crumbs"
-import { RevPicker } from "./rev-picker"
 import { isMarkdown, MarkdownView } from "./markdown"
 
 const icons = {
@@ -19,34 +16,20 @@ const icons = {
   submodule: FolderGit2,
 }
 
+/** A directory: its entries and its README. */
 export function TreeView({
   repo,
   rev,
   path,
-  refs,
 }: {
   repo: string
   rev: string
   path: string
-  refs: Refs
 }) {
   const tree = useTree(repo, rev, path)
-  const readme = tree.data?.entries.find(
-    (e) =>
-      e.kind === "file" && /^readme(\.(md|markdown|txt|rst))?$/i.test(e.name)
-  )
+  const readme = tree.data && findReadme(tree.data.entries)
   return (
     <div className="grid grid-cols-1 gap-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <RevPicker repo={repo} view="tree" rev={rev} path={path} refs={refs} />
-        <PathCrumbs repo={repo} rev={rev} path={path} />
-        <Button asChild variant="ghost" size="sm" className="ml-auto">
-          <Link to="/$" params={{ _splat: href(repo, "commits", rev, path) }}>
-            <History />
-            History
-          </Link>
-        </Button>
-      </div>
       {tree.error ? (
         <QueryError error={tree.error} />
       ) : !tree.data ? (
@@ -88,6 +71,14 @@ export function TreeView({
         <Readme repo={repo} rev={rev} path={join(path, readme.name)} />
       )}
     </div>
+  )
+}
+
+/** The README among a directory's entries. */
+export function findReadme(entries: TreeEntry[]) {
+  return entries.find(
+    (e) =>
+      e.kind === "file" && /^readme(\.(md|markdown|txt|rst))?$/i.test(e.name)
   )
 }
 
@@ -154,7 +145,7 @@ function Entry({
   )
 }
 
-function Readme({
+export function Readme({
   repo,
   rev,
   path,
