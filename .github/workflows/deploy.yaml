@@ -49,8 +49,16 @@ jobs:
       - name: Build image on production host
         run: |
           set -o pipefail
-          git archive --format=tar "$GITHUB_SHA" | tailscale ssh "$DEPLOY_HOST" \
-            "DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --tag '$DEPLOY_IMAGE' -"
+          # The Dockerfile syntax frontend reads a stdin context twice, and
+          # the second read fails on the host's BuildKit. Extract, then build
+          # the directory.
+          git archive --format=tar "$GITHUB_SHA" | tailscale ssh "$DEPLOY_HOST" '
+            set -eu
+            build_dir=$(mktemp -d /tmp/worktree-build.XXXXXX)
+            trap "rm -rf $build_dir" EXIT
+            tar -x -C "$build_dir"
+            DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --tag "'"$DEPLOY_IMAGE"'" "$build_dir"
+          '
 
       - name: Deploy with health check and rollback
         run: tailscale ssh "$DEPLOY_HOST" "bash -s -- '$DEPLOY_IMAGE' /opt/worktree" < deploy/update.sh

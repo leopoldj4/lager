@@ -13,11 +13,15 @@ manual **Run workflow** on that branch. If the default branch is renamed to
 `main`, update both the push filter and the job's branch guard.
 
 The GitHub-hosted runner checks out the commit, joins Tailscale temporarily,
-and streams `git archive` to `docker build` on the production host. Only the
-committed source is transferred; no Git credentials or persistent checkout
-are needed on the server. The host builds the existing Dockerfile for Linux
-amd64, including the Rust server and web assets, tags it `worktree:<full SHA>`,
-then the runner invokes [`update.sh`](update.sh) over SSH.
+and streams `git archive` to the production host. The host extracts that
+archive into a temporary directory and builds it there. Piping the archive
+straight into `docker build -` fails on this host: the Dockerfile's syntax
+frontend reads a stdin context twice, and BuildKit drops the second read.
+Only the committed source is transferred; no Git credentials or persistent
+checkout are needed on the server. The host builds the existing Dockerfile
+for Linux amd64, including the Rust server and web assets, tags it
+`worktree:<full SHA>`, then the runner invokes [`update.sh`](update.sh)
+over SSH.
 
 BuildKit on the server retains Docker layers and the Dockerfile's Cargo/Bun
 cache mounts between builds. No image transfer or registry login is needed;
@@ -127,8 +131,13 @@ a checkout of `master`. You can also deploy a committed feature branch.
 ```bash
 deployment_image=worktree:$(git rev-parse HEAD)
 set -o pipefail
-git archive --format=tar HEAD | ssh worktree \
-  "DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --tag '$deployment_image' -"
+git archive --format=tar HEAD | ssh worktree '
+set -eu
+build_dir=$(mktemp -d /tmp/worktree-build.XXXXXX)
+trap "rm -rf $build_dir" EXIT
+tar -x -C "$build_dir"
+DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --tag "'"$deployment_image"'" "$build_dir"
+'
 ```
 
 The `Dockerfile` builds both the server and the web interface using the
