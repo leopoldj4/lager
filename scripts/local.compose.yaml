@@ -10,6 +10,8 @@ services:
     # Supports conditional PUT (If-None-Match / If-Match), which the head
     # CAS depends on.
     image: chrislusf/seaweedfs:4.48
+    # weed does not stop on SIGTERM as PID 1.
+    init: true
     command:
       - mini
       - -dir=/data
