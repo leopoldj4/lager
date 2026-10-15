@@ -275,7 +275,7 @@ pub fn wants_page(headers: &HeaderMap) -> bool {
         .is_some_and(|a| a.contains("text/html"))
 }
 
-/// The built interface (`nix build .#web`), installed beside the programs
+/// The built interface (`bun run build` in `web/`), installed beside the programs
 /// in `share/worktree/web`. Without it, only the API under `/-/api/` answers.
 fn built_interface() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;

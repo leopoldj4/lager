@@ -11,13 +11,14 @@ changes of a repository.
 
 ## Local start
 
-One server, a local S3-compatible service (SeaweedFS), PostgreSQL for
-users, NATS for change events, and a development user. Storage data, the database,
-and caches live in separate directories under `./.local`; stored data is
-kept between runs.
+One server built from this checkout, a local S3-compatible service
+(SeaweedFS), PostgreSQL for users, NATS for change events, and a
+development user. SeaweedFS, PostgreSQL, and NATS run in Docker; stored
+data is kept between runs in Docker volumes. The configuration and the
+cache live under `./.local`.
 
 ```bash
-nix run .#local
+scripts/local.sh
 ```
 
 ```bash
@@ -29,8 +30,9 @@ A `.local/worktree.toml` from before the minimal configuration
 ([decision 15](docs/decisions/0015-minimal-configuration.md)) no longer
 loads; remove it and the script writes a new one.
 
-The script is defined in `flake.nix` (`packages.local`). Git 2.45 or later
-is required.
+It needs Rust (rustup reads `rust-toolchain.toml`), the OpenSSL headers
+(`libssl-dev`), Bun, Docker with Compose, and Git 2.45 or later.
+`docker compose -p worktree-local down -v` removes the stored data.
 
 ## Commands
 
@@ -139,7 +141,8 @@ and spreads requests over the servers. Any server can answer any request;
 it fills its cache for the repository on first use. The server that
 accepts a push creates the next automatic snapshot (every 200 entries).
 The web interface is served from `share/worktree/web` beside the programs
-(the Nix package and the container image include it); without it, only the
+(the container image includes it; `scripts/local.sh` links it into
+`target/`); without it, only the
 API under `/-/api/` answers.
 
 ## Operation
@@ -182,15 +185,16 @@ API under `/-/api/` answers.
 
 ## Container image
 
-`nix build .#docker` (Linux, or a Linux builder) gives a script that
-streams the image:
+Build it from the `Dockerfile`, tagged with the commit:
 
 ```bash
-nix build .#docker && ./result | docker load
+docker build -t worktree:$(git rev-parse --short HEAD) .
 ```
 
-The image holds worktree (`/bin/worktree-server` and `/bin/worktree`), the
-built web interface (`/share/worktree/web`), the pinned Git, tini as PID 1,
+The image holds worktree (`/usr/local/bin/worktree-server` and
+`/usr/local/bin/worktree`), the
+built web interface (`/usr/local/share/worktree/web`), Git from Debian
+trixie, tini as PID 1,
 and CA certificates. It runs `worktree-server` as user 10001 and reads
 `/etc/worktree/worktree.toml`; mount the configuration as a secret, and the
 cache at `/var/cache/worktree` on local disk. Set the container stop timeout
@@ -202,7 +206,7 @@ NATS, and PostgreSQL, with repositories in an external S3-compatible service.
 For updates to an existing deployment, see the [deployment update guide](deploy/README.md).
 
 ```bash
-nix build .#docker && ./result | docker load      # note the image name
+docker build -t worktree:$(git rev-parse --short HEAD) .   # note the image name
 cd deploy
 cp .env.example .env                               # domain, image, database password
 cp worktree.example.toml worktree.toml             # storage keys, session secret
@@ -211,38 +215,37 @@ docker compose exec worktree worktree user create <name> --access '*=force'
 docker compose exec worktree worktree token create <name> laptop
 ```
 
-On a Mac, an OrbStack NixOS machine works as the Linux builder: it sees
-the Mac's files, so this builds and loads the image into OrbStack's Docker:
-
-```bash
-orb create nixos nix-builder
-orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build "$PWD#docker" --no-link --print-out-paths | xargs -I{} orb -m nix-builder {} | docker load
-```
-
-That builds for the Mac's architecture (arm64). For x86_64 servers, name
-the system: the same machine builds it with Rosetta. Only worktree is compiled; everything else comes from the binary
-cache. The first build takes about ten minutes.
-
-```bash
-orb -m nix-builder nix --extra-experimental-features "nix-command flakes" build "$PWD#packages.x86_64-linux.docker" --no-link --print-out-paths | xargs -I{} orb -m nix-builder {} | docker load
-```
+On a Mac, build for x86_64 servers with
+`docker build --platform linux/amd64 ...`; it runs under emulation and is
+slow.
 
 ## Development
 
 ```bash
-nix develop
 cargo build
-nix flake check    # build, clippy, and rustfmt
+cargo clippy --all-targets -- --deny warnings
+cargo fmt --check
 ```
 
+To share compiled dependencies between checkouts on one machine, install
+[sccache](https://github.com/mozilla/sccache) and set it as the compiler
+wrapper in `~/.cargo/config.toml`:
+
+```toml
+[build]
+rustc-wrapper = "sccache"
+```
+
+`sccache --show-stats` shows the hit rate.
+
 The web interface lives in `web/` (TanStack Start in SPA mode, shadcn/ui).
-With a server on 127.0.0.1:8080 (`nix run .#local`):
+With a server on 127.0.0.1:8080 (`scripts/local.sh`):
 
 ```bash
-cd web && npm install
-npm run dev        # http://localhost:3000, API and WebSocket go to the server
-npm run build      # dist/client, what the server serves
-npm run typecheck
+cd web && bun install
+bun run dev        # http://localhost:3000, API and WebSocket go to the server
+bun run build      # dist/client, what the server serves
+bun run typecheck
 ```
 
 The Cargo workspace has three crates:

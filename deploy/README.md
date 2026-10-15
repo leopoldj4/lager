@@ -2,8 +2,8 @@
 
 The current deployment serves **https://git.leoj.de**. SSH connects as
 `root` through the `worktree` alias, and its Docker Compose files are in
-`/opt/worktree`. Run the build and transfer commands from a Linux checkout
-with Nix and access to that SSH alias.
+`/opt/worktree`. Run the build and transfer commands from an x86_64 Linux
+checkout with Docker and access to that SSH alias.
 
 ## 1. Select the revision
 
@@ -21,13 +21,14 @@ a checkout of `master`. You can also deploy a committed feature branch.
 ## 2. Build and transfer the image
 
 ```bash
-deployment_image_stream=$(nix build .#docker --no-link --print-out-paths)
+deployment_image=worktree:$(git rev-parse --short HEAD)
+docker build -t "$deployment_image" .
 set -o pipefail
-"$deployment_image_stream" | ssh worktree 'docker load'
+docker save "$deployment_image" | ssh worktree 'docker load'
 ```
 
-Nix builds both the server and the web interface. The final output prints
-`Loaded image: worktree:<tag>`. Save that full image name for the next step.
+The `Dockerfile` builds both the server and the web interface. The final
+output prints `Loaded image: worktree:<commit>`. Save that full image name for the next step.
 Loading the image does not change the running deployment.
 
 ## 3. Switch the running container

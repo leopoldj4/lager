@@ -38,7 +38,7 @@ changed.
   `[routing]` and request forwarding, `web.origins` (the Vite development
   server forwards with its own host, which passes the origin check), and
   `web.dir`: the interface is found in `share/worktree/web` beside the
-  programs, where the Nix package installs it.
+  programs, where the container image installs it.
 - **Snapshots** without a server list: the server that accepted a push
   creates the next automatic snapshot. Two servers that both do keep one
   snapshot through CAS.

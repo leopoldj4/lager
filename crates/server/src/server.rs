@@ -120,7 +120,7 @@ pub async fn start_with_listener(
     let addr = listener.local_addr()?;
     let cache_root = cfg.server.cache_dir.clone();
     std::fs::create_dir_all(&cache_root)?;
-    // Git comes from PATH; the Nix package pins its version (flake.nix).
+    // Git comes from PATH; the container image takes it from Debian trixie.
     let git = Git::new(
         PathBuf::from("git"),
         &cache_root.join("work"),

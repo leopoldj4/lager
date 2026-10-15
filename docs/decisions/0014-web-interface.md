@@ -16,7 +16,7 @@ only reads.
 **Application.** A single-page application in `web/`: TanStack Start in
 SPA mode, TanStack Query for the cache of query answers, and shadcn/ui
 components. No server rendering: pages show signed-in, live data, and the
-server stays one Rust process. `npm run build` (or `nix build .#web`) gives
+server stays one Rust process. `bun run build` gives
 `dist/client`: `_shell.html` and `-/assets/`. The server serves them with
 `[web] dir`.
 

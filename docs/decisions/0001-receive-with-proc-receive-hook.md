@@ -47,5 +47,5 @@ extension).
 ## Consequences
 
 - Git 2.45 or later is required (`proc-receive` and transactions with
-  `update-ref --stdin`). The Nix flake pins the Git version.
+  `update-ref --stdin`). The server checks the version when it starts.
 - A Rust implementation of the receive protocol is not necessary.

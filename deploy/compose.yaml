@@ -1,7 +1,7 @@
 # One host: Caddy (HTTPS), worktree, NATS, and PostgreSQL. Repositories live
 # in an external S3-compatible service (R2, S3, ...); see worktree.example.toml.
 #
-#   nix build .#docker && ./result | docker load    # prints the image name
+#   docker build -t worktree:$(git rev-parse --short HEAD) ..   # the image name
 #   cp .env.example .env && cp worktree.example.toml worktree.toml   # fill in both
 #   docker compose up -d
 #   docker compose exec worktree worktree user create <name> --access '*=force'
