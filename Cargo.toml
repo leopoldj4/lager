@@ -8,6 +8,12 @@ edition = "2024"
 publish = false
 license = "FSL-1.1-ALv2"
 
+# Password hashing is deliberately expensive and prohibitively slow in an
+# unoptimized local build. Keep the application debuggable while optimizing
+# the crate that performs PBKDF2.
+[profile.dev.package.worktree-core]
+opt-level = 3
+
 # Versions are fixed with `=` so that the tested combination is the built one.
 [workspace.dependencies]
 worktree-core = { path = "crates/core" }
