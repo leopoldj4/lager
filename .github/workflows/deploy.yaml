@@ -49,8 +49,14 @@ jobs:
       - name: Build image on production host
         run: |
           set -o pipefail
+          # Avoid BuildKit's stdin/remote-context session failure when loading
+          # the external Dockerfile frontend. Build from an extracted directory.
           git archive --format=tar "$GITHUB_SHA" | tailscale ssh "$DEPLOY_HOST" \
-            "DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --tag '$DEPLOY_IMAGE' -"
+            "set -eu
+             build_context=\$(mktemp -d /tmp/worktree-build.XXXXXXXXXX)
+             trap 'rm -rf -- \"\$build_context\"' EXIT
+             tar -xf - -C \"\$build_context\"
+             DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --tag '$DEPLOY_IMAGE' \"\$build_context\" < /dev/null"
 
       - name: Deploy with health check and rollback
         run: tailscale ssh "$DEPLOY_HOST" "bash -s -- '$DEPLOY_IMAGE' /opt/worktree" < deploy/update.sh
