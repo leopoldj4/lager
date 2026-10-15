@@ -6,7 +6,7 @@ import {
   Plus,
 } from "lucide-react"
 
-import { usePulls, type PullState, type Refs } from "@/lib/api"
+import { usePulls, type Pull, type PullState, type Refs } from "@/lib/api"
 import { ago } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { cn } from "@/lib/utils"
@@ -129,30 +129,7 @@ export function PullList({
       ) : (
         <ul className="divide-y rounded-lg border">
           {pulls.map((p) => (
-            <li key={p.number} className="flex items-start gap-3 px-4 py-3">
-              <PullIcon state={p.state} className="mt-0.5" />
-              <div className="min-w-0 flex-1">
-                <Link
-                  to="/$"
-                  params={{ _splat: href(repo, "pull", String(p.number)) }}
-                  className="font-medium break-words hover:underline"
-                >
-                  {p.title}
-                </Link>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  #{p.number}{" "}
-                  {p.state === "merged"
-                    ? `merged ${ago((p.closed_ms ?? p.updated_ms) / 1000)}`
-                    : p.state === "closed"
-                      ? `closed ${ago((p.closed_ms ?? p.updated_ms) / 1000)}`
-                      : `opened ${ago(p.created_ms / 1000)}`}{" "}
-                  by {p.author}
-                </p>
-              </div>
-              <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">
-                <BranchName name={p.source} />→<BranchName name={p.target} />
-              </span>
-            </li>
+            <PullRow key={p.number} repo={repo} pull={p} />
           ))}
         </ul>
       )}
@@ -167,5 +144,35 @@ export function PullList({
         </Button>
       )}
     </div>
+  )
+}
+
+/** One pull request in a list: state, title, number, age, and branches. */
+export function PullRow({ repo, pull: p }: { repo: string; pull: Pull }) {
+  return (
+    <li className="flex items-start gap-3 px-4 py-3">
+      <PullIcon state={p.state} className="mt-0.5" />
+      <div className="min-w-0 flex-1">
+        <Link
+          to="/$"
+          params={{ _splat: href(repo, "pull", String(p.number)) }}
+          className="font-medium break-words hover:underline"
+        >
+          {p.title}
+        </Link>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          #{p.number}{" "}
+          {p.state === "merged"
+            ? `merged ${ago((p.closed_ms ?? p.updated_ms) / 1000)}`
+            : p.state === "closed"
+              ? `closed ${ago((p.closed_ms ?? p.updated_ms) / 1000)}`
+              : `opened ${ago(p.created_ms / 1000)}`}{" "}
+          by {p.author}
+        </p>
+      </div>
+      <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">
+        <BranchName name={p.source} />→<BranchName name={p.target} />
+      </span>
+    </li>
   )
 }

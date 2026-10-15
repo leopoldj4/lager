@@ -1,7 +1,7 @@
 // Page addresses. Repository names can contain "/", so a "-" segment, which
 // no repository name contains, separates the name from the page:
-//   /<repo>                          the default branch
-//   /<repo>/-/tree/<rev>/<path>      a directory
+//   /<repo>                          the overview
+//   /<repo>/-/tree/<rev>/<path>      a directory; without <rev>, the default branch
 //   /<repo>/-/blob/<rev>/<path>      a file
 //   /<repo>/-/commits/<rev>/<path>   history
 //   /<repo>/-/commit/<oid>           one commit
@@ -14,6 +14,7 @@
 // repository's refs.
 
 export type View =
+  | "overview"
   | "tree"
   | "blob"
   | "commits"
@@ -49,7 +50,7 @@ export function parse(splat: string): Location | null {
   const repoSegs = dash < 0 ? segs : segs.slice(0, dash)
   if (repoSegs.length === 0) return null
   const repo = repoSegs.join("/")
-  if (dash < 0) return { repo, view: "tree", rest: [] }
+  if (dash < 0) return { repo, view: "overview", rest: [] }
   const view = segs[dash + 1]
   if (!views.has(view)) return null
   return { repo, view: view as View, rest: segs.slice(dash + 2) }

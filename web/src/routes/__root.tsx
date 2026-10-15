@@ -6,13 +6,15 @@ import {
   createRootRoute,
 } from "@tanstack/react-router"
 import { QueryClientProvider } from "@tanstack/react-query"
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 
 import appCss from "../styles.css?url"
 import { queryClient } from "@/lib/api"
 import { live } from "@/lib/live"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { Header } from "@/components/header"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { AppSidebar, MobileHeader } from "@/components/app-sidebar"
+import { Omnibar } from "@/components/omnibar"
 
 // Follows the system color scheme before the first paint.
 const theme = `(() => {
@@ -53,15 +55,21 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 function Root() {
   useEffect(() => live.start(), [])
+  const [search, setSearch] = useState(false)
+  const openSearch = () => setSearch(true)
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <div className="flex min-h-svh flex-col">
-          <Header />
-          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
-            <Outlet />
-          </main>
-        </div>
+        <SidebarProvider>
+          <AppSidebar onSearch={openSearch} />
+          <SidebarInset>
+            <MobileHeader onSearch={openSearch} />
+            <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+              <Outlet />
+            </div>
+          </SidebarInset>
+          <Omnibar open={search} onOpenChange={setSearch} />
+        </SidebarProvider>
       </TooltipProvider>
     </QueryClientProvider>
   )

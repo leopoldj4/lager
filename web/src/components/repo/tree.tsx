@@ -31,10 +31,7 @@ export function TreeView({
   refs: Refs
 }) {
   const tree = useTree(repo, rev, path)
-  const readme = tree.data?.entries.find(
-    (e) =>
-      e.kind === "file" && /^readme(\.(md|markdown|txt|rst))?$/i.test(e.name)
-  )
+  const readme = tree.data && findReadme(tree.data.entries)
   return (
     <div className="grid grid-cols-1 gap-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -88,6 +85,14 @@ export function TreeView({
         <Readme repo={repo} rev={rev} path={join(path, readme.name)} />
       )}
     </div>
+  )
+}
+
+/** The README among a directory's entries. */
+export function findReadme(entries: TreeEntry[]) {
+  return entries.find(
+    (e) =>
+      e.kind === "file" && /^readme(\.(md|markdown|txt|rst))?$/i.test(e.name)
   )
 }
 
@@ -154,7 +159,7 @@ function Entry({
   )
 }
 
-function Readme({
+export function Readme({
   repo,
   rev,
   path,
