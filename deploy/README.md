@@ -13,9 +13,12 @@ manual **Run workflow** on that branch. If the default branch is renamed to
 `main`, update both the push filter and the job's branch guard.
 
 The GitHub-hosted runner checks out the commit, joins Tailscale temporarily,
-and streams `git archive` to `docker build` on the production host. Only the
-committed source is transferred; no Git credentials or persistent checkout
-are needed on the server. The host builds the existing Dockerfile for Linux
+and streams `git archive` into a temporary directory on the production host.
+Docker builds from that directory, avoiding BuildKit stdin-context session
+errors when loading the Dockerfile frontend. The directory is removed when
+the remote command exits, including on build failure. Only the committed
+source is transferred; no Git credentials or persistent checkout are needed
+on the server. The host builds the existing Dockerfile for Linux
 amd64, including the Rust server and web assets, tags it `worktree:<full SHA>`,
 then the runner invokes [`update.sh`](update.sh) over SSH.
 
@@ -128,7 +131,11 @@ a checkout of `master`. You can also deploy a committed feature branch.
 deployment_image=worktree:$(git rev-parse HEAD)
 set -o pipefail
 git archive --format=tar HEAD | ssh worktree \
-  "DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --tag '$deployment_image' -"
+  "set -eu
+   build_context=\$(mktemp -d /tmp/worktree-build.XXXXXXXXXX)
+   trap 'rm -rf -- \"\$build_context\"' EXIT
+   tar -xf - -C \"\$build_context\"
+   DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --tag '$deployment_image' \"\$build_context\" < /dev/null"
 ```
 
 The `Dockerfile` builds both the server and the web interface using the
