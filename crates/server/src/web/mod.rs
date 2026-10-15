@@ -2,8 +2,8 @@
 //! files (docs/decisions/0014-web-interface.md).
 //!
 //! Everything lives under `/-/`, which no repository name can take:
-//! `/-/api/session` signs in and out, `/-/api/live` is the WebSocket,
-//! `/-/api/github/` connects a GitHub account, and
+//! `/-/api/session` signs in and out, `/-/api/tokens` manages access tokens,
+//! `/-/api/live` is the WebSocket, `/-/api/github/` connects GitHub, and
 //! `/-/assets/` holds the built files. `/<repo>/-/raw/<rev>/<path>` answers
 //! a file's bytes. Every other browser page that is no Git request gets the
 //! application shell, which routes in the browser.
@@ -15,6 +15,7 @@ pub mod pulls;
 pub mod raw;
 pub mod read;
 pub mod session;
+mod tokens;
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
@@ -130,6 +131,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(passkeys::router())
         .merge(github::router())
+        .merge(tokens::router())
         .route("/-/api/session", post(sign_in).delete(sign_out))
         .route("/-/api/live", get(live::upgrade))
         .route("/-/assets/{*file}", get(asset))
