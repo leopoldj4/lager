@@ -379,6 +379,11 @@ impl PullService {
         if self.directory.access(who, repo) < Access::Read {
             return Err(PullOpError::NotFound);
         }
+        if let Some(m) = &repo.mirror {
+            return Err(PullOpError::Forbidden(format!(
+                "this repository is a read-only mirror of github.com/{m}"
+            )));
+        }
         worktree_core::pulls::validate_text(Some(title), body)?;
         if source == target {
             return Err(PullOpError::Invalid("choose two different branches".into()));

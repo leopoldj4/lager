@@ -12,6 +12,7 @@ import { href, splitRev, type Location, type View } from "@/lib/paths"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
+import { GithubMark } from "@/components/github-mark"
 import { CloneButton } from "./clone"
 import { TreeView } from "./tree"
 import { BlobView } from "./blob"
@@ -42,6 +43,7 @@ export function RepoPage({ loc }: { loc: Location }) {
           <BookMarked className="size-5 text-muted-foreground" />
           <RepoName name={loc.repo} />
         </h1>
+        {refs.data?.mirror && <MirrorNote github={refs.data.mirror} />}
         <div className="ml-auto">
           <CloneButton repo={loc.repo} />
         </div>
@@ -56,6 +58,7 @@ export function RepoPage({ loc }: { loc: Location }) {
             ? ""
             : split.rev
         }
+        mirror={!!refs.data?.mirror}
         counts={
           refs.data && {
             branches: refs.data.branches.length,
@@ -86,7 +89,7 @@ export function RepoPage({ loc }: { loc: Location }) {
       ) : loc.view === "compare" ? (
         <ComparePage repo={loc.repo} rest={loc.rest} refs={refs.data} />
       ) : empty ? (
-        <EmptyRepo repo={loc.repo} />
+        <EmptyRepo repo={loc.repo} mirror={refs.data.mirror} />
       ) : loc.view === "commit" ? (
         <CommitView repo={loc.repo} rev={loc.rest.join("/")} />
       ) : loc.view === "commits" ? (
@@ -129,16 +132,35 @@ function RepoName({ name }: { name: string }) {
   )
 }
 
+/** A read-only mirror of a GitHub repository. */
+function MirrorNote({ github }: { github: string }) {
+  return (
+    <a
+      href={`https://github.com/${github}`}
+      target="_blank"
+      rel="noreferrer"
+      title="Read-only: pushes go to GitHub, and this copy follows"
+      className="flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground"
+    >
+      <GithubMark className="size-3.5" />
+      Mirror of {github}
+    </a>
+  )
+}
+
 function Tabs({
   loc,
   rev,
+  mirror,
   counts,
 }: {
   loc: Location
   rev: string
+  /** Mirrors have no pull requests. */
+  mirror: boolean
   counts?: { branches: number; tags: number; pulls?: number }
 }) {
-  const tabs: {
+  const all: {
     view: View
     label: string
     icon: typeof GitBranch
@@ -160,6 +182,7 @@ function Tabs({
     },
     { view: "tags", label: "Tags", icon: Tag, count: counts?.tags },
   ]
+  const tabs = all.filter((t) => !mirror || t.view !== "pulls")
   const active =
     loc.view === "blob"
       ? "tree"

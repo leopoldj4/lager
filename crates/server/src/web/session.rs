@@ -50,6 +50,11 @@ impl Sessions {
         )
     }
 
+    /// Whether cookies are marked `Secure`.
+    pub fn secure(&self) -> bool {
+        self.secure
+    }
+
     /// The `Set-Cookie` value for a new session.
     pub fn issue(&self, user: &str, stamp: &[u8; 32]) -> String {
         let expires = now_secs() + self.lifetime_secs;
@@ -117,12 +122,17 @@ impl Sessions {
 
 /// The session cookie of a request.
 pub fn from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    cookie_value(headers, COOKIE)
+}
+
+/// The value of a request's cookie `name`.
+pub fn cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(axum::http::header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
-        .find_map(|c| c.trim().strip_prefix(COOKIE)?.strip_prefix('='))
+        .find_map(|c| c.trim().strip_prefix(name)?.strip_prefix('='))
         .filter(|v| !v.is_empty())
         .map(str::to_string)
 }

@@ -2,11 +2,13 @@
 //! files (docs/decisions/0014-web-interface.md).
 //!
 //! Everything lives under `/-/`, which no repository name can take:
-//! `/-/api/session` signs in and out, `/-/api/live` is the WebSocket, and
+//! `/-/api/session` signs in and out, `/-/api/live` is the WebSocket,
+//! `/-/api/github/` connects a GitHub account, and
 //! `/-/assets/` holds the built files. `/<repo>/-/raw/<rev>/<path>` answers
 //! a file's bytes. Every other browser page that is no Git request gets the
 //! application shell, which routes in the browser.
 
+mod github;
 pub mod live;
 mod passkeys;
 pub mod pulls;
@@ -127,6 +129,7 @@ impl Web {
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(passkeys::router())
+        .merge(github::router())
         .route("/-/api/session", post(sign_in).delete(sign_out))
         .route("/-/api/live", get(live::upgrade))
         .route("/-/assets/{*file}", get(asset))

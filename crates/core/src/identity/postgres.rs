@@ -142,6 +142,35 @@ CREATE TABLE worktree_pull_events (
 );
 CREATE INDEX worktree_pull_events_pull ON worktree_pull_events (repository, number, id);
 "#,
+    // GitHub accounts and read-only mirrors
+    // (docs/decisions/0020-github-mirrors.md).
+    r#"
+CREATE TABLE worktree_github_accounts (
+    user_name text PRIMARY KEY REFERENCES worktree_users (name) ON DELETE CASCADE,
+    github_id bigint NOT NULL,
+    login text NOT NULL,
+    -- The OAuth token. Git needs it in plain text to fetch.
+    token text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE worktree_github_mirrors (
+    -- The repository UUID.
+    repository text PRIMARY KEY,
+    name text NOT NULL,
+    -- Whose GitHub account the sync uses.
+    user_name text NOT NULL REFERENCES worktree_users (name) ON DELETE CASCADE,
+    -- owner/name on GitHub.
+    github text NOT NULL,
+    -- A server that starts a sync moves this ahead by a lease, so others
+    -- skip the mirror meanwhile.
+    next_sync_at timestamptz NOT NULL DEFAULT now(),
+    synced_at timestamptz,
+    error text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX worktree_github_mirrors_due ON worktree_github_mirrors (next_sync_at);
+CREATE INDEX worktree_github_mirrors_user ON worktree_github_mirrors (user_name);
+"#,
 ];
 
 /// Tokens a user can have at the same time.

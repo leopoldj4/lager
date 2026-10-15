@@ -61,6 +61,17 @@ session_secret = "$(head -c 32 /dev/urandom | base64)"
 TOML
 fi
 
+# GitHub mirrors need an OAuth app with callback URL
+# http://$listen/-/api/github/callback.
+if [[ -n "${WORKTREE_GITHUB_CLIENT_ID:-}" ]] && ! grep -q '^\[github\]' "$config"; then
+  cat >>"$config" <<TOML
+
+[github]                          # mirrors of GitHub repositories
+client_id = "$WORKTREE_GITHUB_CLIENT_ID"
+client_secret = "${WORKTREE_GITHUB_CLIENT_SECRET:?set WORKTREE_GITHUB_CLIENT_SECRET too}"
+TOML
+fi
+
 compose=(docker compose -f "$repo/scripts/local.compose.yaml")
 "${compose[@]}" up -d --wait
 server_pid=""

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link, useNavigate } from "@tanstack/react-router"
-import { GitBranch, KeyRound, LogOut, User } from "lucide-react"
+import { GitBranch, KeyRound, LogOut, Settings, User } from "lucide-react"
 
 import { signOut, useLive } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -42,6 +42,12 @@ export function Header() {
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Signed in as {state.user}</DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/-/settings">
+                  <Settings />
+                  Settings
+                </Link>
+              </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <Link to="/-/passkeys">
                   <KeyRound />

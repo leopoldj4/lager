@@ -9,6 +9,7 @@
 pub mod bus;
 pub mod disk;
 pub mod git;
+pub mod github;
 pub mod http;
 pub mod metrics;
 pub mod proc_receive;

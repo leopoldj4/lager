@@ -1,6 +1,7 @@
 //! Configuration file (TOML). It holds only what a server needs to start:
-//! its address, the storage service, the database, the change bus, and the
-//! web session secret (docs/decisions/0015-minimal-configuration.md).
+//! its address, the storage service, the database, the change bus, the
+//! web session secret, and the GitHub OAuth app
+//! (docs/decisions/0015-minimal-configuration.md).
 //! Repositories live in the catalog in storage, users in the database, and
 //! limits are fixed in [`crate::limits`].
 
@@ -19,6 +20,8 @@ pub struct Config {
     pub bus: Option<BusConfig>,
     #[serde(default)]
     pub web: Option<WebConfig>,
+    #[serde(default)]
+    pub github: Option<GithubConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -83,6 +86,16 @@ pub struct WebConfig {
     pub public_origin: Option<String>,
 }
 
+/// A GitHub OAuth app for read-only mirrors of GitHub repositories
+/// (docs/decisions/0020-github-mirrors.md). Its callback URL is
+/// `<origin>/-/api/github/callback`. Without it, nobody can connect GitHub.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GithubConfig {
+    pub client_id: String,
+    pub client_secret: String,
+}
+
 fn default_cache_dir() -> PathBuf {
     PathBuf::from("/var/cache/worktree")
 }
@@ -110,6 +123,13 @@ impl Config {
             anyhow::ensure!(
                 w.session_secret.chars().count() >= 32,
                 "web.session_secret needs at least 32 characters"
+            );
+        }
+        if let Some(g) = &self.github {
+            anyhow::ensure!(self.web.is_some(), "[github] needs [web]");
+            anyhow::ensure!(
+                !g.client_id.is_empty() && !g.client_secret.is_empty(),
+                "github.client_id and github.client_secret are required"
             );
         }
         Ok(())

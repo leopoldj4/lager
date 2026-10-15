@@ -31,6 +31,8 @@ export interface RepoSummary {
   name: string
   default_branch: string
   anonymous_read: boolean
+  /** The GitHub repository of a read-only mirror. */
+  mirror: string | null
 }
 
 export interface RefInfo {
@@ -42,6 +44,8 @@ export interface RefInfo {
 
 export interface Refs {
   generation: number
+  /** The GitHub repository of a read-only mirror. */
+  mirror: string | null
   head: string
   branches: RefInfo[]
   tags: RefInfo[]
@@ -337,6 +341,66 @@ export function usePullChange(repo: string) {
     onSuccess: ({ pull }) => {
       qc.invalidateQueries({ queryKey: ["repo", repo, "pulls"] })
       qc.invalidateQueries({ queryKey: ["repo", repo, "pull", pull.number] })
+    },
+  })
+}
+
+// GitHub mirrors (docs/decisions/0020-github-mirrors.md).
+
+export interface GithubMirror {
+  name: string
+  github: string
+  synced_ms: number | null
+  error: string | null
+}
+
+export interface GithubStatus {
+  /** False without [github] in the server configuration. */
+  configured: boolean
+  account: { login: string } | null
+  mirrors: GithubMirror[]
+}
+
+export interface GithubRepo {
+  full_name: string
+  name: string
+  private: boolean
+  description: string | null
+  default_branch: string
+  pushed_at: string | null
+}
+
+export function useGithub() {
+  const { user } = useLive() ?? {}
+  return useQuery({
+    queryKey: ["github", user],
+    queryFn: () => live.request<GithubStatus>({ op: "github" }),
+    enabled: !!user,
+    // Shows syncs as they finish.
+    refetchInterval: 5_000,
+  })
+}
+
+export function useGithubRepos(enabled: boolean) {
+  const { user } = useLive() ?? {}
+  return useQuery({
+    queryKey: ["github", user, "repos"],
+    queryFn: () =>
+      live.request<{ repos: GithubRepo[] }>({ op: "github_repos" }),
+    enabled: !!user && enabled,
+    staleTime: 5 * 60_000,
+  })
+}
+
+/** `github_mirror`, `github_unmirror`, or `github_disconnect`. */
+export function useGithubChange() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (change: { op: string; [k: string]: unknown }) =>
+      live.request<unknown>(change),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["github"] })
+      qc.invalidateQueries({ queryKey: ["repos"] })
     },
   })
 }

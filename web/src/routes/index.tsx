@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
+import { GithubMark } from "@/components/github-mark"
 
 export const Route = createFileRoute("/")({ component: Repositories })
 
@@ -65,6 +66,15 @@ function Repositories() {
                 )}
                 <span className="font-medium">{r.name}</span>
                 {r.anonymous_read && <Badge variant="outline">public</Badge>}
+                {r.mirror && (
+                  <Badge
+                    variant="outline"
+                    title={`Mirror of github.com/${r.mirror}`}
+                  >
+                    <GithubMark />
+                    mirror
+                  </Badge>
+                )}
                 <span className="ml-auto font-mono text-xs text-muted-foreground">
                   {r.default_branch}
                 </span>

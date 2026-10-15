@@ -35,6 +35,8 @@ pub struct AppInner {
     pub registry: Arc<Registry>,
     pub directory: Arc<Directory>,
     pub pulls: Arc<crate::pulls::PullService>,
+    /// GitHub mirrors, with `[github]`.
+    pub github: Option<Arc<crate::github::Github>>,
     pub processes: Arc<Semaphore>,
     pub socket_path: PathBuf,
     pub health: health::Health,
@@ -302,6 +304,15 @@ async fn authorize(
         });
     };
     let level = s.directory.access(&identity, &repo);
+    if need > Access::Read
+        && level >= Access::Read
+        && let Some(source) = &repo.mirror
+    {
+        return Err(plain(
+            StatusCode::FORBIDDEN,
+            &format!("{name} is a read-only mirror of github.com/{source}; push to GitHub"),
+        ));
+    }
     if level < need {
         return Err(match (&identity, level) {
             (Identity::Anonymous, _) => unauthorized(),

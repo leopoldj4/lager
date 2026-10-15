@@ -30,6 +30,10 @@ pub struct CatalogRecord {
     pub default_branch: String,
     pub anonymous_read: bool,
     pub ref_rules: Vec<RefRule>,
+    /// Set for a read-only mirror of a GitHub repository (`owner/name`).
+    /// Servers before decision 20 ignore it and accept pushes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<String>,
 }
 
 impl CatalogRecord {
@@ -40,6 +44,7 @@ impl CatalogRecord {
             default_branch: self.default_branch.clone(),
             anonymous_read: self.anonymous_read,
             ref_rules: self.ref_rules.clone(),
+            mirror: self.mirror.clone(),
         }
     }
 }
@@ -201,6 +206,7 @@ impl Catalog {
             default_branch: settings.default_branch.clone(),
             anonymous_read: settings.anonymous_read,
             ref_rules: settings.ref_rules.clone(),
+            mirror: settings.mirror.clone(),
         };
         self.write(&record, mode, || {
             CatalogError::Exists(settings.name.clone())
