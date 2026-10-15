@@ -141,6 +141,7 @@ export function Omnibar({
               {scope && (
                 <button
                   type="button"
+                  tabIndex={-1}
                   onClick={() => setScoped(false)}
                   className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs text-foreground hover:bg-muted/70"
                   aria-label={`Search everywhere instead of ${scope}`}
