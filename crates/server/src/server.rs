@@ -156,6 +156,15 @@ pub async fn start_with_listener(
         registry.clone(),
         directory.clone(),
     ));
+    let github = match &cfg.github {
+        Some(g) => Some(Arc::new(crate::github::Github::new(
+            g.clone(),
+            worktree_core::github::GithubDb::new(directory.users().pool().clone()),
+            registry.clone(),
+            directory.clone(),
+        )?)),
+        None => None,
+    };
 
     let socket_path = cfg.socket_path();
     let hook_listener = bind_socket(&socket_path)?;
@@ -224,6 +233,12 @@ pub async fn start_with_listener(
     let (p, stop) = (pulls.clone(), stop_http.subscribe());
     background.push(tokio::spawn(async move { p.run(stop).await }));
 
+    // Mirrors of GitHub repositories that are due.
+    if let Some(g) = github.clone() {
+        let stop = stop_http.subscribe();
+        background.push(tokio::spawn(async move { g.run(stop).await }));
+    }
+
     let reg = registry.clone();
     let mut stop = stop_http.subscribe();
     background.push(tokio::spawn(async move {
@@ -242,6 +257,7 @@ pub async fn start_with_listener(
         registry: registry.clone(),
         directory,
         pulls,
+        github,
         processes: Arc::new(Semaphore::new(limits::MAX_GIT_PROCESSES)),
         socket_path: socket_path.clone(),
         health: crate::http::health::Health::new(svc.storage.clone(), bus),

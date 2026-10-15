@@ -14,6 +14,9 @@ pub struct RepoSettings {
     pub default_branch: String,
     pub anonymous_read: bool,
     pub ref_rules: Vec<RefRule>,
+    /// The GitHub repository (`owner/name`) that this repository is a
+    /// read-only mirror of (docs/decisions/0020-github-mirrors.md).
+    pub mirror: Option<String>,
 }
 
 impl RepoSettings {
@@ -24,6 +27,7 @@ impl RepoSettings {
             default_branch: "main".into(),
             anonymous_read: false,
             ref_rules: vec![],
+            mirror: None,
         }
     }
 }

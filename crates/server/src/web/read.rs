@@ -127,6 +127,21 @@ pub enum Query {
         squash: bool,
         request: String,
     },
+    // GitHub mirrors (docs/decisions/0020-github-mirrors.md), answered by
+    // `super::github`. They need a session.
+    /// The user's GitHub account and mirrors.
+    Github,
+    /// The GitHub repositories the user can mirror.
+    GithubRepos,
+    /// Mirrors a GitHub repository (`owner/name`).
+    GithubMirror {
+        github: String,
+    },
+    /// Stops syncing the user's mirror `name`; it takes pushes again.
+    GithubUnmirror {
+        name: String,
+    },
+    GithubDisconnect,
 }
 
 fn default_limit() -> u32 {
@@ -204,6 +219,11 @@ pub async fn readable(s: &AppInner, who: &Identity, name: &str) -> Result<RepoSe
 pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadError> {
     let name = match &q {
         Query::Repos => return repos(s, who).await,
+        Query::Github
+        | Query::GithubRepos
+        | Query::GithubMirror { .. }
+        | Query::GithubUnmirror { .. }
+        | Query::GithubDisconnect => return super::github::run(s, who, q).await,
         Query::RepoCreate { name, public } => return create(s, who, name, *public).await,
         Query::Refs { repo }
         | Query::Log { repo, .. }
@@ -237,6 +257,11 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
     let g = Git { s, dir: &view.dir };
     let mut out = match q {
         Query::Repos
+        | Query::Github
+        | Query::GithubRepos
+        | Query::GithubMirror { .. }
+        | Query::GithubUnmirror { .. }
+        | Query::GithubDisconnect
         | Query::RepoCreate { .. }
         | Query::Pulls { .. }
         | Query::Pull { .. }
@@ -271,6 +296,7 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
         }
     };
     out["generation"] = json!(view.generation);
+    out["mirror"] = json!(repo.mirror);
     Ok(out)
 }
 
@@ -325,6 +351,8 @@ struct RepoSummary {
     name: String,
     default_branch: String,
     anonymous_read: bool,
+    /// The GitHub repository of a read-only mirror.
+    mirror: Option<String>,
 }
 
 async fn repos(s: &AppInner, who: &Identity) -> Result<Value, ReadError> {
@@ -345,6 +373,7 @@ async fn repos(s: &AppInner, who: &Identity) -> Result<Value, ReadError> {
             name: r.name,
             default_branch: r.default_branch,
             anonymous_read: r.anonymous_read,
+            mirror: r.mirror,
         })
         .collect();
     Ok(json!({ "repos": repos }))
@@ -392,6 +421,7 @@ async fn create(
             name: repo.name,
             default_branch: repo.default_branch,
             anonymous_read: repo.anonymous_read,
+            mirror: None,
         }
     }))
 }

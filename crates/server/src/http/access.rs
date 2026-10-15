@@ -72,13 +72,19 @@ impl Directory {
         self.access(who, &probe) >= CREATE_ON_PUSH
     }
 
-    /// The access level of a user for a repository.
+    /// The access level of a user for a repository. Mirrors of GitHub
+    /// repositories are read-only (docs/decisions/0020-github-mirrors.md).
     pub fn access(&self, who: &Identity, repo: &RepoSettings) -> Access {
         let base = who.access(&repo.name);
-        if repo.anonymous_read {
+        let level = if repo.anonymous_read {
             base.max(Access::Read)
         } else {
             base
+        };
+        if repo.mirror.is_some() {
+            level.min(Access::Read)
+        } else {
+            level
         }
     }
 }

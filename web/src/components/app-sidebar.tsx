@@ -11,6 +11,7 @@ import {
   LogIn,
   LogOut,
   SearchIcon,
+  Settings,
 } from "lucide-react"
 
 import {
@@ -285,6 +286,12 @@ function UserMenu() {
           <DropdownMenuContent side="top" align="start" className="w-56">
             <DropdownMenuLabel>Signed in as {state.user}</DropdownMenuLabel>
             <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link to="/-/settings" onClick={close}>
+                <Settings />
+                Settings
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <Link to="/-/passkeys" onClick={close}>
                 <KeyRound />

@@ -66,3 +66,15 @@ pub const BUS_HEALTH_GRACE: Duration = Duration::from_secs(5);
 
 /// Web sessions end after this time.
 pub const SESSION_DAYS: u64 = 14;
+
+/// A GitHub mirror is checked for changes this often, also after a failure
+/// (docs/decisions/0020-github-mirrors.md).
+pub const GITHUB_SYNC_INTERVAL: Duration = Duration::from_secs(60);
+/// Other servers skip a mirror for this long while one syncs it.
+pub const GITHUB_SYNC_LEASE: Duration = Duration::from_secs(1800);
+/// How often each server looks for mirrors that are due.
+pub const GITHUB_POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// Mirrors that one server syncs at the same time.
+pub const GITHUB_CONCURRENT_SYNCS: usize = 4;
+/// Time limit for fetching one mirror from GitHub.
+pub const GITHUB_FETCH_TIMEOUT: Duration = Duration::from_secs(1500);

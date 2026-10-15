@@ -27,7 +27,7 @@ const SHOWN = 5
  */
 export function Overview({ repo, refs }: { repo: string; refs: Refs }) {
   const user = useLive()?.user
-  const pulls = usePulls(repo, false)
+  const pulls = usePulls(repo, false, !refs.mirror)
   const open = pulls.data?.pages.flatMap((p) => p.pulls)
   const mine = (user && open?.filter((p) => p.author === user)) || []
   const others = open?.filter((p) => !mine.includes(p))
@@ -36,7 +36,7 @@ export function Overview({ repo, refs }: { repo: string; refs: Refs }) {
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
       <div className="grid min-w-0 grid-cols-1 content-start gap-6">
-        {mine.length > 0 && (
+        {!refs.mirror && mine.length > 0 && (
           <Section title="Your pull requests" count={mine.length}>
             <ul className="divide-y rounded-lg border">
               {mine.map((p) => (
@@ -45,7 +45,7 @@ export function Overview({ repo, refs }: { repo: string; refs: Refs }) {
             </ul>
           </Section>
         )}
-        {!(mine.length > 0 && others?.length === 0) && (
+        {!refs.mirror && !(mine.length > 0 && others?.length === 0) && (
           <Section
             title={mine.length > 0 ? "Other pull requests" : "Pull requests"}
             count={total === undefined ? undefined : total - mine.length}
@@ -233,6 +233,7 @@ function RecentBranches({
                   <PullIcon state="open" className="size-3.5" />#{pull.number}
                 </Link>
               ) : (
+                !refs.mirror &&
                 user &&
                 open &&
                 b.oid !== head?.oid && (

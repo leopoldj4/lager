@@ -30,6 +30,10 @@ A `.local/worktree.toml` from before the minimal configuration
 ([decision 15](docs/decisions/0015-minimal-configuration.md)) no longer
 loads; remove it and the script writes a new one.
 
+For GitHub mirrors, register a GitHub OAuth app with the callback URL
+`http://127.0.0.1:8080/-/api/github/callback` and start with
+`WORKTREE_GITHUB_CLIENT_ID=... WORKTREE_GITHUB_CLIENT_SECRET=... scripts/local.sh`.
+
 It needs Rust (rustup reads `rust-toolchain.toml`), the OpenSSL headers
 (`libssl-dev`), Bun, Docker with Compose, and Git 2.45 or later.
 `docker compose -p worktree-local down -v` removes the stored data.
@@ -162,6 +166,10 @@ url = "nats://nats.internal:4222"  # without [bus], events stay on this server
 [web]                              # web interface and its API under /-/
 session_secret = "..."             # at least 32 characters, the same on every server
 public_origin = "https://git.example.com" # optional; exact public origin, no trailing slash
+
+[github]                           # optional; a GitHub OAuth app for mirrors
+client_id = "..."                  # callback URL: https://git.example.com/-/api/github/callback
+client_secret = "..."
 ```
 
 Every server is plain HTTP behind a load balancer that terminates HTTPS
@@ -212,6 +220,12 @@ API under `/-/api/` answers.
   PostgreSQL, their refs and merges in the log; a push that brings the
   source into the target marks the pull request merged. See
   [decision 19](docs/decisions/0019-pull-requests.md).
+- GitHub mirrors (`[github]`): **Settings** in the user menu has
+  **Connect with GitHub**. Then pick GitHub repositories; each becomes
+  `<user>/<name>` here and follows GitHub's branches, tags, and default
+  branch within about a minute. Mirrors are read-only: pushes and pull
+  requests are refused. **Stop syncing** keeps the repository and makes it
+  writable. See [decision 20](docs/decisions/0020-github-mirrors.md).
 - Every response has an `x-worktree-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: worktree: accepted ...` line. Logs never contain credentials or
