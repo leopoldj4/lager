@@ -67,7 +67,7 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
   return (
     <Sidebar>
       <SidebarHeader>
-        <SidebarMenu>
+        <SidebarMenu className="gap-1">
           <SidebarMenuItem>
             <SidebarMenuButton asChild className="font-semibold">
               <Link to="/" onClick={close}>
