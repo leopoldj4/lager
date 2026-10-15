@@ -34,6 +34,27 @@ It needs Rust (rustup reads `rust-toolchain.toml`), the OpenSSL headers
 (`libssl-dev`), Bun, Docker with Compose, and Git 2.45 or later.
 `docker compose -p worktree-local down -v` removes the stored data.
 
+### Demo data
+
+`scripts/seed.ts` creates two users, `demo` and `alex` (password
+`demo-password`), and repositories under `demo/` to try everything out:
+a public website with branches, tags, a binary file, and six pull requests
+(open, conflicting, merged, squashed, closed, merged by a push), a private
+API with a long history, a large diff, and ref rules, a nested repository
+with the default branch `trunk`, a private one only `demo` reads, and an
+empty one. `alex` has `write` on the website and `read` on the others.
+
+```bash
+bun scripts/seed.ts                                            # the local server
+bun scripts/seed.ts --url https://git.example.com --ssh worktree # a deployment
+```
+
+`--ssh` runs the administration commands in the Compose deployment on that
+host (`--compose-dir`, default `/opt/worktree`); `--cli "<command>"` names
+any other. Repositories that exist already are skipped; `--reset` deletes
+and seeds them again. `--user`, `--reviewer`, and `--password` change the
+names and the password.
+
 ## Commands
 
 The server and the administration command line are separate programs:
