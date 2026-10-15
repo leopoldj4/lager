@@ -295,6 +295,116 @@ impl Git {
         }
     }
 
+    /// The best common ancestor of two commits; `None` without one.
+    pub async fn merge_base(
+        &self,
+        dir: &Path,
+        format: ObjectFormat,
+        a: &Oid,
+        b: &Oid,
+    ) -> Result<Option<Oid>, GitError> {
+        let out = self
+            .in_repo(dir)
+            .args(["merge-base", a.as_str(), b.as_str()])
+            .stderr(Stdio::null())
+            .output()
+            .await?;
+        match out.status.code() {
+            Some(0) => {
+                let s = String::from_utf8_lossy(&out.stdout);
+                Oid::parse(format, s.trim())
+                    .map(Some)
+                    .map_err(|e| GitError::Protocol(e.to_string()))
+            }
+            Some(1) => Ok(None),
+            _ => Err(GitError::Failed {
+                cmd: "merge-base".into(),
+                stderr: format!("{}", out.status),
+            }),
+        }
+    }
+
+    /// Merges two commits without a worktree (`git merge-tree`). The tree
+    /// and its new objects are written to the object directory of `dir`,
+    /// or of `objects` when given (with `dir`'s objects as alternates).
+    pub async fn merge_tree(
+        &self,
+        dir: &Path,
+        objects: Option<&Path>,
+        format: ObjectFormat,
+        ours: &Oid,
+        theirs: &Oid,
+    ) -> Result<MergeTree, GitError> {
+        let mut c = self.in_repo(dir);
+        if let Some(o) = objects {
+            c.env("GIT_OBJECT_DIRECTORY", o)
+                .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", dir.join("objects"));
+        }
+        let out = c
+            .args([
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                "--no-messages",
+                "-z",
+                ours.as_str(),
+                theirs.as_str(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await?;
+        let clean = match out.status.code() {
+            Some(0) => true,
+            Some(1) => false,
+            _ => {
+                return Err(GitError::Failed {
+                    cmd: "merge-tree".into(),
+                    stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                });
+            }
+        };
+        // `<tree>\0` and, after conflicts, `<path>\0` for each conflicted
+        // stage.
+        let mut parts = out.stdout.split(|b| *b == 0);
+        let tree = parts
+            .next()
+            .map(|t| String::from_utf8_lossy(t).to_string())
+            .unwrap_or_default();
+        let tree = Oid::parse(format, &tree).map_err(|e| GitError::Protocol(e.to_string()))?;
+        if clean {
+            return Ok(MergeTree::Clean(tree));
+        }
+        let mut files: Vec<String> = parts
+            .filter(|p| !p.is_empty())
+            .map(|p| String::from_utf8_lossy(p).to_string())
+            .collect();
+        files.dedup();
+        Ok(MergeTree::Conflicts(files))
+    }
+
+    /// Writes a commit object with the current time.
+    pub async fn commit_tree(
+        &self,
+        dir: &Path,
+        format: ObjectFormat,
+        c: &NewCommit<'_>,
+    ) -> Result<Oid, GitError> {
+        let mut cmd = self.in_repo(dir);
+        cmd.env("GIT_AUTHOR_NAME", &c.author.name)
+            .env("GIT_AUTHOR_EMAIL", &c.author.email)
+            .env("GIT_COMMITTER_NAME", &c.committer.name)
+            .env("GIT_COMMITTER_EMAIL", &c.committer.email)
+            .args(["commit-tree", "-F", "-", c.tree.as_str()]);
+        for p in c.parents {
+            cmd.arg("-p").arg(p.as_str());
+        }
+        let out = run(&mut cmd, Some(c.message.as_bytes().to_vec())).await?;
+        Oid::parse(format, String::from_utf8_lossy(&out).trim())
+            .map_err(|e| GitError::Protocol(e.to_string()))
+    }
+
     /// Object types; `None` for missing objects.
     pub async fn object_types(
         &self,
@@ -414,6 +524,30 @@ impl Git {
         t.send(b"prepare\0", "prepare").await?;
         Ok(t)
     }
+}
+
+/// The result of [`Git::merge_tree`].
+#[derive(Debug)]
+pub enum MergeTree {
+    Clean(Oid),
+    /// The conflicted paths.
+    Conflicts(Vec<String>),
+}
+
+/// A commit that the server writes.
+pub struct NewCommit<'a> {
+    pub tree: &'a Oid,
+    pub parents: &'a [&'a Oid],
+    pub message: &'a str,
+    pub author: &'a Ident,
+    pub committer: &'a Ident,
+}
+
+/// A name and email for commits that the server writes.
+#[derive(Clone, Debug)]
+pub struct Ident {
+    pub name: String,
+    pub email: String,
 }
 
 /// A prepared `git update-ref --stdin` transaction.
@@ -575,9 +709,11 @@ async fn exec(cmd: &mut Command, input: Option<Vec<u8>>) -> Result<Vec<u8>, GitE
 }
 
 /// Upload-pack configuration: serve only objects reachable from advertised
-/// refs, and no partial clone (a later extension).
+/// refs, and no partial clone (a later extension). Refs under
+/// `refs/server/` are never advertised, fetched, or pushed.
 pub fn read_config() -> &'static str {
-    "[uploadpack]\n\tallowAnySHA1InWant = false\n\tallowReachableSHA1InWant = false\n\
+    "[transfer]\n\thideRefs = refs/server/\n\
+     [uploadpack]\n\tallowAnySHA1InWant = false\n\tallowReachableSHA1InWant = false\n\
      \tallowTipSHA1InWant = false\n\tallowFilter = false\n\tallowRefInWant = false\n"
 }
 

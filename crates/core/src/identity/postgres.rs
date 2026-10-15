@@ -87,6 +87,61 @@ ALTER TABLE worktree_passkey_challenges ALTER COLUMN user_name DROP NOT NULL;
 -- Pending login state changes shape for account discovery.
 DELETE FROM worktree_passkey_challenges;
 "#,
+    // Pull requests (docs/decisions/0019-pull-requests.md), by repository
+    // UUID: a reused name starts without the old pull requests.
+    r#"
+CREATE TABLE worktree_pull_numbers (
+    repository text PRIMARY KEY,
+    last bigint NOT NULL
+);
+CREATE TABLE worktree_pulls (
+    repository text NOT NULL,
+    number bigint NOT NULL,
+    title text NOT NULL,
+    body text NOT NULL,
+    author text NOT NULL,
+    -- Branch short names.
+    source text NOT NULL,
+    target text NOT NULL,
+    state text NOT NULL CHECK (state IN ('open', 'closed', 'merged')),
+    -- The source and target commits the server last recorded, and their
+    -- merge base: the diff of a pull request starts there. After a merge,
+    -- the target is the merge commit.
+    head_oid text NOT NULL,
+    target_oid text NOT NULL,
+    merge_base text NOT NULL,
+    merge_oid text,
+    -- NULL for a merge by a push.
+    merged_by text,
+    -- The client's request UUIDs of the creation and the merge, for retries.
+    request text UNIQUE,
+    merge_request text,
+    version bigint NOT NULL DEFAULT 1,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    closed_at timestamptz,
+    PRIMARY KEY (repository, number)
+);
+CREATE INDEX worktree_pulls_state ON worktree_pulls (repository, state, number);
+CREATE UNIQUE INDEX worktree_pulls_open_branches
+    ON worktree_pulls (repository, source, target) WHERE state = 'open';
+CREATE TABLE worktree_pull_events (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    repository text NOT NULL,
+    number bigint NOT NULL,
+    kind text NOT NULL CHECK (kind IN ('comment', 'push', 'closed', 'reopened', 'merged')),
+    -- NULL for the server.
+    author text,
+    body text,
+    old_oid text,
+    oid text,
+    request text UNIQUE,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (repository, number) REFERENCES worktree_pulls (repository, number)
+        ON DELETE CASCADE
+);
+CREATE INDEX worktree_pull_events_pull ON worktree_pull_events (repository, number, id);
+"#,
 ];
 
 /// Tokens a user can have at the same time.
@@ -183,6 +238,12 @@ impl PgUsers {
             pool,
             verified: VerifiedHashes::default(),
         })
+    }
+
+    /// The connection pool, shared with the pull requests
+    /// ([`crate::pulls::Pulls`]).
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     async fn conn(&self) -> Result<sqlx::pool::PoolConnection<sqlx::Postgres>, UserError> {

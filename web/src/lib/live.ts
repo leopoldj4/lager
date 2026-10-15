@@ -36,6 +36,8 @@ export interface Watcher {
   onChange: (generation: number) => void
   /** Events may be missing; fetch again. */
   onResync: () => void
+  /** A pull request changed (docs/decisions/0019-pull-requests.md). */
+  onPull?: (number: number) => void
 }
 
 type Pending = {
@@ -51,6 +53,8 @@ export class Live {
   private watchers = new Map<string, Set<Watcher>>()
   /** Highest generation seen per repository. */
   private generations = new Map<string, number>()
+  /** Highest version seen per pull request, by "<repo>#<number>". */
+  private pullVersions = new Map<string, number>()
   private attempt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   private silence: ReturnType<typeof setTimeout> | null = null
@@ -169,6 +173,13 @@ export class Live {
       case "changed":
         this.seen(m.repo, m.generation, true)
         break
+      case "pull": {
+        const key = `${m.repo}#${m.number}`
+        if ((this.pullVersions.get(key) ?? 0) >= m.version) break
+        this.pullVersions.set(key, m.version)
+        this.watchers.get(m.repo)?.forEach((w) => w.onPull?.(m.number))
+        break
+      }
       case "resync": {
         const sets = m.repo
           ? [this.watchers.get(m.repo)]

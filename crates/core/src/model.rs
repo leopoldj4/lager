@@ -140,7 +140,9 @@ impl fmt::Display for Oid {
     }
 }
 
-/// A validated ref name. Only branches and tags are supported.
+/// A validated ref name: branches, tags, and the refs of pull requests,
+/// which only the server writes: `refs/pull/<number>/head` and the merge
+/// receipt `refs/server/pull/<number>/receipt`, which clients never see.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct RefName(String);
@@ -157,7 +159,7 @@ impl RefName {
             return bad("too long");
         }
         let kind_ok = s.starts_with("refs/heads/") || s.starts_with("refs/tags/");
-        if !kind_ok {
+        if !kind_ok && pull_number(s).is_none() && receipt_number(s).is_none() {
             return bad("only refs/heads/ and refs/tags/ are supported");
         }
         if s.ends_with('/')
@@ -192,6 +194,41 @@ impl RefName {
     pub fn is_tag(&self) -> bool {
         self.0.starts_with("refs/tags/")
     }
+
+    /// A ref of a pull request. Only the server changes these.
+    pub fn is_pull(&self) -> bool {
+        self.0.starts_with("refs/pull/") || self.0.starts_with(SERVER_REFS)
+    }
+}
+
+/// The ref that keeps the head of a pull request reachable.
+pub fn pull_ref(number: u64) -> RefName {
+    RefName(format!("refs/pull/{number}/head"))
+}
+
+/// Refs that only the server reads; Git clients do not see them
+/// (`transfer.hideRefs`).
+pub const SERVER_REFS: &str = "refs/server/";
+
+/// A durable merge receipt, created atomically with the target update.
+pub fn pull_receipt_ref(number: u64) -> RefName {
+    RefName(format!("{SERVER_REFS}pull/{number}/receipt"))
+}
+
+/// The number of a pull request's head ref.
+fn pull_number(s: &str) -> Option<u64> {
+    number(s.strip_prefix("refs/pull/")?.strip_suffix("/head")?)
+}
+
+/// The number of a pull request's merge receipt ref.
+fn receipt_number(s: &str) -> Option<u64> {
+    let rest = s.strip_prefix(SERVER_REFS)?.strip_prefix("pull/")?;
+    number(rest.strip_suffix("/receipt")?)
+}
+
+fn number(n: &str) -> Option<u64> {
+    let ok = !n.is_empty() && n.len() <= 18 && !n.starts_with('0');
+    ok.then(|| n.parse().ok()).flatten()
 }
 
 impl TryFrom<String> for RefName {
@@ -378,6 +415,13 @@ pub enum Operation {
         default_branch: RefName,
     },
     Push,
+    /// A pull request merged by the server: the target branch and the pull
+    /// request's ref (docs/decisions/0019-pull-requests.md).
+    Merge {
+        pull: u64,
+    },
+    /// The server moved refs of pull requests to their source branches.
+    PullRefs,
     Snapshot {
         snapshot: SnapshotId,
         base_entry: EntryId,
@@ -511,6 +555,8 @@ impl RefState {
             }
             Operation::DefaultBranch { branch } => self.head = Some(branch.clone()),
             Operation::Push
+            | Operation::Merge { .. }
+            | Operation::PullRefs
             | Operation::Snapshot { .. }
             | Operation::Delete
             | Operation::Removal { .. } => {}

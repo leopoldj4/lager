@@ -6,6 +6,7 @@ import { useEffect, useState, useSyncExternalStore } from "react"
 import {
   QueryClient,
   useInfiniteQuery,
+  useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
@@ -89,6 +90,79 @@ export interface CommitDetail {
   truncated: boolean
 }
 
+// Pull requests (docs/decisions/0019-pull-requests.md).
+
+export type PullState = "open" | "closed" | "merged"
+
+export interface Pull {
+  number: number
+  title: string
+  body: string
+  author: string
+  source: string
+  target: string
+  state: PullState
+  head_oid: string
+  target_oid: string
+  merge_base: string
+  merge_oid: string | null
+  /** null for a merge by a push. */
+  merged_by: string | null
+  version: number
+  created_ms: number
+  updated_ms: number
+  closed_ms: number | null
+}
+
+export interface PullEvent {
+  id: number
+  kind: "comment" | "push" | "closed" | "reopened" | "merged"
+  /** null for the server. */
+  author: string | null
+  body: string | null
+  old_oid: string | null
+  oid: string | null
+  created_ms: number
+}
+
+export interface PullList {
+  pulls: Pull[]
+  counts: { open: number; closed: number }
+  more: boolean
+}
+
+export type Mergeable =
+  "clean" | "conflict" | "up_to_date" | "source_missing" | "target_missing"
+
+export interface PullDetail {
+  generation: number
+  pull: Pull
+  events: PullEvent[]
+  /** The comparison that shows the pull request's changes. */
+  base: string
+  head: string
+  source_oid: string | null
+  target_oid: string | null
+  /** null unless open. */
+  mergeable: Mergeable | null
+  conflicts: string[]
+  can_comment: boolean
+  can_merge: boolean
+  can_close: boolean
+}
+
+export interface Comparison {
+  generation: number
+  base: string
+  head: string
+  merge_base: string
+  /** Newest first. */
+  commits: Commit[]
+  more: boolean
+  diff: string
+  truncated: boolean
+}
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -130,6 +204,10 @@ export function useWatch(repo: string) {
         refresh()
       },
       onResync: refresh,
+      onPull: (number) => {
+        qc.invalidateQueries({ queryKey: ["repo", repo, "pulls"] })
+        qc.invalidateQueries({ queryKey: ["repo", repo, "pull", number] })
+      },
     })
   }, [qc, repo])
   return pushedAt
@@ -190,6 +268,76 @@ export function useCommit(repo: string, rev: string) {
     queryFn: () => live.request<CommitDetail>({ op: "commit", repo, rev }),
     // A commit never changes.
     staleTime: Infinity,
+  })
+}
+
+export function usePulls(repo: string, closed: boolean) {
+  const limit = 30
+  return useInfiniteQuery({
+    queryKey: ["repo", repo, "pulls", closed],
+    queryFn: ({ pageParam }) =>
+      live.request<PullList>({
+        op: "pulls",
+        repo,
+        closed,
+        skip: pageParam,
+        limit,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) =>
+      last.more ? pages.length * limit : undefined,
+  })
+}
+
+/** Open and closed pull requests, for the repository's tabs. */
+export function usePullCounts(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "pulls", "counts"],
+    queryFn: () => live.request<PullList>({ op: "pulls", repo, limit: 1 }),
+    select: (d) => d.counts,
+  })
+}
+
+export function usePull(repo: string, number: number) {
+  return useQuery({
+    queryKey: ["repo", repo, "pull", number],
+    queryFn: () => live.request<PullDetail>({ op: "pull", repo, number }),
+  })
+}
+
+/** The commits and changes of `head` since its merge base with `base`. */
+export function useCompare(repo: string, base: string, head: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "compare", base, head],
+    queryFn: () =>
+      live.request<Comparison>({ op: "compare", repo, base, head }),
+    enabled: base !== "" && head !== "",
+  })
+}
+
+/** A UUID for retries of a change; also outside secure contexts. */
+export function requestId() {
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("")
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+/**
+ * Changes a pull request: `pull_create`, `pull_comment`, `pull_close`,
+ * `pull_reopen`, or `pull_merge`. Pages refresh from the change event too;
+ * refreshing here shows the change without waiting for it.
+ */
+export function usePullChange(repo: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (change: { op: string; [k: string]: unknown }) =>
+      live.request<{ pull: Pull }>({ ...change, repo }),
+    onSuccess: ({ pull }) => {
+      qc.invalidateQueries({ queryKey: ["repo", repo, "pulls"] })
+      qc.invalidateQueries({ queryKey: ["repo", repo, "pull", pull.number] })
+    },
   })
 }
 

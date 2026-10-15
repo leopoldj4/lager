@@ -2,7 +2,7 @@
 //! (docs/decisions/0012-nats-change-bus.md).
 //!
 //! After an accepted push, a server publishes the repository and its new
-//! generation. Each server receives the events of all servers and passes
+//! generation; after a change of a pull request, its number and version. Each server receives the events of all servers and passes
 //! them, and its own, to local subscribers. Events are hints: a lost event
 //! delays a cache update but never changes a read result, because every
 //! request checks the storage head.
@@ -34,10 +34,29 @@ pub struct Change {
     pub remote: bool,
 }
 
+/// A change of a pull request in the database
+/// (docs/decisions/0019-pull-requests.md). Its version only grows.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct PullChange {
+    pub repo: RepoId,
+    pub number: u64,
+    pub version: u64,
+    pub server: String,
+    #[serde(skip)]
+    pub remote: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum Event {
+    /// An accepted push or another new generation.
+    Changed(Change),
+    Pull(PullChange),
+}
+
 pub struct Bus {
     self_id: String,
     nats: Option<Nats>,
-    local: broadcast::Sender<Change>,
+    local: broadcast::Sender<Event>,
     metrics: Arc<Metrics>,
 }
 
@@ -118,13 +137,29 @@ impl Bus {
             server: self.self_id.clone(),
             remote: false,
         };
+        let payload = serde_json::to_vec(&change).expect("serializes");
+        self.send(repo, "changed", payload, Event::Changed(change));
+    }
+
+    /// Announces a changed pull request. Never waits for NATS.
+    pub fn publish_pull(&self, repo: RepoId, number: u64, version: u64) {
+        let change = PullChange {
+            repo,
+            number,
+            version,
+            server: self.self_id.clone(),
+            remote: false,
+        };
+        let payload = serde_json::to_vec(&change).expect("serializes");
+        self.send(repo, "pull", payload, Event::Pull(change));
+    }
+
+    fn send(&self, repo: RepoId, kind: &str, payload: Vec<u8>, event: Event) {
+        let _ = self.local.send(event);
         let Some(n) = &self.nats else {
-            let _ = self.local.send(change);
             return;
         };
-        let subject = format!("{}.repo.{repo}.changed", n.prefix);
-        let payload = serde_json::to_vec(&change).expect("serializes");
-        let _ = self.local.send(change);
+        let subject = format!("{}.repo.{repo}.{kind}", n.prefix);
         let client = n.client.clone();
         let metrics = self.metrics.clone();
         tokio::spawn(async move {
@@ -149,7 +184,7 @@ impl Bus {
     }
 
     /// Events of all servers, including this one.
-    pub fn subscribe(&self) -> broadcast::Receiver<Change> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.local.subscribe()
     }
 
@@ -179,27 +214,37 @@ impl Bus {
     /// return this server's own events.
     pub async fn receive(self: Arc<Self>, mut stop: watch::Receiver<bool>) -> anyhow::Result<()> {
         let Some(n) = &self.nats else { return Ok(()) };
-        let mut sub = n
-            .client
-            .subscribe(format!("{}.repo.*.changed", n.prefix))
-            .await?;
+        let mut sub = n.client.subscribe(format!("{}.repo.*.*", n.prefix)).await?;
         loop {
             let msg = tokio::select! {
                 m = sub.next() => m,
                 _ = crate::server::stopped(&mut stop) => break,
             };
             let Some(msg) = msg else { break };
-            let mut change: Change = match serde_json::from_slice(&msg.payload) {
-                Ok(c) => c,
+            let event = if msg.subject.ends_with(".changed") {
+                serde_json::from_slice(&msg.payload).map(|mut c: Change| {
+                    c.remote = true;
+                    Event::Changed(c)
+                })
+            } else if msg.subject.ends_with(".pull") {
+                serde_json::from_slice(&msg.payload).map(|mut c: PullChange| {
+                    c.remote = true;
+                    Event::Pull(c)
+                })
+            } else {
+                // Events of later versions.
+                continue;
+            };
+            let event = match event {
+                Ok(e) => e,
                 Err(e) => {
                     self.metrics.inc("bus_invalid_events");
                     tracing::warn!(subject = %msg.subject, error = %e, "invalid change event");
                     continue;
                 }
             };
-            change.remote = true;
             self.metrics.inc("bus_received");
-            let _ = self.local.send(change);
+            let _ = self.local.send(event);
         }
         Ok(())
     }

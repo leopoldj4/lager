@@ -182,6 +182,15 @@ API under `/-/api/` answers.
   [decision 13](docs/decisions/0013-live-connection-protocol.md),
   [decision 14](docs/decisions/0014-web-interface.md), and
   [decision 16](docs/decisions/0016-raw-files-and-markdown.md).
+- Pull requests: open one on the web from two branches of a repository
+  (`/<repo>/-/pulls`), discuss it, and merge it with a merge commit or as
+  one squashed commit. Users with read access open and comment; merging
+  needs write access and the ref rules of the target branch. The server
+  keeps `refs/pull/<n>/head` at the source branch (`git fetch origin
+  pull/7/head`); clients cannot push to `refs/pull/`. Pull requests live in
+  PostgreSQL, their refs and merges in the log; a push that brings the
+  source into the target marks the pull request merged. See
+  [decision 19](docs/decisions/0019-pull-requests.md).
 - Every response has an `x-worktree-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: worktree: accepted ...` line. Logs never contain credentials or

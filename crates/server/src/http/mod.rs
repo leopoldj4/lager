@@ -21,7 +21,7 @@ use tracing::Instrument;
 use self::access::{AuthError, Directory, Identity};
 use self::process::{Guards, Input, spawn_service};
 use crate::git::hook;
-use crate::repository::{PendingPush, PushAccess, Registry, RepoError};
+use crate::repository::{Origin, PendingPush, PushAccess, Registry, RepoError};
 use worktree_core::catalog::CatalogError;
 use worktree_core::limits;
 use worktree_core::model::RequestId;
@@ -34,6 +34,7 @@ pub const DRAINING_HEADER: &str = "x-worktree-draining";
 pub struct AppInner {
     pub registry: Arc<Registry>,
     pub directory: Arc<Directory>,
+    pub pulls: Arc<crate::pulls::PullService>,
     pub processes: Arc<Semaphore>,
     pub socket_path: PathBuf,
     pub health: health::Health,
@@ -553,6 +554,8 @@ async fn rpc(
                     s.directory.clone(),
                     auth.repo.name.clone(),
                 ),
+                origin: Origin::Client,
+                ref_guards: vec![],
             };
             let token = s.registry.register_push(op);
             // Git also stops reading at the receive limit.
@@ -592,7 +595,7 @@ async fn rpc(
 
 /// The permission check that the push procedure repeats before each
 /// attempt: the user's access and the catalog can change in between.
-fn push_access(
+pub(crate) fn push_access(
     directory: Arc<Directory>,
     who: Identity,
     repo_name: String,

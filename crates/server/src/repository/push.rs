@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use super::{CacheInstance, Controller, Known, PendingPush, PushAccess, RepoError};
+use super::{CacheInstance, Controller, Known, Origin, PendingPush, PushAccess, RepoError};
 use crate::git::hook::{HookCommand, HookResponse, HookResult};
 use crate::metrics::StepTimer;
 use worktree_core::cas::{Resolution, jitter, resolve_unknown_cas};
@@ -90,6 +90,21 @@ impl Controller {
             Ok(u) => u,
             Err(m) => return reject_all(&names, &m),
         };
+        if matches!(op.origin, Origin::Client) {
+            let managed: Vec<(String, String)> = updates
+                .iter()
+                .filter(|u| u.name.is_pull())
+                .map(|u| {
+                    (
+                        u.name.to_string(),
+                        "refs/pull/ and refs/server/ are kept by the server".into(),
+                    )
+                })
+                .collect();
+            if !managed.is_empty() {
+                return reject_some(&names, &managed);
+            }
+        }
         let _w = self.write_op.lock().await;
         let req = Request {
             id: op.request,
@@ -175,6 +190,18 @@ impl Controller {
         };
         let dir = &op.cache.dir;
 
+        // Read dependencies and updates must be checked against the same head.
+        if op
+            .ref_guards
+            .iter()
+            .any(|(name, oid)| base.refs.refs.get(name) != oid.as_ref())
+        {
+            return Ok(Attempt::Done(reject_all(
+                names,
+                "reviewed source branch changed",
+            )));
+        }
+
         // Step 8: check ref names, requested changes, and objects.
         let next = match base.refs.check_updates(&req.updates) {
             Ok(n) => n,
@@ -228,7 +255,10 @@ impl Controller {
             generation: base.head.generation + 1,
             request: req.id,
             request_checksum: req.checksum.clone(),
-            operation: Operation::Push,
+            operation: match &op.origin {
+                Origin::Client => Operation::Push,
+                Origin::Server(o) => o.clone(),
+            },
             refs: req.updates.clone(),
             packs,
             user: op.user.clone(),
@@ -423,6 +453,8 @@ impl Controller {
             let name = u.name.to_string();
             let rule = ref_rule(&access.ref_rules, u.name.as_str());
             let (kind, need) = match (&u.old, &u.new) {
+                // Only the server's own changes get here with these.
+                _ if u.name.is_pull() => ("update", Access::None),
                 (_, None) => ("deletion", rule.map_or(Access::Write, |r| r.delete)),
                 (None, Some(_)) => ("creation", rule.map_or(Access::Write, |r| r.update)),
                 (Some(old), Some(new)) => {
@@ -453,7 +485,7 @@ impl Controller {
             let Some(new) = &u.new else { continue };
             match types.get(new).cloned().flatten() {
                 None => bad.push((name, "missing object".into())),
-                Some(t) if u.name.is_branch() && t != "commit" => {
+                Some(t) if (u.name.is_branch() || u.name.is_pull()) && t != "commit" => {
                     bad.push((name, format!("branch must point to a commit, not a {t}")))
                 }
                 Some(_) => {}

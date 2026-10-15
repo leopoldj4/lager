@@ -1,6 +1,6 @@
 //! The parts of worktree that the server and the command line share:
 //! configuration, fixed limits, the stored data model, storage, the catalog,
-//! repository settings, identities,
+//! repository settings, identities, pull requests,
 //! and the storage-only operations of the administration commands.
 //!
 //! See IMPLEMENTATION_PLAN.md for the stages.
@@ -16,5 +16,6 @@ pub mod identity;
 pub mod limits;
 pub mod model;
 pub mod password;
+pub mod pulls;
 pub mod repo;
 pub mod storage;

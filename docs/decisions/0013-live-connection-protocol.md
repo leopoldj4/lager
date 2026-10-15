@@ -1,7 +1,8 @@
 # 13. Live updates for the web interface over WebSockets
 
 Status: accepted; implemented in `crates/server/src/web/live.rs` and
-`web/src/lib/live.ts`. Sign-in and read queries: decision 14. Date:
+`web/src/lib/live.ts`. Sign-in and read queries: decision 14; pull
+requests and the `pull` message: decision 19. Date:
 October 10, 2026; revised October 12, 2026.
 
 ## Context

@@ -3,6 +3,7 @@
 Status: accepted; implemented in `crates/server/src/web/` and `web/`.
 Date: October 12, 2026.
 `dir`, `session_days`, and `origins` are removed by [decision 15](0015-minimal-configuration.md); customer limits are removed.
+Pull request queries and changes, and their pages: [decision 19](0019-pull-requests.md).
 
 ## Context
 

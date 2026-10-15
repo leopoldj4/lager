@@ -16,7 +16,7 @@ use tokio::sync::{Semaphore, broadcast, mpsc};
 
 use super::read::{self, ReadError};
 use super::{Web, session};
-use crate::bus::Change;
+use crate::bus::Event;
 use crate::http::AppState;
 use worktree_core::identity::{AuthError, Identity};
 use worktree_core::model::RepoId;
@@ -81,6 +81,12 @@ enum ServerMsg {
     Changed {
         repo: String,
         generation: u64,
+    },
+    /// A pull request changed (docs/decisions/0019-pull-requests.md).
+    Pull {
+        repo: String,
+        number: u64,
+        version: u64,
     },
     Res {
         id: u64,
@@ -392,17 +398,32 @@ impl Connection {
         .await;
     }
 
-    fn deliver(&mut self, c: Change) -> Result<(), End> {
-        let Some(sub) = self.subs.get_mut(&c.repo) else {
-            return Ok(());
-        };
-        if c.generation <= sub.generation {
-            return Ok(());
-        }
-        sub.generation = c.generation;
-        let msg = ServerMsg::Changed {
-            repo: sub.name.clone(),
-            generation: c.generation,
+    fn deliver(&mut self, e: Event) -> Result<(), End> {
+        let msg = match e {
+            Event::Changed(c) => {
+                let Some(sub) = self.subs.get_mut(&c.repo) else {
+                    return Ok(());
+                };
+                if c.generation <= sub.generation {
+                    return Ok(());
+                }
+                sub.generation = c.generation;
+                ServerMsg::Changed {
+                    repo: sub.name.clone(),
+                    generation: c.generation,
+                }
+            }
+            // Versions are per pull request; the client drops old ones.
+            Event::Pull(p) => {
+                let Some(sub) = self.subs.get(&p.repo) else {
+                    return Ok(());
+                };
+                ServerMsg::Pull {
+                    repo: sub.name.clone(),
+                    number: p.number,
+                    version: p.version,
+                }
+            }
         };
         if self.out.try_send(msg).is_err() {
             self.s.registry.svc.metrics.inc("live_resyncs");
