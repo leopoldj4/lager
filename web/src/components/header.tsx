@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { GitBranch, KeyRound, LogOut, User } from "lucide-react"
 
@@ -70,12 +71,23 @@ export function Header() {
   )
 }
 
-/** Whether pushes arrive: green while the live connection is open. */
+/** How long the connection may be down before the dot appears. */
+const LIVE_GRACE_MS = 5000
+
+/** Shown only once the live connection has been down a while, so pushes may be missed. */
 function LiveDot() {
   const state = useLive()
   const status = state?.status ?? "connecting"
+  const down = status !== "open"
+  const [late, setLate] = useState(false)
+  useEffect(() => {
+    setLate(false)
+    if (!down) return
+    const timer = setTimeout(() => setLate(true), LIVE_GRACE_MS)
+    return () => clearTimeout(timer)
+  }, [down])
+  if (status === "open" || !late) return null
   const label = {
-    open: `Live${state?.server ? ` · server ${state.server}` : ""}`,
     connecting: "Connecting…",
     offline: "Offline, reconnecting…",
   }[status]
@@ -87,18 +99,13 @@ function LiveDot() {
             <span
               className={cn(
                 "relative inline-flex size-2 rounded-full",
-                status === "open" && "bg-emerald-500",
                 status === "connecting" && "bg-amber-500",
                 status === "offline" && "bg-red-500"
               )}
             />
           </span>
           <span className="hidden sm:inline">
-            {status === "open"
-              ? "Live"
-              : status === "connecting"
-                ? "Connecting"
-                : "Offline"}
+            {status === "connecting" ? "Connecting" : "Offline"}
           </span>
         </span>
       </TooltipTrigger>
