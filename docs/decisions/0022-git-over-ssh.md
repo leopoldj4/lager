@@ -43,6 +43,10 @@ limited access stays with tokens (decision 9). Accepted types: Ed25519,
 ECDSA, and RSA; not DSA, security keys, or certificates.
 `worktree ssh-key add <user> <file|->`, `list`, and `delete` manage them;
 deleting the user deletes its keys.
+Signed-in users manage their own keys on the settings page
+(`/-/settings/ssh-keys`) through `GET`, `POST`, and `DELETE`
+`/-/api/ssh-keys`. Adding a key needs no password, as creating a token on
+the web does not; changing requests must come from this site.
 
 **Web interface.** `ssh.public_url` (such as `ssh://git@git.example.com`)
 is answered by `GET /-/api/ssh`, and the clone menu shows the SSH URL. On

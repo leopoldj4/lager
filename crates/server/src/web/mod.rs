@@ -3,6 +3,7 @@
 //!
 //! Everything lives under `/-/`, which no repository name can take:
 //! `/-/api/session` signs in and out, `/-/api/tokens` manages access tokens,
+//! `/-/api/ssh-keys` manages SSH keys,
 //! `/-/api/live` is the WebSocket, `/-/api/github/` connects GitHub,
 //! `/-/api/ssh` names the SSH address for clones, and
 //! `/-/assets/` holds the built files. `/<repo>/-/raw/<rev>/<path>` answers
@@ -16,6 +17,7 @@ pub mod pulls;
 pub mod raw;
 pub mod read;
 pub mod session;
+mod ssh_keys;
 mod tokens;
 
 use std::path::{Component, Path, PathBuf};
@@ -141,6 +143,7 @@ pub fn router() -> Router<AppState> {
         .merge(passkeys::router())
         .merge(github::router())
         .merge(tokens::router())
+        .merge(ssh_keys::router())
         .route("/-/api/session", post(sign_in).delete(sign_out))
         .route("/-/api/live", get(live::upgrade))
         .route("/-/api/ssh", get(ssh))
