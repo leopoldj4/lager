@@ -172,11 +172,11 @@ export function Omnibar({
                   type="button"
                   tabIndex={-1}
                   onClick={() => setScoped(false)}
-                  className="flex shrink-0 items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground hover:bg-muted/70"
+                  className="group/scope flex h-6 shrink-0 items-center gap-1 rounded-md border bg-background pr-1 pl-2 text-xs font-medium text-foreground shadow-xs hover:bg-accent dark:bg-input/60 dark:hover:bg-input"
                   aria-label={`Search everywhere instead of ${scope}`}
                 >
                   {scope}
-                  <X className="size-3" />
+                  <X className="size-3 text-muted-foreground group-hover/scope:text-foreground" />
                 </button>
               )}
               <CommandPrimitive.Input
