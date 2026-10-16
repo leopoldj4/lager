@@ -35,6 +35,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TokenCmd,
     },
+    /// SSH public keys of users, for Git over SSH.
+    SshKey {
+        #[command(subcommand)]
+        cmd: SshKeyCmd,
+    },
     /// Repositories in the catalog in storage.
     Repo {
         #[command(subcommand)]
@@ -125,7 +130,7 @@ enum UserCmd {
         #[arg(value_name = "REPO=LEVEL")]
         access: Vec<String>,
     },
-    /// Delete a user and its tokens.
+    /// Delete a user and its tokens and SSH keys.
     Delete { name: String },
 }
 
@@ -147,6 +152,24 @@ enum TokenCmd {
     /// List a user's tokens.
     List { user: String },
     /// Delete a token. Git clients that use it stop working.
+    Delete { user: String, id: i64 },
+}
+
+#[derive(Subcommand)]
+enum SshKeyCmd {
+    /// Add a public key to a user, such as the contents of
+    /// ~/.ssh/id_ed25519.pub. The key has the user's access.
+    Add {
+        user: String,
+        /// A file with the key, or - for standard input.
+        file: PathBuf,
+        /// What the key is for [default: the key's comment].
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List a user's keys.
+    List { user: String },
+    /// Delete a key. Git clients that use it stop working.
     Delete { user: String, id: i64 },
 }
 
@@ -185,6 +208,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let cmd = match cli.cmd {
         Cmd::User { cmd } => return user_cmd(&cfg, cmd).await,
         Cmd::Token { cmd } => return token_cmd(&cfg, cmd).await,
+        Cmd::SshKey { cmd } => return ssh_key_cmd(&cfg, cmd).await,
         cmd => cmd,
     };
     let storage = Storage::from_config(&cfg)?;
@@ -216,7 +240,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let report = worktree_core::cleanup::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        Cmd::User { .. } | Cmd::Token { .. } => {
+        Cmd::User { .. } | Cmd::Token { .. } | Cmd::SshKey { .. } => {
             unreachable!("handled before storage is opened")
         }
         Cmd::Backup {
@@ -443,7 +467,7 @@ async fn user_cmd(cfg: &Config, cmd: UserCmd) -> anyhow::Result<()> {
         }
         UserCmd::Delete { name } => {
             ids.delete(&name, &operator()).await?;
-            println!("deleted user {name} and its tokens");
+            println!("deleted user {name} and its tokens and SSH keys");
         }
     }
     Ok(())
@@ -493,6 +517,45 @@ async fn token_cmd(cfg: &Config, cmd: TokenCmd) -> anyhow::Result<()> {
         TokenCmd::Delete { user, id } => {
             ids.delete_token(&user, id).await?;
             println!("deleted token {id} of {user}");
+        }
+    }
+    Ok(())
+}
+
+async fn ssh_key_cmd(cfg: &Config, cmd: SshKeyCmd) -> anyhow::Result<()> {
+    let ids = identity::connect(cfg).await?;
+    match cmd {
+        SshKeyCmd::Add { user, file, name } => {
+            let text = if file.as_os_str() == "-" {
+                std::io::read_to_string(std::io::stdin())?
+            } else {
+                std::fs::read_to_string(&file)?
+            };
+            let key = identity::parse_public_key(&text)?;
+            let name = name
+                .or_else(|| key.comment.clone())
+                .unwrap_or_else(|| key.algorithm.clone());
+            identity::validate_ssh_key_name(&name)?;
+            let k = ids.add_ssh_key(&user, &name, &key).await?;
+            println!("added SSH key {} ({}) for {user}", k.id, k.fingerprint);
+        }
+        SshKeyCmd::List { user } => {
+            for k in ids.ssh_keys(&user).await? {
+                let used = k
+                    .last_used_ms
+                    .map_or("never used".into(), |ms| format!("used {}", relative(ms)));
+                println!(
+                    "{}\t{}\t{}\tcreated {}\t{used}",
+                    k.id,
+                    k.name,
+                    k.fingerprint,
+                    relative(k.created_ms)
+                );
+            }
+        }
+        SshKeyCmd::Delete { user, id } => {
+            ids.delete_ssh_key(&user, id).await?;
+            println!("deleted SSH key {id} of {user}");
         }
     }
     Ok(())

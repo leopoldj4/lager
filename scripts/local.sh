@@ -12,6 +12,7 @@ export WORKTREE_LOCAL_DIR="${WORKTREE_LOCAL_DIR:-$PWD/.local}"
 root="$WORKTREE_LOCAL_DIR"
 cache_dir="$root/cache"
 listen="${WORKTREE_LISTEN:-127.0.0.1:8080}"
+ssh_listen="${WORKTREE_SSH_LISTEN:-127.0.0.1:2222}"
 export WORKTREE_S3_PORT="${WORKTREE_S3_PORT:-8333}"
 export WORKTREE_PG_PORT="${WORKTREE_PG_PORT:-5433}"
 export WORKTREE_NATS_PORT="${WORKTREE_NATS_PORT:-4222}"
@@ -34,6 +35,12 @@ cat >"$root/s3.json" <<'JSON'
   "credentials": [{"accessKey": "worktree-dev", "secretKey": "worktree-dev-secret"}],
   "actions": ["Admin", "Read", "Write", "List", "Tagging"]}]}
 JSON
+
+# The SSH host key; clients remember it, so keep it between runs.
+host_key="$root/ssh_host_ed25519_key"
+if [[ ! -f "$host_key" ]]; then
+  ssh-keygen -q -t ed25519 -N '' -C worktree-local -f "$host_key"
+fi
 
 config="$root/worktree.toml"
 if [[ ! -f "$config" ]]; then
@@ -58,6 +65,16 @@ url = "nats://127.0.0.1:$WORKTREE_NATS_PORT"
 
 [web]                             # web interface on http://$listen/
 session_secret = "$(head -c 32 /dev/urandom | base64)"
+TOML
+fi
+# Configurations from before Git over SSH get it added.
+if ! grep -q '^\[ssh\]' "$config"; then
+  cat >>"$config" <<TOML
+
+[ssh]                             # Git over SSH; keys with worktree ssh-key
+listen = "$ssh_listen"
+host_key = "$host_key"
+public_url = "ssh://git@$ssh_listen"
 TOML
 fi
 
@@ -98,8 +115,16 @@ fi
 if ! worktree -c "$config" user list | grep -q '^dev\b'; then
   echo dev-password | worktree -c "$config" user create dev --access '*=force'
 fi
+# Your own public key, so that Git over SSH works as dev.
+for pub in ~/.ssh/id_ed25519.pub ~/.ssh/id_ecdsa.pub ~/.ssh/id_rsa.pub; do
+  if [[ -f "$pub" ]]; then
+    worktree -c "$config" ssh-key add dev "$pub" >/dev/null 2>&1 || true
+    break
+  fi
+done
 
 echo "clone with: git clone http://dev:dev-password@$listen/dev/demo.git"
+echo "        or: git clone ssh://git@$ssh_listen/dev/demo.git"
 echo "web interface: http://$listen/ (sign in as dev / dev-password)"
 worktree-server -c "$config" &
 server_pid=$!

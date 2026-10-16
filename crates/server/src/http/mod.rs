@@ -163,32 +163,32 @@ async fn metrics(State(s): State<AppState>) -> Response {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Service {
+pub(crate) enum Service {
     UploadPack,
     ReceivePack,
 }
 
 impl Service {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Service::UploadPack => "git-upload-pack",
             Service::ReceivePack => "git-receive-pack",
         }
     }
-    fn subcommand(self) -> &'static str {
+    pub(crate) fn subcommand(self) -> &'static str {
         match self {
             Service::UploadPack => "upload-pack",
             Service::ReceivePack => "receive-pack",
         }
     }
-    fn parse(s: &str) -> Option<Service> {
+    pub(crate) fn parse(s: &str) -> Option<Service> {
         match s {
             "git-upload-pack" => Some(Service::UploadPack),
             "git-receive-pack" => Some(Service::ReceivePack),
             _ => None,
         }
     }
-    fn needs(self) -> Access {
+    pub(crate) fn needs(self) -> Access {
         match self {
             Service::UploadPack => Access::Read,
             Service::ReceivePack => Access::Write,
@@ -224,7 +224,7 @@ fn parse_git_path(path: &str) -> Option<GitRoute> {
     })
 }
 
-fn plain(status: StatusCode, msg: &str) -> Response {
+pub(crate) fn plain(status: StatusCode, msg: &str) -> Response {
     let mut r = (status, format!("{msg}\n")).into_response();
     r.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
@@ -248,7 +248,7 @@ fn unavailable(what: &str, m: &str) -> Response {
     )
 }
 
-fn repo_error(e: RepoError) -> Response {
+pub(crate) fn repo_error(e: RepoError) -> Response {
     match e {
         RepoError::NotFound | RepoError::Deleted => {
             plain(StatusCode::NOT_FOUND, "repository not found")
@@ -262,9 +262,9 @@ fn repo_error(e: RepoError) -> Response {
     }
 }
 
-struct Authorized {
-    repo: RepoSettings,
-    identity: Identity,
+pub(crate) struct Authorized {
+    pub repo: RepoSettings,
+    pub identity: Identity,
 }
 
 /// Checks identity and repository permission. Unknown repositories and
@@ -285,6 +285,17 @@ async fn authorize(
         Err(AuthError::BadCredentials) => return Err(unauthorized()),
         Err(AuthError::Unavailable(m)) => return Err(unavailable("user lookup", &m)),
     };
+    authorize_identity(s, identity, name, need, create).await
+}
+
+/// [`authorize`] for a known identity, such as the user of an SSH key.
+pub(crate) async fn authorize_identity(
+    s: &AppInner,
+    identity: Identity,
+    name: &str,
+    need: Access,
+    create: bool,
+) -> Result<Authorized, Response> {
     let repo = s
         .directory
         .repo(name)
@@ -352,7 +363,12 @@ async fn create_on_push(
 /// holds objects of rejected pushes, so reads use protocol version 0 or 1,
 /// which accept only wants reachable from the advertised refs.
 fn git_protocol(headers: &HeaderMap) -> Option<String> {
-    let v = headers.get("git-protocol")?.to_str().ok()?;
+    filter_git_protocol(headers.get("git-protocol")?.to_str().ok()?)
+}
+
+/// The `Git-Protocol` header or `GIT_PROTOCOL` variable without protocol
+/// version 2 (see [`git_protocol`]).
+pub(crate) fn filter_git_protocol(v: &str) -> Option<String> {
     let ok = v.len() <= 256
         && v.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"=:.,-_".contains(&b));
@@ -631,7 +647,7 @@ pub(crate) fn push_access(
 }
 
 /// Keeps the default branch in the catalog record equal to the history.
-fn default_branch_changed(
+pub(crate) fn default_branch_changed(
     directory: Arc<Directory>,
     repo_name: String,
 ) -> Option<crate::repository::DefaultBranchChanged> {

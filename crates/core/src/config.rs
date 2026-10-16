@@ -1,6 +1,6 @@
 //! Configuration file (TOML). It holds only what a server needs to start:
 //! its address, the storage service, the database, the change bus, the
-//! web session secret, and the GitHub OAuth app
+//! web session secret, the GitHub OAuth app, and the SSH host key
 //! (docs/decisions/0015-minimal-configuration.md).
 //! Repositories live in the catalog in storage, users in the database, and
 //! limits are fixed in [`crate::limits`].
@@ -22,6 +22,7 @@ pub struct Config {
     pub web: Option<WebConfig>,
     #[serde(default)]
     pub github: Option<GithubConfig>,
+    pub ssh: Option<SshConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -96,6 +97,21 @@ pub struct GithubConfig {
     pub client_secret: String,
 }
 
+/// Git over SSH (docs/decisions/0022-git-over-ssh.md). Without it, Git
+/// clients use only HTTP.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SshConfig {
+    pub listen: SocketAddr,
+    /// An OpenSSH private key without a passphrase, the same file on every
+    /// server: clients check that the host key never changes.
+    pub host_key: PathBuf,
+    /// The SSH address that clients clone from, shown in the web interface,
+    /// such as `ssh://git@git.example.com` or `ssh://git@git.example.com:2222`.
+    #[serde(default)]
+    pub public_url: Option<String>,
+}
+
 fn default_cache_dir() -> PathBuf {
     PathBuf::from("/var/cache/worktree")
 }
@@ -130,6 +146,14 @@ impl Config {
             anyhow::ensure!(
                 !g.client_id.is_empty() && !g.client_secret.is_empty(),
                 "github.client_id and github.client_secret are required"
+            );
+        }
+        if let Some(s) = &self.ssh
+            && let Some(url) = &s.public_url
+        {
+            anyhow::ensure!(
+                url.starts_with("ssh://") && !url.ends_with('/'),
+                "ssh.public_url must start with ssh:// and not end with /"
             );
         }
         Ok(())

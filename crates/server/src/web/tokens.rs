@@ -54,6 +54,9 @@ fn failure(error: UserError) -> Response {
         UserError::TokenNotFound(_) => {
             json_error(StatusCode::NOT_FOUND, "not_found", "token not found")
         }
+        e @ UserError::SshKeyNotFound(_) => {
+            json_error(StatusCode::NOT_FOUND, "not_found", &e.to_string())
+        }
         UserError::NotFound(_) | UserError::Exists(_) => json_error(
             StatusCode::FORBIDDEN,
             "unsupported",

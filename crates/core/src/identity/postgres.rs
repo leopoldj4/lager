@@ -6,6 +6,7 @@
 //! database, so a change applies to the next request on every server.
 //! `worktree_tokens` holds personal access tokens as SHA-256 digests, and
 //! `worktree_token_access` the levels a token is limited to.
+//! `worktree_ssh_keys` holds public keys for Git over SSH.
 //! The schema is brought up to date when the server starts.
 
 use std::collections::BTreeMap;
@@ -17,8 +18,8 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::{Connection, PgConnection};
 
 use super::{
-    AuthError, Identity, NamedUser, NewToken, NewUser, TOKEN_PREFIX, Token, TokenId, User,
-    UserChange, UserError, VerifiedHashes, password_stamp,
+    AuthError, Identity, NamedUser, NewToken, NewUser, PublicKeyLine, SshKey, SshKeyId,
+    TOKEN_PREFIX, Token, TokenId, User, UserChange, UserError, VerifiedHashes, password_stamp,
 };
 use crate::config::DatabaseConfig;
 use crate::limits::{DATABASE_CONNECTIONS, DATABASE_TIMEOUT};
@@ -171,7 +172,42 @@ CREATE TABLE worktree_github_mirrors (
 CREATE INDEX worktree_github_mirrors_due ON worktree_github_mirrors (next_sync_at);
 CREATE INDEX worktree_github_mirrors_user ON worktree_github_mirrors (user_name);
 "#,
+    // Git over SSH (docs/decisions/0022-git-over-ssh.md). A key signs in
+    // as one user, so a fingerprint is unique over all users.
+    r#"
+CREATE TABLE worktree_ssh_keys (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_name text NOT NULL REFERENCES worktree_users (name) ON DELETE CASCADE,
+    name text NOT NULL,
+    -- 'SHA256:' and the unpadded base64 digest of the wire encoding.
+    fingerprint text NOT NULL UNIQUE,
+    -- '<type> <base64>', without the comment.
+    public_key text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    last_used_at timestamptz
+);
+CREATE INDEX worktree_ssh_keys_user ON worktree_ssh_keys (user_name);
+"#,
 ];
+
+/// SSH keys a user can have at the same time.
+const MAX_SSH_KEYS: i64 = 100;
+
+const SELECT_SSH_KEYS: &str = "
+SELECT id,
+       name,
+       fingerprint,
+       public_key,
+       (extract(epoch FROM created_at) * 1000)::bigint,
+       (extract(epoch FROM last_used_at) * 1000)::bigint
+FROM worktree_ssh_keys
+WHERE user_name = $1 AND ($2::bigint IS NULL OR id = $2)
+ORDER BY id";
+
+type SshKeyRow = (SshKeyId, String, String, String, i64, Option<i64>);
+
+/// Key id, user, used more than a minute ago, repository, level.
+type SshKeyAccessRow = (SshKeyId, String, bool, Option<String>, Option<String>);
 
 /// Tokens a user can have at the same time.
 const MAX_TOKENS: i64 = 100;
@@ -601,6 +637,158 @@ impl PgUsers {
         }
         Ok(())
     }
+}
+
+impl PgUsers {
+    /// The user of an SSH key, with the user's access. `Ok(None)`: no user
+    /// has this key.
+    pub async fn authenticate_ssh_key(
+        &self,
+        fingerprint: &str,
+    ) -> Result<Option<Identity>, AuthError> {
+        let rows: Vec<SshKeyAccessRow> = sqlx::query_as(
+            "SELECT k.id, k.user_name,
+                    k.last_used_at IS NULL OR k.last_used_at < now() - interval '1 minute',
+                    a.repository, a.level
+             FROM worktree_ssh_keys k
+             LEFT JOIN worktree_user_access a ON a.user_name = k.user_name
+             WHERE k.fingerprint = $1",
+        )
+        .bind(fingerprint)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AuthError::Unavailable(format!("database: {e}")))?;
+        let Some((id, name, stale, ..)) = rows.first().cloned() else {
+            return Ok(None);
+        };
+        let mut access = BTreeMap::new();
+        for (.., repo, level) in rows {
+            if let (Some(repo), Some(level)) = (repo, level) {
+                let level = level
+                    .parse::<Access>()
+                    .map_err(|e| AuthError::Unavailable(format!("database: {e}")))?;
+                access.insert(repo, level);
+            }
+        }
+        if stale {
+            // Off the request: a lost update only makes the time older.
+            let pool = self.pool.clone();
+            tokio::spawn(async move {
+                let r =
+                    sqlx::query("UPDATE worktree_ssh_keys SET last_used_at = now() WHERE id = $1")
+                        .bind(id)
+                        .execute(&pool)
+                        .await;
+                if let Err(e) = r {
+                    tracing::warn!(ssh_key = id, error = %e, "SSH key use not recorded");
+                }
+            });
+        }
+        Ok(Some(Identity::User {
+            name,
+            access,
+            token: None,
+        }))
+    }
+
+    /// Adds a public key to a user. A key belongs to at most one user.
+    pub async fn add_ssh_key(
+        &self,
+        user: &str,
+        name: &str,
+        key: &PublicKeyLine,
+    ) -> Result<SshKey, UserError> {
+        let fingerprint = key.fingerprint();
+        let mut conn = self.conn().await?;
+        let mut tx = conn.begin().await.map_err(unavailable)?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM worktree_ssh_keys WHERE user_name = $1")
+                .bind(user)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        if count >= MAX_SSH_KEYS {
+            return Err(UserError::Invalid(format!(
+                "a user can have at most {MAX_SSH_KEYS} SSH keys; delete one first"
+            )));
+        }
+        let id: Option<SshKeyId> = sqlx::query_scalar(
+            "INSERT INTO worktree_ssh_keys (user_name, name, fingerprint, public_key)
+             SELECT name, $2, $3, $4 FROM worktree_users WHERE name = $1
+             ON CONFLICT (fingerprint) DO NOTHING
+             RETURNING id",
+        )
+        .bind(user)
+        .bind(name)
+        .bind(&fingerprint)
+        .bind(key.openssh())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let Some(id) = id else {
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM worktree_users WHERE name = $1)")
+                    .bind(user)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(unavailable)?;
+            return Err(if exists {
+                UserError::Invalid(format!("the SSH key {fingerprint} is already added"))
+            } else {
+                UserError::NotFound(user.into())
+            });
+        };
+        let key = ssh_keys(&mut tx, user, Some(id))
+            .await?
+            .pop()
+            .ok_or(UserError::SshKeyNotFound(id))?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(key)
+    }
+
+    /// A user's SSH keys, oldest first.
+    pub async fn ssh_keys(&self, user: &str) -> Result<Vec<SshKey>, UserError> {
+        ssh_keys(&mut *self.conn().await?, user, None).await
+    }
+
+    pub async fn delete_ssh_key(&self, user: &str, id: SshKeyId) -> Result<(), UserError> {
+        let deleted = sqlx::query("DELETE FROM worktree_ssh_keys WHERE id = $1 AND user_name = $2")
+            .bind(id)
+            .bind(user)
+            .execute(&self.pool)
+            .await
+            .map_err(unavailable)?;
+        if deleted.rows_affected() == 0 {
+            return Err(UserError::SshKeyNotFound(id));
+        }
+        Ok(())
+    }
+}
+
+async fn ssh_keys(
+    conn: &mut PgConnection,
+    user: &str,
+    id: Option<SshKeyId>,
+) -> Result<Vec<SshKey>, UserError> {
+    let rows: Vec<SshKeyRow> = sqlx::query_as(SELECT_SSH_KEYS)
+        .bind(user)
+        .bind(id)
+        .fetch_all(conn)
+        .await
+        .map_err(unavailable)?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, name, fingerprint, public_key, created_ms, last_used_ms)| SshKey {
+                id,
+                name,
+                fingerprint,
+                public_key,
+                created_ms: created_ms as u64,
+                last_used_ms: last_used_ms.map(|v| v as u64),
+            },
+        )
+        .collect())
 }
 
 async fn tokens(

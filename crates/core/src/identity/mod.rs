@@ -8,6 +8,9 @@
 //! Users can also sign in with personal access tokens
 //! (docs/decisions/0009-personal-access-tokens.md): the token takes the
 //! place of the password, and can limit the user's access further.
+//!
+//! Git over SSH signs in with a user's public key
+//! (docs/decisions/0022-git-over-ssh.md): the key has its user's access.
 
 pub mod passkeys;
 pub mod postgres;
@@ -18,6 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use sha2::{Digest, Sha256};
 
 use crate::password::PasswordHash;
@@ -90,6 +94,8 @@ pub enum UserError {
     NotFound(String),
     #[error("token {0} not found")]
     TokenNotFound(TokenId),
+    #[error("SSH key {0} not found")]
+    SshKeyNotFound(SshKeyId),
     #[error("{0}")]
     Invalid(String),
     #[error("user store unavailable: {0}")]
@@ -144,6 +150,112 @@ pub struct NewToken {
     pub name: String,
     pub access: Option<BTreeMap<String, Access>>,
     pub expires_days: Option<u32>,
+}
+
+pub type SshKeyId = i64;
+
+/// A user's SSH public key for Git over SSH.
+#[derive(Clone, Debug)]
+pub struct SshKey {
+    pub id: SshKeyId,
+    pub name: String,
+    /// `SHA256:` and the unpadded base64 digest of the key, as
+    /// `ssh-keygen -l` shows it.
+    pub fingerprint: String,
+    /// The key in `authorized_keys` form, without the comment.
+    pub public_key: String,
+    pub created_ms: u64,
+    /// Updated at most once a minute.
+    pub last_used_ms: Option<u64>,
+}
+
+/// A parsed public key line, such as a line of `~/.ssh/id_ed25519.pub`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicKeyLine {
+    pub algorithm: String,
+    /// The key in SSH wire encoding.
+    pub blob: Vec<u8>,
+    /// The comment after the key, often `user@host`.
+    pub comment: Option<String>,
+}
+
+impl PublicKeyLine {
+    /// The key in `authorized_keys` form, without the comment.
+    pub fn openssh(&self) -> String {
+        format!(
+            "{} {}",
+            self.algorithm,
+            base64::engine::general_purpose::STANDARD.encode(&self.blob)
+        )
+    }
+
+    pub fn fingerprint(&self) -> String {
+        ssh_fingerprint(&self.blob)
+    }
+}
+
+/// Key types that the SSH server verifies. DSA and certificates are not
+/// accepted.
+const SSH_KEY_ALGORITHMS: &[&str] = &[
+    "ssh-ed25519",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "ssh-rsa",
+];
+
+/// Parses `<type> <base64> [comment]`. The type inside the encoded key must
+/// match the one in front of it.
+pub fn parse_public_key(line: &str) -> Result<PublicKeyLine, UserError> {
+    let invalid = |m: &str| UserError::Invalid(format!("invalid SSH public key: {m}"));
+    let mut parts = line.trim().splitn(3, char::is_whitespace);
+    let algorithm = parts.next().unwrap_or_default();
+    if !SSH_KEY_ALGORITHMS.contains(&algorithm) {
+        return Err(invalid(&format!(
+            "type {algorithm:?} is not one of {}",
+            SSH_KEY_ALGORITHMS.join(", ")
+        )));
+    }
+    let blob = base64::engine::general_purpose::STANDARD
+        .decode(parts.next().unwrap_or_default())
+        .map_err(|_| invalid("the key is not base64"))?;
+    // The blob starts with the type as an SSH string.
+    let inner = blob
+        .get(..4)
+        .map(|n| u32::from_be_bytes(n.try_into().expect("4 bytes")) as usize)
+        .and_then(|n| blob.get(4..4 + n));
+    if inner != Some(algorithm.as_bytes()) || blob.len() > 16 * 1024 {
+        return Err(invalid("the encoded key does not match its type"));
+    }
+    let comment = parts
+        .next()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(str::to_string);
+    Ok(PublicKeyLine {
+        algorithm: algorithm.to_string(),
+        blob,
+        comment,
+    })
+}
+
+/// The SHA-256 fingerprint of a key in SSH wire encoding.
+pub fn ssh_fingerprint(blob: &[u8]) -> String {
+    format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(Sha256::digest(blob))
+    )
+}
+
+/// SSH key names are labels for people, such as "laptop".
+pub fn validate_ssh_key_name(name: &str) -> Result<(), UserError> {
+    let chars = name.chars().count();
+    if !(1..=100).contains(&chars) || name.chars().any(char::is_control) {
+        return Err(UserError::Invalid(
+            "SSH key names need 1 to 100 characters and no control characters".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn level(access: &BTreeMap<String, Access>, repo: &str) -> Access {
