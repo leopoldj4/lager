@@ -7,16 +7,17 @@
 //! The cache also holds objects of rejected pushes: a query names a branch,
 //! a tag, or a commit that a ref reaches, never any other object.
 
-use std::path::Path;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use gix::bstr::ByteSlice;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::http::AppInner;
-use crate::repository::RepoError;
+use crate::repository::{ReadView, RepoError};
 use worktree_core::catalog::CatalogError;
 use worktree_core::identity::Identity;
 use worktree_core::model::RefName;
@@ -30,6 +31,8 @@ pub(super) const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TREE_ENTRIES: usize = 5000;
 const MAX_LOG: u32 = 100;
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Objects kept decoded per read, for walks over history.
+const OBJECT_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -254,7 +257,7 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
     let _permits = crate::http::process_permit(s)
         .await
         .map_err(|_| ReadError::new("busy", "server busy; retry later"))?;
-    let g = Git { s, dir: &view.dir };
+    let g = Git { s, view: &view };
     let mut out = match q {
         Query::Repos
         | Query::Github
@@ -324,7 +327,7 @@ pub async fn raw(
     let _permits = crate::http::process_permit(s)
         .await
         .map_err(|_| ReadError::new("busy", "server busy; retry later"))?;
-    let g = Git { s, dir: &view.dir };
+    let g = Git { s, view: &view };
     let (rev, path) = g.split_rev(rest).await?;
     let oid = g.resolve(rev).await?;
     let path = check_path(path)?;
@@ -337,7 +340,7 @@ pub async fn raw(
     } else if size > MAX_RAW_BYTES {
         return Err(ReadError::new("too_large", "file too large"));
     } else {
-        Some(g.run(&["cat-file", "blob", &blob], None).await?)
+        Some(g.read_blob(&blob).await?)
     };
     Ok(RawFile {
         path: path.to_string(),
@@ -469,14 +472,137 @@ fn check_path(path: &str) -> Result<&str, ReadError> {
 
 pub(super) struct Git<'a> {
     pub(super) s: &'a AppInner,
-    pub(super) dir: &'a Path,
+    pub(super) view: &'a Arc<ReadView>,
+}
+
+/// The end of a query's time; walks over history check it.
+#[derive(Clone, Copy)]
+struct Deadline(Instant);
+
+impl Deadline {
+    fn check(self) -> Result<(), ReadError> {
+        if Instant::now() > self.0 {
+            return Err(ReadError::new("unavailable", "query took too long"));
+        }
+        Ok(())
+    }
+}
+
+impl From<gix::Error> for ReadError {
+    fn from(e: gix::Error) -> Self {
+        RepoError::Internal(format!("read: {e}")).into()
+    }
+}
+
+/// A commit as `parse_commits` answers it.
+fn commit_json(c: &gix::Commit<'_>) -> Result<Value, ReadError> {
+    let person = |p: gix::actor::SignatureRef<'_>| {
+        let p = p.trim();
+        json!({
+            "name": p.name.to_str_lossy(),
+            "email": p.email.to_str_lossy(),
+            "time": p.seconds(),
+        })
+    };
+    let parents: Vec<String> = c.parent_ids().map(|p| p.to_string()).collect();
+    Ok(json!({
+        "oid": c.id.to_string(),
+        "parents": parents,
+        "author": person(c.author()?),
+        "committer": person(c.committer()?),
+        "subject": subject(c.message_raw_sloppy()),
+    }))
+}
+
+/// The first paragraph of a message on one line, as Git's `%s`.
+fn subject(message: &[u8]) -> String {
+    gix::objs::commit::MessageRef::from_bytes(message)
+        .summary()
+        .to_str_lossy()
+        .into_owned()
+}
+
+/// The commit that a full object ID or a full ref name names.
+fn find_commit(repo: &gix::Repository, spec: &str) -> Option<gix::ObjectId> {
+    let id = match gix::ObjectId::from_hex(spec.as_bytes()) {
+        Ok(id) => id,
+        Err(_) => repo
+            .try_find_reference(spec)
+            .ok()??
+            .into_fully_peeled_id()
+            .ok()?
+            .detach(),
+    };
+    Some(repo.try_find_object(id).ok()??.peel_to_commit().ok()?.id)
+}
+
+/// Whether any ref reaches the commit `oid`.
+fn reached(
+    repo: &gix::Repository,
+    oid: gix::ObjectId,
+    deadline: Deadline,
+) -> Result<bool, ReadError> {
+    let mut tips = vec![];
+    for r in repo.references()?.all()? {
+        let Ok(id) = r?.into_fully_peeled_id() else {
+            continue;
+        };
+        if id == oid {
+            return Ok(true);
+        }
+        if matches!(repo.find_header(id), Ok(h) if h.kind() == gix::objs::Kind::Commit) {
+            tips.push(id.detach());
+        }
+    }
+    if tips.is_empty() {
+        return Ok(false);
+    }
+    for info in repo.rev_walk(tips).all()? {
+        deadline.check()?;
+        if info?.id == oid {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// A full object ID that `resolve` or a tree answered.
+fn object_id(oid: &str) -> Result<gix::ObjectId, ReadError> {
+    gix::ObjectId::from_hex(oid.as_bytes())
+        .map_err(|e| RepoError::Internal(format!("object ID {oid}: {e}")).into())
+}
+
+/// The entry at `path` in the tree of `commit`; the root has none.
+fn entry_at<'r>(
+    repo: &'r gix::Repository,
+    commit: gix::ObjectId,
+    path: &str,
+) -> Result<Option<gix::object::tree::Entry<'r>>, ReadError> {
+    let tree = repo.find_commit(commit)?.tree()?;
+    Ok(tree.lookup_entry(path.split('/').map(|c| c.as_bytes()))?)
 }
 
 impl Git<'_> {
     fn cmd(&self) -> Command {
         let mut c = self.s.registry.svc.git.service_command();
-        c.env("GIT_DIR", self.dir);
+        c.env("GIT_DIR", &self.view.dir);
         c
+    }
+
+    /// Runs `f` with the view off the async runtime, within the query time.
+    async fn read<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&gix::Repository, Deadline) -> Result<T, ReadError> + Send + 'static,
+    ) -> Result<T, ReadError> {
+        let view = self.view.clone();
+        let deadline = Deadline(Instant::now() + GIT_TIMEOUT);
+        tokio::task::spawn_blocking(move || {
+            let mut repo = view.open()?;
+            repo.object_cache_size_if_unset(OBJECT_CACHE_BYTES);
+            f(&repo, deadline)
+        })
+        .await
+        .map_err(|e| RepoError::Internal(format!("read task: {e}")))?
     }
 
     pub(super) async fn run(
@@ -532,23 +658,12 @@ impl Git<'_> {
         Ok((out, truncated))
     }
 
-    /// Whether `spec` names a commit; answers its object ID.
+    /// Whether `spec`, a full object ID or a full ref name, names a commit;
+    /// answers its object ID.
     pub(super) async fn commit_oid(&self, spec: &str) -> Option<String> {
-        let spec = format!("{spec}^{{commit}}");
-        let out = self
-            .run(
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    "--end-of-options",
-                    &spec,
-                ],
-                None,
-            )
-            .await
-            .ok()?;
-        Some(String::from_utf8_lossy(&out).trim().to_string())
+        let spec = spec.to_string();
+        let found = self.read(move |repo, _| Ok(find_commit(repo, &spec))).await;
+        found.ok().flatten().map(|id| id.to_string())
     }
 
     /// The commit for a branch name, a tag name, a full ref name, or the
@@ -558,41 +673,31 @@ impl Git<'_> {
             (rev.len() == 40 || rev.len() == 64) && rev.bytes().all(|b| b.is_ascii_hexdigit());
         if is_oid {
             let rev = rev.to_ascii_lowercase();
-            let Some(oid) = self.commit_oid(&rev).await else {
-                return Err(ReadError::not_found("commit"));
-            };
-            let reached = self
-                .run(
-                    &[
-                        "for-each-ref",
-                        "--count=1",
-                        "--format=x",
-                        "--contains",
-                        &oid,
-                    ],
-                    None,
-                )
-                .await?;
-            return if reached.is_empty() {
-                Err(ReadError::not_found("commit"))
-            } else {
-                Ok(oid)
-            };
+            return self
+                .read(move |repo, deadline| match find_commit(repo, &rev) {
+                    Some(oid) if reached(repo, oid, deadline)? => Ok(oid.to_string()),
+                    _ => Err(ReadError::not_found("commit")),
+                })
+                .await;
         }
         let candidates: Vec<String> = if rev.starts_with("refs/") {
             vec![rev.to_string()]
         } else {
             vec![format!("refs/heads/{rev}"), format!("refs/tags/{rev}")]
         };
-        for c in candidates {
-            if RefName::parse(&c).is_err() {
+        for c in &candidates {
+            if RefName::parse(c).is_err() {
                 return Err(ReadError::bad("invalid ref name"));
             }
-            if let Some(oid) = self.commit_oid(&c).await {
-                return Ok(oid);
-            }
         }
-        Err(ReadError::not_found("branch or tag"))
+        self.read(move |repo, _| {
+            candidates
+                .iter()
+                .find_map(|c| find_commit(repo, c))
+                .map(|oid| oid.to_string())
+                .ok_or_else(|| ReadError::not_found("branch or tag"))
+        })
+        .await
     }
 
     /// Splits `<rev>/<path>` at the longest branch or tag name, else after
@@ -602,25 +707,22 @@ impl Git<'_> {
         if !first.1.contains('/') {
             return Ok(first);
         }
-        let out = self
-            .run(
-                &[
-                    "for-each-ref",
-                    "--format=%(refname)",
-                    "refs/heads/",
-                    "refs/tags/",
-                ],
-                None,
-            )
-            .await?;
-        let out = String::from_utf8_lossy(&out);
-        let names: std::collections::HashSet<&str> = out
-            .lines()
-            .filter_map(|l| {
-                l.strip_prefix("refs/heads/")
-                    .or_else(|| l.strip_prefix("refs/tags/"))
+        let names = self
+            .read(|repo, _| {
+                let refs = repo.references()?;
+                let mut names = std::collections::HashSet::new();
+                for r in refs.local_branches()?.chain(refs.tags()?) {
+                    let r = r?;
+                    let name = r.name().as_bstr().to_str_lossy().into_owned();
+                    let short = name
+                        .strip_prefix("refs/heads/")
+                        .or_else(|| name.strip_prefix("refs/tags/"))
+                        .map(str::to_string);
+                    names.extend(short);
+                }
+                Ok(names)
             })
-            .collect();
+            .await?;
         let longest = rest
             .rmatch_indices('/')
             .map(|(i, _)| i)
@@ -651,163 +753,190 @@ impl Git<'_> {
     }
 
     async fn refs(&self) -> Result<Value, ReadError> {
-        let out = self
-            .run(
-                &[
-                    "for-each-ref",
-                    "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(creatordate:unix)%00%(subject)",
-                    "refs/heads/",
-                    "refs/tags/",
-                ],
-                None,
-            )
-            .await?;
-        let (mut branches, mut tags) = (vec![], vec![]);
-        for line in String::from_utf8_lossy(&out).lines() {
-            let f: Vec<&str> = line.splitn(5, '\0').collect();
-            let [name, oid, peeled, time, subject] = f[..] else {
-                continue;
-            };
-            let entry = |short: &str| {
-                json!({
-                    "name": short,
-                    // The commit of an annotated tag.
-                    "oid": if peeled.is_empty() { oid } else { peeled },
-                    "time": time.parse::<i64>().unwrap_or(0),
-                    "subject": subject,
-                })
-            };
-            if let Some(b) = name.strip_prefix("refs/heads/") {
-                branches.push(entry(b));
-            } else if let Some(t) = name.strip_prefix("refs/tags/") {
-                tags.push(entry(t));
+        self.read(|repo, _| {
+            let refs = repo.references()?;
+            let (mut branches, mut tags) = (vec![], vec![]);
+            for r in refs.local_branches()?.chain(refs.tags()?) {
+                let r = r?;
+                let name = r.name().as_bstr().to_str_lossy().into_owned();
+                let Some(target) = r.try_id() else { continue };
+                let object = repo.find_object(target)?;
+                // Annotated tags: their own date and message, and the commit.
+                let (time, subject) = match object.kind {
+                    gix::objs::Kind::Commit => {
+                        let c = object.clone().into_commit();
+                        (c.committer()?.seconds(), subject(c.message_raw_sloppy()))
+                    }
+                    gix::objs::Kind::Tag => {
+                        let t = object.clone().into_tag();
+                        let time = t.tagger()?.map_or(0, |p| p.seconds());
+                        (time, subject(t.decode()?.message))
+                    }
+                    _ => (0, String::new()),
+                };
+                let oid = object.peel_tags_to_end()?.id;
+                let entry = |short: &str| {
+                    json!({
+                        "name": short,
+                        "oid": oid.to_string(),
+                        "time": time,
+                        "subject": subject,
+                    })
+                };
+                if let Some(b) = name.strip_prefix("refs/heads/") {
+                    branches.push(entry(b));
+                } else if let Some(t) = name.strip_prefix("refs/tags/") {
+                    tags.push(entry(t));
+                }
             }
-        }
-        let head = self.s.registry.svc.git.head_target(self.dir).await?;
-        Ok(json!({
-            "head": head.strip_prefix("refs/heads/").unwrap_or(&head),
-            "branches": branches,
-            "tags": tags,
-        }))
+            let by_name = |a: &Value, b: &Value| a["name"].as_str().cmp(&b["name"].as_str());
+            branches.sort_by(by_name);
+            tags.sort_by(by_name);
+            let head = repo
+                .head_name()?
+                .map(|n| n.as_bstr().to_str_lossy().into_owned())
+                .unwrap_or_default();
+            Ok(json!({
+                "head": head.strip_prefix("refs/heads/").unwrap_or(&head),
+                "branches": branches,
+                "tags": tags,
+            }))
+        })
+        .await
     }
 
+    /// The history of a commit, newest first. The history of a path stays
+    /// with Git, whose simplification of merges the pages show.
     async fn log(&self, oid: &str, path: &str, skip: u32, limit: u32) -> Result<Value, ReadError> {
         let path = check_path(path)?;
-        let skip = format!("--skip={skip}");
-        let count = format!("--max-count={}", limit + 1);
-        let mut args = vec!["log", COMMIT_FORMAT, &skip, &count, oid, "--"];
-        if !path.is_empty() {
-            args.push(path);
-        }
-        let out = self.run(&args, None).await?;
-        let mut commits = parse_commits(&out);
+        let mut commits = if path.is_empty() {
+            let start = object_id(oid)?;
+            self.read(move |repo, deadline| {
+                let walk = repo
+                    .rev_walk([start])
+                    .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                        Default::default(),
+                    ))
+                    .all()?;
+                let mut commits = vec![];
+                for info in walk.skip(skip as usize).take(limit as usize + 1) {
+                    deadline.check()?;
+                    commits.push(commit_json(&info?.object()?)?);
+                }
+                Ok(commits)
+            })
+            .await?
+        } else {
+            let skip = format!("--skip={skip}");
+            let count = format!("--max-count={}", limit + 1);
+            let args = ["log", COMMIT_FORMAT, &skip, &count, oid, "--", path];
+            parse_commits(&self.run(&args, None).await?)
+        };
         let more = commits.len() > limit as usize;
         commits.truncate(limit as usize);
         Ok(json!({ "oid": oid, "commits": commits, "more": more }))
     }
 
+    /// The last commit that changed `path`: the commit itself for the root.
     async fn last_commit(&self, oid: &str, path: &str) -> Result<Value, ReadError> {
-        let mut args = vec!["log", COMMIT_FORMAT, "--max-count=1", oid, "--"];
-        if !path.is_empty() {
-            args.push(path);
+        if path.is_empty() {
+            let id = object_id(oid)?;
+            return self
+                .read(move |repo, _| commit_json(&repo.find_commit(id)?))
+                .await;
         }
+        let args = ["log", COMMIT_FORMAT, "--max-count=1", oid, "--", path];
         let out = self.run(&args, None).await?;
         Ok(parse_commits(&out).pop().unwrap_or(Value::Null))
     }
 
     async fn tree(&self, oid: &str, path: &str) -> Result<Value, ReadError> {
         let path = check_path(path)?;
-        let spec = if path.is_empty() {
-            format!("{oid}^{{tree}}")
-        } else {
-            format!("{oid}:{path}")
-        };
-        let kind = self.object_type(&spec).await?;
-        match kind.as_deref() {
-            Some("tree") => {}
-            Some(_) => return Err(ReadError::new("not_a_tree", "path is a file")),
-            None => return Err(ReadError::not_found("path")),
-        }
-        let out = self
-            .run(
-                &["ls-tree", "-z", "--long", "--end-of-options", &spec],
-                None,
-            )
-            .await?;
-        let mut entries = vec![];
-        let mut truncated = false;
-        for rec in out.split(|b| *b == 0).filter(|r| !r.is_empty()) {
-            if entries.len() == MAX_TREE_ENTRIES {
-                truncated = true;
-                break;
+        let commit = object_id(oid)?;
+        let owned = path.to_string();
+        let entries = self.read(move |repo, _| {
+            let tree = if owned.is_empty() {
+                repo.find_commit(commit)?.tree()?
+            } else {
+                match entry_at(repo, commit, &owned)? {
+                    Some(e) if e.mode().is_tree() => repo.find_tree(e.object_id())?,
+                    Some(_) => return Err(ReadError::new("not_a_tree", "path is a file")),
+                    None => return Err(ReadError::not_found("path")),
+                }
+            };
+            let mut entries = vec![];
+            let mut truncated = false;
+            for e in tree.iter() {
+                if entries.len() == MAX_TREE_ENTRIES {
+                    truncated = true;
+                    break;
+                }
+                let e = e?;
+                let mode = e.mode();
+                let kind = if mode.is_tree() {
+                    "tree"
+                } else if mode.is_commit() {
+                    "submodule"
+                } else if mode.is_link() {
+                    "symlink"
+                } else {
+                    "file"
+                };
+                let size = if mode.is_blob_or_symlink() {
+                    repo.find_header(e.object_id()).ok().map(|h| h.size())
+                } else {
+                    None
+                };
+                entries.push(json!({
+                    "name": e.filename().to_str_lossy(),
+                    "kind": kind,
+                    "mode": format!("{:0>6}", mode.kind().as_octal_str().to_str_lossy()),
+                    "oid": e.object_id().to_string(),
+                    "size": size,
+                }));
             }
-            let rec = String::from_utf8_lossy(rec);
-            let Some((meta, name)) = rec.split_once('\t') else {
-                continue;
-            };
-            let m: Vec<&str> = meta.split_whitespace().collect();
-            let [mode, kind, oid, size] = m[..] else {
-                continue;
-            };
-            let kind = match (kind, mode) {
-                ("tree", _) => "tree",
-                ("commit", _) => "submodule",
-                (_, "120000") => "symlink",
-                _ => "file",
-            };
-            entries.push(json!({
-                "name": name,
-                "kind": kind,
-                "mode": mode,
-                "oid": oid,
-                "size": size.parse::<u64>().ok(),
-            }));
-        }
-        entries.sort_by(|a, b| {
-            let dir = |v: &Value| v["kind"] != "tree";
-            (dir(a), a["name"].as_str()).cmp(&(dir(b), b["name"].as_str()))
+            entries.sort_by(|a, b| {
+                let dir = |v: &Value| v["kind"] != "tree";
+                (dir(a), a["name"].as_str()).cmp(&(dir(b), b["name"].as_str()))
+            });
+            Ok((entries, truncated))
         });
+        let ((entries, truncated), last_commit) =
+            tokio::try_join!(entries, self.last_commit(oid, path))?;
         Ok(json!({
             "oid": oid,
             "path": path,
             "entries": entries,
             "truncated": truncated,
-            "last_commit": self.last_commit(oid, path).await?,
+            "last_commit": last_commit,
         }))
-    }
-
-    async fn object_type(&self, spec: &str) -> Result<Option<String>, ReadError> {
-        let out = self
-            .run(
-                &["cat-file", "--batch-check=%(objecttype)"],
-                Some(format!("{spec}\n").into_bytes()),
-            )
-            .await?;
-        let s = String::from_utf8_lossy(&out).trim().to_string();
-        Ok((!s.ends_with("missing") && !s.contains(' ')).then_some(s))
     }
 
     /// The object ID and size of the file at `path`.
     async fn blob_info(&self, oid: &str, path: &str) -> Result<(String, u64), ReadError> {
-        let spec = format!("{oid}:{path}");
-        let out = self
-            .run(
-                &[
-                    "cat-file",
-                    "--batch-check=%(objectname) %(objecttype) %(objectsize)",
-                ],
-                Some(format!("{spec}\n").into_bytes()),
-            )
-            .await?;
-        let line = String::from_utf8_lossy(&out).trim().to_string();
-        let f: Vec<&str> = line.split(' ').collect();
-        let [blob, kind, size] = f[..] else {
-            return Err(ReadError::not_found("file"));
-        };
-        if kind != "blob" {
-            return Err(ReadError::new("not_a_file", "path is a directory"));
-        }
-        Ok((blob.to_string(), size.parse().unwrap_or(u64::MAX)))
+        let commit = object_id(oid)?;
+        let path = path.to_string();
+        self.read(move |repo, _| {
+            let Some(e) = entry_at(repo, commit, &path)? else {
+                return Err(ReadError::not_found("file"));
+            };
+            if e.mode().is_tree() {
+                return Err(ReadError::new("not_a_file", "path is a directory"));
+            }
+            if e.mode().is_commit() {
+                return Err(ReadError::not_found("file"));
+            }
+            let size = repo.find_header(e.object_id())?.size();
+            Ok((e.object_id().to_string(), size))
+        })
+        .await
+    }
+
+    /// The contents of a blob.
+    async fn read_blob(&self, blob: &str) -> Result<Vec<u8>, ReadError> {
+        let id = object_id(blob)?;
+        self.read(move |repo, _| Ok(repo.find_blob(id)?.take_data()))
+            .await
     }
 
     async fn blob(&self, oid: &str, path: &str) -> Result<Value, ReadError> {
@@ -815,12 +944,20 @@ impl Git<'_> {
         if path.is_empty() {
             return Err(ReadError::bad("path required"));
         }
-        let (blob, size) = self.blob_info(oid, path).await?;
-        let blob = blob.as_str();
+        let contents = async {
+            let (blob, size) = self.blob_info(oid, path).await?;
+            let data = if size <= MAX_BLOB_BYTES {
+                Some(self.read_blob(&blob).await?)
+            } else {
+                None
+            };
+            Ok::<_, ReadError>((blob, size, data))
+        };
+        let ((blob, size, data), last_commit) =
+            tokio::try_join!(contents, self.last_commit(oid, path))?;
         let mut text = None;
         let mut binary = false;
-        if size <= MAX_BLOB_BYTES {
-            let data = self.run(&["cat-file", "blob", blob], None).await?;
+        if let Some(data) = data {
             binary = data[..data.len().min(8000)].contains(&0);
             if !binary {
                 match String::from_utf8(data) {
@@ -837,31 +974,25 @@ impl Git<'_> {
             "binary": binary,
             "too_large": size > MAX_BLOB_BYTES,
             "text": text,
-            "last_commit": self.last_commit(oid, path).await?,
+            "last_commit": last_commit,
         }))
     }
 
     async fn commit(&self, oid: &str) -> Result<Value, ReadError> {
-        let out = self
-            .run(
-                &[
-                    "show",
-                    "--no-patch",
-                    "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%B",
-                    oid,
-                ],
-                None,
-            )
+        let id = object_id(oid)?;
+        let mut commit = self
+            .read(move |repo, _| {
+                let c = repo
+                    .try_find_object(id)?
+                    .ok_or_else(|| ReadError::not_found("commit"))?
+                    .try_into_commit()
+                    .map_err(|_| ReadError::not_found("commit"))?;
+                let mut json = commit_json(&c)?;
+                json["message"] = json!(c.message_raw_sloppy().to_str_lossy().trim_end());
+                Ok(json)
+            })
             .await?;
-        let mut commit = parse_commits(&[out.as_slice(), b"\x1e"].concat())
-            .pop()
-            .ok_or_else(|| ReadError::not_found("commit"))?;
-        let message = commit["subject"]
-            .as_str()
-            .unwrap_or_default()
-            .trim_end()
-            .to_string();
-        commit["message"] = json!(message);
+        let message = commit["message"].as_str().unwrap_or_default().to_string();
         commit["subject"] = json!(message.lines().next().unwrap_or_default());
         // Merges show their changes against the first parent.
         let (diff, truncated) = self

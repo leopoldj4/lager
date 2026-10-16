@@ -14,6 +14,37 @@ license = "FSL-1.1-ALv2"
 [profile.dev.package.worktree-core]
 opt-level = 3
 
+# Likewise for the gix crates that decompress and decode objects in the web
+# reads (docs/decisions/0021-web-reads-with-gix.md).
+[profile.dev.package.gix]
+opt-level = 3
+[profile.dev.package.gix-actor]
+opt-level = 3
+[profile.dev.package.gix-commitgraph]
+opt-level = 3
+[profile.dev.package.gix-date]
+opt-level = 3
+[profile.dev.package.gix-hash]
+opt-level = 3
+[profile.dev.package.gix-hashtable]
+opt-level = 3
+[profile.dev.package.gix-object]
+opt-level = 3
+[profile.dev.package.gix-odb]
+opt-level = 3
+[profile.dev.package.gix-pack]
+opt-level = 3
+[profile.dev.package.gix-ref]
+opt-level = 3
+[profile.dev.package.gix-revwalk]
+opt-level = 3
+[profile.dev.package.gix-traverse]
+opt-level = 3
+[profile.dev.package.gix-zlib]
+opt-level = 3
+[profile.dev.package.zlib-rs]
+opt-level = 3
+
 # Versions are fixed with `=` so that the tested combination is the built one.
 [workspace.dependencies]
 worktree-core = { path = "crates/core" }
@@ -26,6 +57,8 @@ base64 = "=0.22.1"
 bytes = "=1.12.1"
 clap = { version = "=4.6.7", features = ["derive", "env"] }
 futures = "=0.3.34"
+# Web reads of objects and refs (docs/decisions/0021-web-reads-with-gix.md).
+gix = { version = "=0.89.0", default-features = false, features = ["max-performance-safe", "sha1"] }
 hex = "=0.4.3"
 hyper-util = { version = "=0.1.21", features = ["tokio", "server", "server-auto", "service"] }
 libc = "=0.2.186"

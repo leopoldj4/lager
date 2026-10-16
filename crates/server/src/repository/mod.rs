@@ -271,11 +271,26 @@ pub struct ReadView {
     pub dir: PathBuf,
     pub generation: u64,
     _cache: Arc<CacheInstance>,
+    /// The view opened in this process for web reads
+    /// (docs/decisions/0021-web-reads-with-gix.md); opened on first use.
+    opened: std::sync::OnceLock<gix::ThreadSafeRepository>,
 }
 
 impl ReadView {
     pub fn format(&self) -> ObjectFormat {
         self._cache.format
+    }
+
+    /// The view as a repository of this thread. Reads files; call it off
+    /// the async runtime.
+    pub fn open(&self) -> Result<gix::Repository, RepoError> {
+        if let Some(r) = self.opened.get() {
+            return Ok(r.to_thread_local());
+        }
+        // Like the Git processes: no system, global, or environment settings.
+        let r = gix::ThreadSafeRepository::open_opts(&self.dir, gix::open::Options::isolated())
+            .map_err(|e| RepoError::Internal(format!("open read view: {e}")))?;
+        Ok(self.opened.get_or_init(|| r).to_thread_local())
     }
 }
 
@@ -498,6 +513,7 @@ impl Controller {
             dir,
             generation: known.head.generation,
             _cache: cache,
+            opened: Default::default(),
         });
         st.view = Some(view.clone());
         Ok(view)

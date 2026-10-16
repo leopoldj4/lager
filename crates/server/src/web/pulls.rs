@@ -150,7 +150,7 @@ async fn pull(
     let _permits = crate::http::process_permit(s)
         .await
         .map_err(|_| ReadError::new("busy", "server busy; retry later"))?;
-    let g = Git { s, dir: &view.dir };
+    let g = Git { s, view: &view };
     let source = g.commit_oid(&format!("refs/heads/{}", p.source)).await;
     let target = g.commit_oid(&format!("refs/heads/{}", p.target)).await;
     let kept = g.commit_oid(&format!("refs/pull/{number}/head")).await;
@@ -262,7 +262,7 @@ async fn compare(
     let _permits = crate::http::process_permit(s)
         .await
         .map_err(|_| ReadError::new("busy", "server busy; retry later"))?;
-    let g = Git { s, dir: &view.dir };
+    let g = Git { s, view: &view };
     let (base, head) = (g.resolve(base).await?, g.resolve(head).await?);
     let Some(merge_base) = g.merge_base(&base, &head).await? else {
         return Err(ReadError::new(
