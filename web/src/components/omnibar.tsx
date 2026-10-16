@@ -1,10 +1,4 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from "react"
+import { createContext, useContext, useEffect, useRef, useState } from "react"
 import { useNavigate, useParams } from "@tanstack/react-router"
 import { Command as CommandPrimitive } from "cmdk"
 import { Dialog as DialogPrimitive } from "radix-ui"
@@ -158,8 +152,7 @@ export function Omnibar({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPortal>
-        <DialogPrimitive.Content className="fixed top-[15%] left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-xl bg-popover bg-clip-padding p-2 pb-11 text-popover-foreground shadow-2xl ring-4 ring-neutral-200/80 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 sm:max-w-xl dark:bg-neutral-900 dark:ring-neutral-800"
-        >
+        <DialogPrimitive.Content className="fixed top-[15%] left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-xl bg-popover bg-clip-padding p-2 pb-11 text-popover-foreground shadow-2xl ring-4 ring-neutral-200/80 duration-100 outline-none sm:max-w-xl dark:bg-neutral-900 dark:ring-neutral-800 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
           <DialogHeader className="sr-only">
             <DialogTitle>Search</DialogTitle>
             <DialogDescription>
@@ -374,13 +367,7 @@ function RepoGroups({ repo, go, run }: { repo: string; go: Go; run: Run }) {
           ))}
         </MenuGroup>
       )}
-      <Pages
-        repo={repo}
-        refs={refs}
-        hasPulls={hasPulls}
-        go={go}
-        run={run}
-      />
+      <Pages repo={repo} refs={refs} hasPulls={hasPulls} go={go} run={run} />
       {refs && refs.branches.length > 0 && (
         <MenuGroup heading="Branches">
           {[...refs.branches]
