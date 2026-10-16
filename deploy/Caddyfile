@@ -5,6 +5,10 @@
 	@internal path /_worktree/metrics
 	respond @internal 404
 
+	# The server sends the interface's assets uncompressed. Caddy compresses
+	# only text-like types by default, so Git packs pass through unchanged.
+	encode zstd gzip
+
 	reverse_proxy worktree:8080 {
 		health_uri /_worktree/health
 		health_interval 5s
