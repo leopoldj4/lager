@@ -40,7 +40,9 @@ function SignIn() {
     return next &&
       !next.startsWith("//") &&
       !next.includes("\\") &&
-      (!next.startsWith("/-/") || next === "/-/passkeys")
+      (!next.startsWith("/-/") ||
+        next === "/-/settings" ||
+        next.startsWith("/-/settings/"))
       ? next
       : "/"
   }

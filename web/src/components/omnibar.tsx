@@ -16,6 +16,7 @@ import {
   LogOut,
   Plus,
   SearchIcon,
+  Settings,
   Tag,
   X,
 } from "lucide-react"
@@ -343,9 +344,17 @@ function Account({ run }: { run: Run }) {
       {state.user ? (
         <>
           <CommandItem
+            value="account settings github"
+            keywords={["settings", "preferences", "github", "mirror"]}
+            onSelect={() => run(() => navigate({ to: "/-/settings/github" }))}
+          >
+            <Settings />
+            Settings
+          </CommandItem>
+          <CommandItem
             value="account passkeys"
             keywords={["passkeys"]}
-            onSelect={() => run(() => navigate({ to: "/-/passkeys" }))}
+            onSelect={() => run(() => navigate({ to: "/-/settings/passkeys" }))}
           >
             <KeyRound />
             Passkeys
@@ -353,7 +362,7 @@ function Account({ run }: { run: Run }) {
           <CommandItem
             value="account access tokens"
             keywords={["tokens", "personal access token", "pat"]}
-            onSelect={() => run(() => navigate({ to: "/-/tokens" }))}
+            onSelect={() => run(() => navigate({ to: "/-/settings/tokens" }))}
           >
             <Key />
             Access tokens
