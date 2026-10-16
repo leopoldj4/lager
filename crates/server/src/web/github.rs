@@ -4,7 +4,7 @@
 //! `GET /-/api/github/connect` sends the signed-in user to GitHub with a
 //! random state in a short-lived cookie; GitHub sends them back to
 //! `GET /-/api/github/callback`, which checks the state, keeps the token,
-//! and returns to `/-/settings`. Both are page loads, not API calls.
+//! and returns to `/-/settings/github`. Both are page loads, not API calls.
 
 use axum::Router;
 use axum::extract::{Query as UrlQuery, State};
@@ -22,7 +22,7 @@ use worktree_core::password::constant_time_eq;
 
 const COOKIE: &str = "worktree_github_state";
 const COOKIE_PATH: &str = "/-/api/github";
-const SETTINGS: &str = "/-/settings";
+const SETTINGS: &str = "/-/settings/github";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -77,7 +77,7 @@ async fn signed_in(s: &AppState, headers: &HeaderMap) -> Result<Option<String>, 
 async fn connect(State(s): State<AppState>, headers: HeaderMap) -> Response {
     let user = match signed_in(&s, &headers).await {
         Ok(Some(u)) => u,
-        Ok(None) => return redirect("/-/sign-in?next=%2F-%2Fsettings", None),
+        Ok(None) => return redirect("/-/sign-in?next=%2F-%2Fsettings%2Fgithub", None),
         Err(r) => return r,
     };
     let Some(github) = &s.github else {
@@ -116,7 +116,7 @@ async fn callback(
     let clear = Some(state_cookie(&s, "", 0));
     let user = match signed_in(&s, &headers).await {
         Ok(Some(u)) => u,
-        Ok(None) => return redirect("/-/sign-in?next=%2F-%2Fsettings", clear),
+        Ok(None) => return redirect("/-/sign-in?next=%2F-%2Fsettings%2Fgithub", clear),
         Err(r) => return r,
     };
     let Some(github) = &s.github else {

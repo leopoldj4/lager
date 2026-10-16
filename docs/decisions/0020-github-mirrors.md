@@ -2,7 +2,7 @@
 
 Status: accepted; implemented in `crates/core/src/github.rs`,
 `crates/server/src/github.rs`, `crates/server/src/web/github.rs`, and
-`web/src/routes/[-].settings.tsx`. Date: October 15, 2026.
+`web/src/routes/[-].settings.github.tsx`. Date: October 15, 2026.
 
 ## Context
 
@@ -14,7 +14,7 @@ copy here must never drift from it, so nothing here may change it.
 
 **Connecting.** `[github]` names a GitHub OAuth app (`client_id`,
 `client_secret`); its callback URL is `<origin>/-/api/github/callback`.
-**Settings** (`/-/settings`) has a **Connect with GitHub** button:
+**Settings** (`/-/settings/github`) has a **Connect with GitHub** button:
 `GET /-/api/github/connect` sends the signed-in user to GitHub with a
 random state in a ten-minute cookie (`SameSite=Lax`, path
 `/-/api/github`), and the callback checks the state, exchanges the code,

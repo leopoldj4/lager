@@ -6,8 +6,6 @@ import {
   ChevronsUpDown,
   GitBranch,
   House,
-  Key,
-  KeyRound,
   LogIn,
   LogOut,
   SearchIcon,
@@ -292,18 +290,7 @@ function UserMenu() {
                 Settings
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/-/passkeys" onClick={close}>
-                <KeyRound />
-                Passkeys
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/-/tokens" onClick={close}>
-                <Key />
-                Access tokens
-              </Link>
-            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={async () => {
                 close()
