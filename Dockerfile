@@ -46,7 +46,7 @@ RUN apt-get update \
 COPY --from=rust /out/ /usr/local/bin/
 COPY --from=web /src/web/dist/client /usr/local/share/worktree/web
 USER 10001:10001
-EXPOSE 8080
+EXPOSE 8080 2222
 VOLUME /var/cache/worktree
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/worktree-server"]
 CMD ["-c", "/etc/worktree/worktree.toml"]

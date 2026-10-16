@@ -91,7 +91,7 @@ Require documented storage guarantees from each provider. A local service cannot
 
 ## Later extensions
 
-Keep SSH, Git LFS, partial clone, user hooks, SHA-256, and the management API as later work.
+Keep Git LFS, partial clone, user hooks, SHA-256, and the management API as later work.
 
 Keep transactions across repositories as later work. Pull requests from forks and line comments follow [decision 19](docs/decisions/0019-pull-requests.md). User hooks need process isolation. Partial clone needs object-access rules.
 

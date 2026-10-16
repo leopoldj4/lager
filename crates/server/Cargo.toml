@@ -34,3 +34,4 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 webauthn-rs.workspace = true
+russh.workspace = true

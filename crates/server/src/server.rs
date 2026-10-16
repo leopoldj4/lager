@@ -1,4 +1,4 @@
-//! Server assembly: storage, Git, controllers, hook socket, and HTTP.
+//! Server assembly: storage, Git, controllers, hook socket, HTTP, and SSH.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -27,6 +27,9 @@ pub struct RunningServer {
     pub addr: SocketAddr,
     pub state: AppState,
     http: JoinHandle<()>,
+    /// Git over SSH, with `[ssh]`.
+    ssh: Option<JoinHandle<()>>,
+    pub ssh_addr: Option<SocketAddr>,
     hooks: JoinHandle<()>,
     /// Cache eviction and automatic snapshots.
     background: Vec<JoinHandle<()>>,
@@ -53,6 +56,9 @@ impl RunningServer {
     /// end with the process. Accepted pushes are already in storage.
     pub fn stop(self) {
         self.http.abort();
+        if let Some(t) = &self.ssh {
+            t.abort();
+        }
         self.hooks.abort();
         for t in &self.background {
             t.abort();
@@ -75,9 +81,12 @@ impl RunningServer {
         let deadline = tokio::time::Instant::now() + limits::SHUTDOWN_TIMEOUT;
         tracing::info!("stopping: no new connections; waiting for running requests");
         let _ = self.stop_http.send(true);
-        let http_done = tokio::time::timeout_at(deadline, &mut self.http)
+        let mut http_done = tokio::time::timeout_at(deadline, &mut self.http)
             .await
             .is_ok();
+        if let Some(t) = &mut self.ssh {
+            http_done &= tokio::time::timeout_at(deadline, t).await.is_ok();
+        }
         // Git processes of finished requests have ended, so no new push
         // procedure can start. Wait for procedures of clients that left.
         let _ = self.stop_hooks.send(true);
@@ -118,6 +127,15 @@ pub async fn start_with_listener(
     listener: TcpListener,
 ) -> anyhow::Result<RunningServer> {
     let addr = listener.local_addr()?;
+    // Before anything starts: a wrong key file or a used port stops here.
+    let ssh = match &cfg.ssh {
+        Some(c) => {
+            let key = crate::ssh::load_host_key(&c.host_key)?;
+            let l = TcpListener::bind(c.listen).await?;
+            Some((crate::ssh::config(key), l))
+        }
+        None => None,
+    };
     let cache_root = cfg.server.cache_dir.clone();
     std::fs::create_dir_all(&cache_root)?;
     // Git comes from PATH; the container image takes it from Debian trixie.
@@ -264,7 +282,13 @@ pub async fn start_with_listener(
         web: cfg.web.as_ref().map(|w| {
             // Off the loopback address, clients come through HTTPS.
             let secure = !cfg.server.listen.ip().is_loopback();
-            Arc::new(crate::web::Web::new(w, secure, stop_http.subscribe()))
+            let ssh_url = cfg.ssh.as_ref().and_then(|s| s.public_url.clone());
+            Arc::new(crate::web::Web::new(
+                w,
+                ssh_url,
+                secure,
+                stop_http.subscribe(),
+            ))
         }),
     });
     let app = crate::http::router(state.clone());
@@ -274,10 +298,26 @@ pub async fn start_with_listener(
             async move { serve_http(listener, app, limits::CLIENT_IDLE_TIMEOUT, stop).await },
         );
     tracing::info!(%addr, "worktree listening");
+    let (ssh, ssh_addr) = match ssh {
+        Some((config, l)) => {
+            let ssh_addr = l.local_addr()?;
+            let (state, stop) = (state.clone(), stop_http.subscribe());
+            tracing::info!(addr = %ssh_addr, "worktree listening for SSH");
+            (
+                Some(tokio::spawn(async move {
+                    crate::ssh::serve(l, config, state, stop).await
+                })),
+                Some(ssh_addr),
+            )
+        }
+        None => (None, None),
+    };
     Ok(RunningServer {
         addr,
         state,
         http,
+        ssh,
+        ssh_addr,
         hooks,
         background,
         stop_http,

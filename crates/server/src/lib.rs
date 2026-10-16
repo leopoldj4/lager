@@ -17,4 +17,5 @@ pub mod pulls;
 pub mod repository;
 pub mod server;
 pub mod snapshot;
+pub mod ssh;
 pub mod web;

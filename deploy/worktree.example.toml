@@ -35,3 +35,9 @@ session_secret = "CHANGE"
 # [github]
 # client_id = "CHANGE"
 # client_secret = "CHANGE"
+
+[ssh]                          # Git over SSH; compose.yaml publishes it on port 22
+listen = "0.0.0.0:2222"
+host_key = "/etc/worktree/ssh_host_ed25519_key"
+# Shown in the clone menu: git@git.example.com:<repo>.git
+public_url = "ssh://git@CHANGE"

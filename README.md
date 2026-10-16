@@ -23,7 +23,11 @@ scripts/local.sh
 
 ```bash
 git clone http://dev:dev-password@127.0.0.1:8080/dev/demo.git
+git clone ssh://git@127.0.0.1:2222/dev/demo.git   # with your key, see below
 ```
+
+The script adds your `~/.ssh/id_ed25519.pub` (or ECDSA or RSA key) to `dev`
+for Git over SSH ([decision 22](docs/decisions/0022-git-over-ssh.md)).
 
 The web interface is at http://127.0.0.1:8080/ (sign in as `dev` / `dev-password`).
 A `.local/worktree.toml` from before the minimal configuration
@@ -76,6 +80,9 @@ worktree user delete <name>
 worktree token create <user> <name> [--access repo=level]... [--expires-days N]
 worktree token list <user>
 worktree token delete <user> <id>
+worktree ssh-key add <user> <file|-> [--name <name>]  # e.g. ~/.ssh/id_ed25519.pub
+worktree ssh-key list <user>
+worktree ssh-key delete <user> <id>
 worktree repo create <name> [--default-branch main]
 worktree repo delete <name>
 worktree repo set-default-branch <name> <branch>
@@ -91,7 +98,7 @@ worktree backup import <dir> [--name <name>]
 
 Both programs read the server configuration (`-c`, `WORKTREE_CONFIG`, or
 `./worktree.toml`). `repo`, `cleanup`, and `backup` use the
-storage service directly; `user` and `token` use the database.
+storage service directly; `user`, `token`, and `ssh-key` use the database.
 The server has no management API
 ([decision 10](docs/decisions/0010-no-admin-api.md)).
 

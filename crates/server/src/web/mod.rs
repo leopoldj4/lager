@@ -3,7 +3,8 @@
 //!
 //! Everything lives under `/-/`, which no repository name can take:
 //! `/-/api/session` signs in and out, `/-/api/tokens` manages access tokens,
-//! `/-/api/live` is the WebSocket, `/-/api/github/` connects GitHub, and
+//! `/-/api/live` is the WebSocket, `/-/api/github/` connects GitHub,
+//! `/-/api/ssh` names the SSH address for clones, and
 //! `/-/assets/` holds the built files. `/<repo>/-/raw/<rev>/<path>` answers
 //! a file's bytes. Every other browser page that is no Git request gets the
 //! application shell, which routes in the browser.
@@ -35,6 +36,8 @@ use worktree_core::identity::{AuthError, Identity, TOKEN_PREFIX};
 pub struct Web {
     pub sessions: session::Sessions,
     public_origin: Option<String>,
+    /// `ssh.public_url`.
+    ssh_url: Option<String>,
     dir: Option<PathBuf>,
     /// Ends live connections when the server stops.
     stop: watch::Receiver<bool>,
@@ -45,7 +48,12 @@ pub struct Web {
 impl Web {
     /// `secure`: the server is reached over HTTPS (session cookies get
     /// `Secure`).
-    pub fn new(cfg: &WebConfig, secure: bool, stop: watch::Receiver<bool>) -> Self {
+    pub fn new(
+        cfg: &WebConfig,
+        ssh_url: Option<String>,
+        secure: bool,
+        stop: watch::Receiver<bool>,
+    ) -> Self {
         let dir = built_interface();
         match &dir {
             Some(d) => tracing::info!(dir = %d.display(), "serving the web interface"),
@@ -53,6 +61,7 @@ impl Web {
         }
         Self {
             public_origin: cfg.public_origin.clone(),
+            ssh_url,
             sessions: session::Sessions::new(
                 &cfg.session_secret,
                 worktree_core::limits::SESSION_DAYS,
@@ -134,7 +143,14 @@ pub fn router() -> Router<AppState> {
         .merge(tokens::router())
         .route("/-/api/session", post(sign_in).delete(sign_out))
         .route("/-/api/live", get(live::upgrade))
+        .route("/-/api/ssh", get(ssh))
         .route("/-/assets/{*file}", get(asset))
+}
+
+/// The SSH address that clients clone from; `null` without one.
+async fn ssh(State(s): State<AppState>) -> Response {
+    let url = s.web.as_ref().and_then(|w| w.ssh_url.clone());
+    Json(serde_json::json!({ "url": url })).into_response()
 }
 
 #[derive(serde::Deserialize)]
