@@ -19,6 +19,7 @@ base64.workspace = true
 bytes.workspace = true
 clap.workspace = true
 futures.workspace = true
+gix.workspace = true
 hyper-util.workspace = true
 libc.workspace = true
 percent-encoding.workspace = true
