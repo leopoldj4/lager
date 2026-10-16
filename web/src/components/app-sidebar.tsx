@@ -251,6 +251,7 @@ function UserMenu() {
   const state = useLive()
   const navigate = useNavigate()
   const close = useCloseOnMobile()
+  const pathname = useLocation({ select: (l) => l.pathname })
   if (!state?.ready) return null
   if (!state.user) {
     return (
@@ -273,6 +274,17 @@ function UserMenu() {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
+        <SidebarMenuButton
+          asChild
+          isActive={pathname.startsWith("/-/settings")}
+        >
+          <Link to="/-/settings" onClick={close}>
+            <Settings />
+            Settings
+          </Link>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton size="lg">
@@ -283,13 +295,6 @@ function UserMenu() {
           </DropdownMenuTrigger>
           <DropdownMenuContent side="top" align="start" className="w-56">
             <DropdownMenuLabel>Signed in as {state.user}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link to="/-/settings" onClick={close}>
-                <Settings />
-                Settings
-              </Link>
-            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={async () => {

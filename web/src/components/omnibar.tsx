@@ -1,11 +1,19 @@
-import { useEffect, useState } from "react"
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react"
 import { useNavigate, useParams } from "@tanstack/react-router"
 import { Command as CommandPrimitive } from "cmdk"
+import { Dialog as DialogPrimitive } from "radix-ui"
 import {
   BookLock,
   BookMarked,
   BookOpen,
   Copy,
+  CornerDownLeft,
   GitBranch,
   GitCommitHorizontal,
   GitPullRequest,
@@ -31,16 +39,23 @@ import {
   type Refs,
 } from "@/lib/api"
 import { href, parse, type View } from "@/lib/paths"
+import { cn } from "@/lib/utils"
 import {
   Command,
-  CommandDialog,
   CommandEmpty,
   CommandGroup,
   CommandItem,
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
-import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
+import {
+  Dialog,
+  DialogDescription,
+  DialogHeader,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Separator } from "@/components/ui/separator"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { cloneUrl } from "@/components/repo/clone"
 import { PullIcon, newPullHref } from "@/components/repo/pulls"
@@ -83,10 +98,17 @@ function match(value: string, search: string, keywords?: string[]) {
     : 0.5
 }
 
+/** What Enter does on an item, and what ⌘C copies, for the footer. */
+type Hint = { action: string; copy?: { label: string; text: string } }
+
+/** Hints by item value; items fill it in as they render. */
+const HintsContext = createContext<Map<string, Hint>>(new Map())
+
 /**
  * Search and jump: repositories, and in a repository its pull requests,
  * branches, and pages. Inside a repository the search starts there;
- * Backspace on an empty input widens it to everything.
+ * Backspace on an empty input widens it to everything. ⌘K or / opens it;
+ * the footer tells what Enter and ⌘C do on the highlighted item.
  */
 export function Omnibar({
   open,
@@ -101,12 +123,18 @@ export function Omnibar({
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
   const [scoped, setScoped] = useState(true)
+  const [selected, setSelected] = useState("")
+  const hints = useRef(new Map<string, Hint>()).current
+  const hint = hints.get(selected)
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
         onOpenChange(!open)
+      } else if (e.key === "/" && !open && !editable(e.target)) {
+        e.preventDefault()
+        onOpenChange(true)
       }
     }
     document.addEventListener("keydown", down)
@@ -128,56 +156,161 @@ export function Omnibar({
     run(() => navigate({ to: "/$", params: { _splat: splat } }))
 
   return (
-    <CommandDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Search"
-      description="Jump to a repository, pull request, branch, or page."
-      className="sm:max-w-xl"
-    >
-      <Command filter={match}>
-        <div className="p-1 pb-0">
-          <InputGroup className="h-9 border-input/30 bg-input/30 shadow-none">
-            <InputGroupAddon>
-              <SearchIcon className="opacity-50" />
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogPrimitive.Content className="fixed top-[15%] left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-xl bg-popover bg-clip-padding p-2 pb-11 text-popover-foreground shadow-2xl ring-4 ring-neutral-200/80 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 sm:max-w-xl dark:bg-neutral-900 dark:ring-neutral-800"
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>Search</DialogTitle>
+            <DialogDescription>
+              Jump to a repository, pull request, branch, or page.
+            </DialogDescription>
+          </DialogHeader>
+          <Command
+            filter={match}
+            value={selected}
+            onValueChange={setSelected}
+            className="rounded-none! bg-transparent p-0"
+          >
+            <div className="flex h-9 items-center gap-2 rounded-md border border-input bg-input/50 px-3">
+              <SearchIcon className="size-4 shrink-0 opacity-50" />
               {scope && (
                 <button
                   type="button"
                   tabIndex={-1}
                   onClick={() => setScoped(false)}
-                  className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs text-foreground hover:bg-muted/70"
+                  className="flex shrink-0 items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground hover:bg-muted/70"
                   aria-label={`Search everywhere instead of ${scope}`}
                 >
                   {scope}
                   <X className="size-3" />
                 </button>
               )}
-            </InputGroupAddon>
-            <CommandPrimitive.Input
-              value={query}
-              onValueChange={setQuery}
-              onKeyDown={(e) => {
-                if (e.key === "Backspace" && query === "" && scope) {
-                  setScoped(false)
+              <CommandPrimitive.Input
+                data-slot="command-input"
+                value={query}
+                onValueChange={setQuery}
+                onKeyDown={(e) => {
+                  if (e.key === "Backspace" && query === "" && scope) {
+                    setScoped(false)
+                  }
+                  const input = e.currentTarget
+                  if (
+                    e.key.toLowerCase() === "c" &&
+                    (e.metaKey || e.ctrlKey) &&
+                    input.selectionStart === input.selectionEnd &&
+                    hint?.copy
+                  ) {
+                    e.preventDefault()
+                    const text = hint.copy.text
+                    run(() => navigator.clipboard.writeText(text))
+                  }
+                }}
+                placeholder={
+                  scope ? "Search this repository…" : "Search or jump to…"
                 }
-              }}
-              placeholder={
-                scope ? "Search this repository…" : "Search or jump to…"
-              }
-              className="h-full w-full flex-1 bg-transparent text-sm outline-hidden"
-            />
-          </InputGroup>
-        </div>
-        <CommandList className="max-h-[min(28rem,60vh)]">
-          <CommandEmpty>Nothing found.</CommandEmpty>
-          {scope && <RepoGroups repo={scope} go={go} run={run} />}
-          <Actions run={run} onCreateRepo={onCreateRepo} />
-          <RepoList go={go} />
-          <Account run={run} />
-        </CommandList>
-      </Command>
-    </CommandDialog>
+                className="h-full w-full min-w-0 flex-1 bg-transparent text-sm outline-hidden placeholder:text-muted-foreground"
+              />
+            </div>
+            <CommandList className="max-h-80 min-h-80 scroll-pt-2 scroll-pb-1.5">
+              <CommandEmpty className="py-12 text-muted-foreground">
+                No results found.
+              </CommandEmpty>
+              <HintsContext value={hints}>
+                {scope && <RepoGroups repo={scope} go={go} run={run} />}
+                <Actions run={run} onCreateRepo={onCreateRepo} />
+                <RepoList go={go} />
+                <Account run={run} />
+              </HintsContext>
+            </CommandList>
+          </Command>
+          <div className="absolute inset-x-0 bottom-0 z-20 flex h-10 items-center gap-2 rounded-b-xl border-t border-t-neutral-100 bg-neutral-50 px-4 text-xs font-medium text-muted-foreground dark:border-t-neutral-700 dark:bg-neutral-800">
+            {hint && (
+              <div className="flex items-center gap-2">
+                <MenuKbd>
+                  <CornerDownLeft />
+                </MenuKbd>
+                {hint.action}
+              </div>
+            )}
+            {hint?.copy && (
+              <>
+                <Separator
+                  orientation="vertical"
+                  className="h-4! self-center!"
+                />
+                <div className="flex min-w-0 items-center gap-1">
+                  <MenuKbd>
+                    <ModKey />
+                  </MenuKbd>
+                  <MenuKbd>C</MenuKbd>
+                  <span className="truncate">{hint.copy.label}</span>
+                </div>
+              </>
+            )}
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    </Dialog>
   )
+}
+
+function editable(target: EventTarget | null) {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  )
+}
+
+function MenuKbd({ className, ...props }: React.ComponentProps<"kbd">) {
+  return (
+    <kbd
+      className={cn(
+        "pointer-events-none flex h-5 min-w-5 items-center justify-center gap-1 rounded border bg-background px-1 font-sans text-[0.7rem] font-medium text-muted-foreground select-none [&_svg:not([class*='size-'])]:size-3",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function MenuGroup({
+  className,
+  ...props
+}: React.ComponentProps<typeof CommandGroup>) {
+  return (
+    <CommandGroup
+      className={cn(
+        "p-0! **:[[cmdk-group-heading]]:scroll-mt-16 **:[[cmdk-group-heading]]:p-3! **:[[cmdk-group-heading]]:pb-1!",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function MenuItem({
+  hint,
+  className,
+  ...props
+}: React.ComponentProps<typeof CommandItem> & { value: string; hint: Hint }) {
+  useContext(HintsContext).set(props.value, hint)
+  return (
+    <CommandItem
+      className={cn(
+        "h-9 rounded-md border border-transparent px-3! font-medium data-selected:border-input data-selected:bg-input/50",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+/** The page's address to share, from its splat. */
+function pageUrl(splat: string) {
+  return `${location.origin}/${splat}`
 }
 
 type Go = (splat: string) => void
@@ -193,30 +326,42 @@ function Actions({
   const user = useLive()?.user
   if (!user) return null
   return (
-    <CommandGroup heading="Actions">
-      <CommandItem
+    <MenuGroup heading="Actions">
+      <MenuItem
         value="action new repository"
+        hint={{ action: "Create repository" }}
         keywords={["new repository", "create repo"]}
         onSelect={() => run(onCreateRepo)}
       >
         <Plus />
         New repository
-      </CommandItem>
-    </CommandGroup>
+      </MenuItem>
+    </MenuGroup>
   )
 }
 
 function RepoGroups({ repo, go, run }: { repo: string; go: Go; run: Run }) {
   const refs = useRefs(repo).data
-  const pulls = usePulls(repo, false).data?.pages.flatMap((p) => p.pulls)
+  // Mirrors have no pull requests.
+  const hasPulls = !!refs && !refs.mirror
+  const pulls = usePulls(repo, false, hasPulls).data?.pages.flatMap(
+    (p) => p.pulls
+  )
   return (
     <>
-      {pulls && pulls.length > 0 && (
-        <CommandGroup heading="Pull requests">
+      {hasPulls && pulls && pulls.length > 0 && (
+        <MenuGroup heading="Pull requests">
           {pulls.map((p) => (
-            <CommandItem
+            <MenuItem
               key={p.number}
               value={`pull ${p.number}`}
+              hint={{
+                action: "Open pull request",
+                copy: {
+                  label: "Copy link",
+                  text: pageUrl(href(repo, "pull", String(p.number))),
+                },
+              }}
               keywords={[`#${p.number}`, p.title, p.source, p.author]}
               onSelect={() => go(href(repo, "pull", String(p.number)))}
             >
@@ -225,19 +370,29 @@ function RepoGroups({ repo, go, run }: { repo: string; go: Go; run: Run }) {
               <CommandShortcut className="tracking-normal">
                 #{p.number}
               </CommandShortcut>
-            </CommandItem>
+            </MenuItem>
           ))}
-        </CommandGroup>
+        </MenuGroup>
       )}
-      <Pages repo={repo} refs={refs} go={go} run={run} />
+      <Pages
+        repo={repo}
+        refs={refs}
+        hasPulls={hasPulls}
+        go={go}
+        run={run}
+      />
       {refs && refs.branches.length > 0 && (
-        <CommandGroup heading="Branches">
+        <MenuGroup heading="Branches">
           {[...refs.branches]
             .sort((a, b) => b.time - a.time)
             .map((b) => (
-              <CommandItem
+              <MenuItem
                 key={b.name}
                 value={`branch ${b.name}`}
+                hint={{
+                  action: "Browse branch",
+                  copy: { label: "Copy branch name", text: b.name },
+                }}
                 keywords={[b.name]}
                 onSelect={() => go(href(repo, "tree", b.name))}
               >
@@ -248,9 +403,9 @@ function RepoGroups({ repo, go, run }: { repo: string; go: Go; run: Run }) {
                     default
                   </CommandShortcut>
                 )}
-              </CommandItem>
+              </MenuItem>
             ))}
-        </CommandGroup>
+        </MenuGroup>
       )}
     </>
   )
@@ -268,42 +423,57 @@ const pages: { view: View; label: string; icon: typeof Tag }[] = [
 function Pages({
   repo,
   refs,
+  hasPulls,
   go,
   run,
 }: {
   repo: string
   refs: Refs | undefined
+  hasPulls: boolean
   go: Go
   run: Run
 }) {
   const user = useLive()?.user
   return (
-    <CommandGroup heading="Go to">
-      {pages.map((p) => (
-        <CommandItem
-          key={p.view}
-          value={`page ${p.label}`}
-          keywords={[p.label]}
-          onSelect={() =>
-            go(p.view === "overview" ? href(repo) : href(repo, p.view))
-          }
-        >
-          <p.icon />
-          {p.label}
-        </CommandItem>
-      ))}
-      {user && refs && refs.branches.length > 1 && (
-        <CommandItem
+    <MenuGroup heading="Go to">
+      {pages
+        .filter((p) => hasPulls || p.view !== "pulls")
+        .map((p) => (
+          <MenuItem
+            key={p.view}
+            value={`page ${p.label}`}
+            hint={{
+              action: "Go to page",
+              copy: {
+                label: "Copy link",
+                text: pageUrl(
+                  p.view === "overview" ? href(repo) : href(repo, p.view)
+                ),
+              },
+            }}
+            keywords={[p.label]}
+            onSelect={() =>
+              go(p.view === "overview" ? href(repo) : href(repo, p.view))
+            }
+          >
+            <p.icon />
+            {p.label}
+          </MenuItem>
+        ))}
+      {user && hasPulls && refs && refs.branches.length > 1 && (
+        <MenuItem
           value="action new pull request"
+          hint={{ action: "Compare branches" }}
           keywords={["new pull request", "open", "compare"]}
           onSelect={() => go(newPullHref(repo, refs))}
         >
           <Plus />
           New pull request
-        </CommandItem>
+        </MenuItem>
       )}
-      <CommandItem
+      <MenuItem
         value="action copy clone url"
+        hint={{ action: "Copy clone URL" }}
         keywords={["copy clone url", "git"]}
         onSelect={() =>
           run(() => navigator.clipboard.writeText(cloneUrl(repo)))
@@ -311,8 +481,8 @@ function Pages({
       >
         <Copy />
         Copy clone URL
-      </CommandItem>
-    </CommandGroup>
+      </MenuItem>
+    </MenuGroup>
   )
 }
 
@@ -320,19 +490,23 @@ function RepoList({ go }: { go: Go }) {
   const repos = useRepos().data?.repos
   if (!repos || repos.length === 0) return null
   return (
-    <CommandGroup heading="Repositories">
+    <MenuGroup heading="Repositories">
       {repos.map((r) => (
-        <CommandItem
+        <MenuItem
           key={r.name}
           value={`repo ${r.name}`}
+          hint={{
+            action: "Open repository",
+            copy: { label: "Copy clone URL", text: cloneUrl(r.name) },
+          }}
           keywords={[r.name]}
           onSelect={() => go(href(r.name))}
         >
           {r.anonymous_read ? <BookOpen /> : <BookLock />}
           <span className="truncate">{r.name}</span>
-        </CommandItem>
+        </MenuItem>
       ))}
-    </CommandGroup>
+    </MenuGroup>
   )
 }
 
@@ -341,43 +515,48 @@ function Account({ run }: { run: Run }) {
   const navigate = useNavigate()
   if (!state?.ready) return null
   return (
-    <CommandGroup heading="Account">
+    <MenuGroup heading="Account">
       {state.user ? (
         <>
-          <CommandItem
+          <MenuItem
             value="account settings github"
+            hint={{ action: "Open settings" }}
             keywords={["settings", "preferences", "github", "mirror"]}
             onSelect={() => run(() => navigate({ to: "/-/settings/github" }))}
           >
             <Settings />
             Settings
-          </CommandItem>
-          <CommandItem
+          </MenuItem>
+          <MenuItem
             value="account passkeys"
+            hint={{ action: "Open settings" }}
             keywords={["passkeys"]}
             onSelect={() => run(() => navigate({ to: "/-/settings/passkeys" }))}
           >
             <KeyRound />
             Passkeys
-          </CommandItem>
-          <CommandItem
+          </MenuItem>
+          <MenuItem
             value="account access tokens"
+            hint={{ action: "Open settings" }}
             keywords={["tokens", "personal access token", "pat"]}
             onSelect={() => run(() => navigate({ to: "/-/settings/tokens" }))}
           >
             <Key />
             Access tokens
-          </CommandItem>
-          <CommandItem
+          </MenuItem>
+          <MenuItem
             value="account ssh keys"
+            hint={{ action: "Open settings" }}
             keywords={["ssh", "public key", "git over ssh"]}
             onSelect={() => run(() => navigate({ to: "/-/settings/ssh-keys" }))}
           >
             <Terminal />
             SSH keys
-          </CommandItem>
-          <CommandItem
+          </MenuItem>
+          <MenuItem
             value="account sign out"
+            hint={{ action: "Sign out" }}
             keywords={["sign out", "log out"]}
             onSelect={() =>
               run(async () => {
@@ -388,11 +567,12 @@ function Account({ run }: { run: Run }) {
           >
             <LogOut />
             Sign out
-          </CommandItem>
+          </MenuItem>
         </>
       ) : (
-        <CommandItem
+        <MenuItem
           value="account sign in"
+          hint={{ action: "Sign in" }}
           keywords={["sign in", "log in"]}
           onSelect={() =>
             run(() =>
@@ -405,8 +585,8 @@ function Account({ run }: { run: Run }) {
         >
           <LogIn />
           Sign in
-        </CommandItem>
+        </MenuItem>
       )}
-    </CommandGroup>
+    </MenuGroup>
   )
 }
