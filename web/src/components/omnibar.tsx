@@ -18,6 +18,7 @@ import {
   SearchIcon,
   Settings,
   Tag,
+  Terminal,
   X,
 } from "lucide-react"
 
@@ -366,6 +367,14 @@ function Account({ run }: { run: Run }) {
           >
             <Key />
             Access tokens
+          </CommandItem>
+          <CommandItem
+            value="account ssh keys"
+            keywords={["ssh", "public key", "git over ssh"]}
+            onSelect={() => run(() => navigate({ to: "/-/settings/ssh-keys" }))}
+          >
+            <Terminal />
+            SSH keys
           </CommandItem>
           <CommandItem
             value="account sign out"

@@ -26,6 +26,16 @@ async fn user<'a>(
     headers: &HeaderMap,
     write: bool,
 ) -> Result<(&'a Web, String), Response> {
+    signed_in(s, headers, write, "sign in to manage your access tokens").await
+}
+
+/// [`user`] with the message for anonymous requests.
+pub(super) async fn signed_in<'a>(
+    s: &'a AppState,
+    headers: &HeaderMap,
+    write: bool,
+    anonymous: &str,
+) -> Result<(&'a Web, String), Response> {
     let web = s
         .web
         .as_ref()
@@ -43,7 +53,7 @@ async fn user<'a>(
         Identity::Anonymous => Err(json_error(
             StatusCode::UNAUTHORIZED,
             "bad_credentials",
-            "sign in to manage your access tokens",
+            anonymous,
         )),
     }
 }

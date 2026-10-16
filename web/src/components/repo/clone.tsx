@@ -16,7 +16,7 @@ export function cloneUrl(repo: string) {
 }
 
 /** The server's SSH address (`ssh.public_url`), or null without SSH. */
-function useSshUrl() {
+export function useSshUrl() {
   return useQuery({
     queryKey: ["ssh-url"],
     queryFn: async () => {

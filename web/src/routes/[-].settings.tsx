@@ -22,6 +22,7 @@ const GROUPS = [
     sections: [
       { to: "/-/settings/passkeys", title: "Passkeys" },
       { to: "/-/settings/tokens", title: "Access tokens" },
+      { to: "/-/settings/ssh-keys", title: "SSH keys" },
     ],
   },
 ] as const
