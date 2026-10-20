@@ -173,6 +173,7 @@ url = "nats://nats.internal:4222"  # without [bus], events stay on this server
 [web]                              # web interface and its API under /-/
 session_secret = "..."             # at least 32 characters, the same on every server
 public_origin = "https://git.example.com" # optional; exact public origin, no trailing slash
+sign_up = true                     # optional; anyone can create an account with a passkey
 
 [github]                           # optional; a GitHub OAuth app for mirrors
 client_id = "..."                  # callback URL: https://git.example.com/-/api/github/callback
@@ -355,6 +356,14 @@ lists and removes passkeys (up to 20 per account). Password and Git token
 login remain available. Removing a passkey blocks future logins with it;
 it does not revoke existing sessions. Changing the account password ends
 sessions and pending ceremonies, but enrolled passkeys remain valid.
+
+With `web.sign_up = true` (it needs `public_origin`), the sign-in page also
+offers **Sign up with a passkey**: people pick a free user name and save a
+passkey, and the account exists and is signed in once the passkey is
+verified. Such accounts have no password: they cannot remove their last
+passkey, and Git uses access tokens or SSH keys from the settings. They
+own repositories under their name and have no other access until granted.
+See [decision 23](docs/decisions/0023-passkey-sign-up.md).
 
 Schema migrations run at startup. Public credentials and five-minute,
 single-use ceremony state live in PostgreSQL, so no sticky sessions are

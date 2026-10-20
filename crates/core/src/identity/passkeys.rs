@@ -1,13 +1,54 @@
 //! Passkeys and one-use, browser-bound ceremonies shared by all servers.
 //! Only public challenge options leave the server; ceremony state stays in PostgreSQL.
+//! Sign-up (docs/decisions/0023-passkey-sign-up.md) creates an account without a
+//! password whose only credential is its first passkey.
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 use webauthn_rs::prelude::*;
 
-use super::{AuthError, PgUsers, password_stamp};
+use super::{AuthError, PgUsers, password_stamp, validate_user_name};
 
 type Result<T> = std::result::Result<T, AuthError>;
+
+/// Starts the stored password hash of an account without a password. No
+/// [`crate::password::PasswordHash`] parses it, so no password matches; the random
+/// rest gives each account its own session stamp.
+pub const NO_PASSWORD: &str = "!no-password$";
+
+/// Serializes anonymous ceremony starts and sign-ups between servers.
+const ANONYMOUS_LOCK: i64 = 0x7275_7374_6769_7402;
+
+/// The label of the passkey that creates an account.
+const SIGN_UP_PASSKEY: &str = "Passkey from sign-up";
+
+#[derive(Debug)]
+pub enum PasskeyError {
+    /// A malformed request, such as an invalid user name.
+    Invalid(String),
+    /// The account's state forbids it, such as a taken user name.
+    Conflict(String),
+    Auth(AuthError),
+}
+
+impl From<AuthError> for PasskeyError {
+    fn from(e: AuthError) -> Self {
+        PasskeyError::Auth(e)
+    }
+}
+
+/// A verified sign-up passkey, before its account exists.
+pub struct SignUp {
+    name: String,
+    handle: Uuid,
+    key: Passkey,
+}
+
+impl SignUp {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
 
 pub fn webauthn(origin: &str) -> anyhow::Result<Webauthn> {
     let url = Url::parse(origin)?;
@@ -43,6 +84,11 @@ enum Ceremony {
     Authenticate {
         state: DiscoverableAuthentication,
     },
+    SignUp {
+        state: PasskeyRegistration,
+        name: String,
+        handle: Uuid,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -66,6 +112,24 @@ fn credential_id(key: &Passkey) -> String {
     URL_SAFE_NO_PAD.encode(key.cred_id())
 }
 
+// Require a discoverable credential so the authenticator can offer the account
+// without receiving a user name or credential allow-list during sign-in.
+fn discoverable(options: CreationChallengeResponse) -> Result<serde_json::Value> {
+    let mut options = serde_json::to_value(options).map_err(unavailable)?;
+    options["publicKey"]["authenticatorSelection"]["residentKey"] = "required".into();
+    options["publicKey"]["authenticatorSelection"]["requireResidentKey"] = true.into();
+    Ok(options)
+}
+
+/// Whether a user name, in any case, is taken.
+async fn name_taken(conn: &mut PgConnection, name: &str) -> Result<bool> {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM worktree_users WHERE lower(name) = lower($1))")
+        .bind(name)
+        .fetch_one(conn)
+        .await
+        .map_err(unavailable)
+}
+
 impl PgUsers {
     pub async fn passkeys(&self, user: &str) -> Result<Vec<PasskeyInfo>> {
         let rows: Vec<(String, String)> = sqlx::query_as("SELECT credential_id, name FROM worktree_passkeys WHERE user_name = $1 ORDER BY created_at, credential_id")
@@ -76,18 +140,50 @@ impl PgUsers {
             .collect())
     }
 
-    pub async fn delete_passkey(&self, user: &str, id: &str) -> Result<()> {
+    /// Whether the account has a password, as opposed to passkeys only.
+    pub async fn has_password(&self, user: &str) -> Result<bool> {
+        let hash: Option<String> =
+            sqlx::query_scalar("SELECT password_hash FROM worktree_users WHERE name = $1")
+                .bind(user)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(unavailable)?;
+        Ok(!hash
+            .ok_or(AuthError::BadCredentials)?
+            .starts_with(NO_PASSWORD))
+    }
+
+    /// An account without a password keeps its last passkey, so it can still sign in.
+    pub async fn delete_passkey(
+        &self,
+        user: &str,
+        id: &str,
+    ) -> std::result::Result<(), PasskeyError> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let (hash, _) = account(&mut tx, user).await?;
         let deleted = sqlx::query(
             "DELETE FROM worktree_passkeys WHERE user_name = $1 AND credential_id = $2",
         )
         .bind(user)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(unavailable)?;
         if deleted.rows_affected() != 1 {
-            return Err(AuthError::BadCredentials);
+            return Err(AuthError::BadCredentials.into());
         }
+        let left: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM worktree_passkeys WHERE user_name = $1")
+                .bind(user)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        if left == 0 && hash.starts_with(NO_PASSWORD) {
+            return Err(PasskeyError::Conflict(
+                "your account has no password; add another passkey before removing this one".into(),
+            ));
+        }
+        tx.commit().await.map_err(unavailable)?;
         Ok(())
     }
 
@@ -123,11 +219,7 @@ impl PgUsers {
                 Some(keys.iter().map(|k| k.cred_id().clone()).collect()),
             )
             .map_err(|_| AuthError::BadCredentials)?;
-        let mut options = serde_json::to_value(options).map_err(unavailable)?;
-        // Require a discoverable credential so the authenticator can offer the account
-        // without receiving a user name or credential allow-list during sign-in.
-        options["publicKey"]["authenticatorSelection"]["residentKey"] = "required".into();
-        options["publicKey"]["authenticatorSelection"]["requireResidentKey"] = true.into();
+        let options = discoverable(options)?;
         let ceremony = Ceremony::Register {
             state,
             name: name.trim().into(),
@@ -219,10 +311,26 @@ impl PgUsers {
             .map_err(unavailable)?;
         // A button-triggered browser dialog, not conditional autofill.
         options.mediation = None;
+        let id = self
+            .start_anonymous(
+                previous,
+                Pending {
+                    user: None,
+                    stamp: None,
+                    origin: origin.into(),
+                    ceremony: Ceremony::Authenticate { state },
+                },
+            )
+            .await?;
+        Ok((id, serde_json::to_value(options).map_err(unavailable)?))
+    }
+
+    /// Stores a ceremony without an account, replacing the browser's previous one.
+    async fn start_anonymous(&self, previous: Option<&str>, pending: Pending) -> Result<String> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         // Serialize anonymous starts to enforce a hard bound on unauthenticated state.
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(0x7275_7374_6769_7402_i64)
+            .bind(ANONYMOUS_LOCK)
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
@@ -236,16 +344,10 @@ impl PgUsers {
         .map_err(unavailable)?;
         if count >= 1024 {
             return Err(AuthError::Unavailable(
-                "too many pending passkey logins".into(),
+                "too many pending anonymous passkey ceremonies".into(),
             ));
         }
         let id = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
-        let pending = Pending {
-            user: None,
-            stamp: None,
-            origin: origin.into(),
-            ceremony: Ceremony::Authenticate { state },
-        };
         sqlx::query("INSERT INTO worktree_passkey_challenges (id, state) VALUES ($1, $2)")
             .bind(&id)
             .bind(encode(&pending)?)
@@ -253,7 +355,7 @@ impl PgUsers {
             .await
             .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
-        Ok((id, serde_json::to_value(options).map_err(unavailable)?))
+        Ok(id)
     }
 
     pub async fn finish_passkey_authentication(
@@ -299,6 +401,113 @@ impl PgUsers {
         tx.commit().await.map_err(unavailable)?;
         Ok((user, password_stamp(&hash)))
     }
+}
+
+impl PgUsers {
+    /// Starts creating an account for a free user name. Its passkey user handle is
+    /// fixed now, so the authenticator stores the one the account will have.
+    pub async fn start_sign_up(
+        &self,
+        origin: &str,
+        name: &str,
+        previous: Option<&str>,
+    ) -> std::result::Result<(String, serde_json::Value), PasskeyError> {
+        validate_user_name(name).map_err(|e| PasskeyError::Invalid(e.to_string()))?;
+        if name_taken(&mut *self.pool.acquire().await.map_err(unavailable)?, name).await? {
+            return Err(taken(name));
+        }
+        let handle = Uuid::new_v4();
+        let (options, state) = webauthn(origin)
+            .map_err(unavailable)?
+            .start_passkey_registration(handle, name, name, None)
+            .map_err(|_| AuthError::BadCredentials)?;
+        let options = discoverable(options)?;
+        let id = self
+            .start_anonymous(
+                previous,
+                Pending {
+                    user: None,
+                    stamp: None,
+                    origin: origin.into(),
+                    ceremony: Ceremony::SignUp {
+                        state,
+                        name: name.into(),
+                        handle,
+                    },
+                },
+            )
+            .await?;
+        Ok((id, options))
+    }
+
+    /// Verifies the new passkey. The account does not exist until [`Self::create_signed_up`].
+    pub async fn finish_sign_up(
+        &self,
+        origin: &str,
+        id: &str,
+        credential: &RegisterPublicKeyCredential,
+    ) -> Result<SignUp> {
+        let (pending, _) = self.take_passkey(id, origin).await?;
+        let Ceremony::SignUp {
+            state,
+            name,
+            handle,
+        } = pending.ceremony
+        else {
+            return Err(AuthError::BadCredentials);
+        };
+        let key = webauthn(origin)
+            .map_err(unavailable)?
+            .finish_passkey_registration(credential, &state)
+            .map_err(|_| AuthError::BadCredentials)?;
+        Ok(SignUp { name, handle, key })
+    }
+
+    /// Creates the account of a verified sign-up with no access levels, and answers
+    /// with its session stamp.
+    pub async fn create_signed_up(
+        &self,
+        sign_up: SignUp,
+    ) -> std::result::Result<[u8; 32], PasskeyError> {
+        let SignUp { name, handle, key } = sign_up;
+        let hash = format!(
+            "{NO_PASSWORD}{}",
+            URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>())
+        );
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        // Names that differ only in case are taken by whichever sign-up commits first.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(ANONYMOUS_LOCK)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        if name_taken(&mut tx, &name).await? {
+            return Err(taken(&name));
+        }
+        sqlx::query(
+            "INSERT INTO worktree_users (name, password_hash, updated_by, passkey_user_id)
+             VALUES ($1, $2, $1, $3)",
+        )
+        .bind(&name)
+        .bind(&hash)
+        .bind(handle.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let inserted = sqlx::query("INSERT INTO worktree_passkeys (credential_id, user_name, name, credential) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING")
+            .bind(credential_id(&key)).bind(&name).bind(SIGN_UP_PASSKEY).bind(encode(&key)?).execute(&mut *tx).await.map_err(unavailable)?;
+        if inserted.rows_affected() != 1 {
+            return Err(PasskeyError::Conflict(
+                "this passkey is already registered; try another authenticator".into(),
+            ));
+        }
+        tx.commit().await.map_err(unavailable)?;
+        Ok(password_stamp(&hash))
+    }
+}
+
+fn taken(name: &str) -> PasskeyError {
+    PasskeyError::Conflict(format!("the user name {name} is taken"))
 }
 
 async fn account(conn: &mut PgConnection, user: &str) -> Result<(String, String)> {

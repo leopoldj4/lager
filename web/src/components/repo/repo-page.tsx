@@ -4,7 +4,6 @@ import {
   GitPullRequest,
   LayoutDashboard,
   Settings,
-  Tag,
 } from "lucide-react"
 
 import { useLive, usePullCounts, useRefs, useWatch } from "@/lib/api"
@@ -17,7 +16,7 @@ import { CloneButton } from "./clone"
 import { CodeView } from "./code"
 import { CommitList } from "./commits"
 import { CommitView } from "./commit"
-import { RefList } from "./refs"
+import { BranchList } from "./refs"
 import { EmptyRepo } from "./empty"
 import { PullList } from "./pulls"
 import { PullView } from "./pull"
@@ -63,12 +62,7 @@ export function RepoPage({ loc }: { loc: Location }) {
         }
         mirror={!!refs.data?.mirror}
         owner={owner}
-        counts={
-          refs.data && {
-            tags: refs.data.tags.length,
-            pulls: pulls.data?.open,
-          }
-        }
+        counts={refs.data && { pulls: pulls.data?.open }}
       />
       {refs.error ? (
         <QueryError error={refs.error} />
@@ -87,9 +81,7 @@ export function RepoPage({ loc }: { loc: Location }) {
           </p>
         )
       ) : loc.view === "branches" ? (
-        <RefList repo={loc.repo} kind="branch" refs={refs.data} />
-      ) : loc.view === "tags" ? (
-        <RefList repo={loc.repo} kind="tag" refs={refs.data} />
+        <BranchList repo={loc.repo} refs={refs.data} />
       ) : loc.view === "pulls" ? (
         <PullList
           repo={loc.repo}
@@ -169,12 +161,12 @@ function Tabs({
   mirror: boolean
   /** Only the owner sees the settings. */
   owner: boolean
-  counts?: { tags: number; pulls?: number }
+  counts?: { pulls?: number }
 }) {
   const all: {
     view: View
     label: string
-    icon: typeof Tag
+    icon: typeof BookMarked
     count?: number
   }[] = [
     { view: "overview", label: "Overview", icon: LayoutDashboard },
@@ -185,7 +177,6 @@ function Tabs({
       count: counts?.pulls,
     },
     { view: "tree", label: "Code", icon: BookMarked },
-    { view: "tags", label: "Tags", icon: Tag, count: counts?.tags },
     { view: "settings", label: "Settings", icon: Settings },
   ]
   const tabs = all.filter(

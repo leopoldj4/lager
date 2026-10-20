@@ -404,7 +404,6 @@ const pages: { view: View; label: string; icon: typeof Tag }[] = [
   { view: "tree", label: "Code", icon: BookMarked },
   { view: "commits", label: "Commits", icon: GitCommitHorizontal },
   { view: "branches", label: "Branches", icon: GitBranch },
-  { view: "tags", label: "Tags", icon: Tag },
 ]
 
 function Pages({

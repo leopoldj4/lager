@@ -5,7 +5,7 @@
 //   /<repo>/-/blob/<rev>/<path>      a file
 //   /<repo>/-/commits/<rev>/<path>   history
 //   /<repo>/-/commit/<oid>           one commit
-//   /<repo>/-/branches, /-/tags
+//   /<repo>/-/branches
 //   /<repo>/-/raw/<rev>/<path>       a file's bytes, from the server
 //   /<repo>/-/pulls, /-/pulls/closed    pull requests
 //   /<repo>/-/pull/<n>[/commits|/files]  one pull request
@@ -21,7 +21,6 @@ export type View =
   | "commits"
   | "commit"
   | "branches"
-  | "tags"
   | "pulls"
   | "pull"
   | "compare"
@@ -40,7 +39,6 @@ const views = new Set<string>([
   "commits",
   "commit",
   "branches",
-  "tags",
   "pulls",
   "pull",
   "compare",

@@ -24,7 +24,7 @@ that opens one, and the latest tag. It reads the existing queries (`refs`,
 
 **Code moves to a tab.** The files are at `/<name>/-/tree`, which shows the
 default branch without a `<rev>`. The tabs are Overview, Pull requests,
-Code, and Tags. History and branches have no tab: the overview and the
+and Code. History and branches have no tab: the overview and the
 code link to them, and they mark the Code tab. Addresses are unchanged.
 
 **Code view.** The Code tab uses the whole width: a file tree beside the

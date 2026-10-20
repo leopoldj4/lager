@@ -85,6 +85,10 @@ pub struct WebConfig {
     /// Used to verify passkey requests; omit to disable passkeys.
     #[serde(default)]
     pub public_origin: Option<String>,
+    /// Lets anyone create an account with a passkey and no password
+    /// (docs/decisions/0023-passkey-sign-up.md). Needs `public_origin`.
+    #[serde(default)]
+    pub sign_up: bool,
 }
 
 /// A GitHub OAuth app for read-only mirrors of GitHub repositories
@@ -136,6 +140,10 @@ impl Config {
             if let Some(origin) = &w.public_origin {
                 crate::identity::passkeys::webauthn(origin)?;
             }
+            anyhow::ensure!(
+                !w.sign_up || w.public_origin.is_some(),
+                "web.sign_up needs web.public_origin"
+            );
             anyhow::ensure!(
                 w.session_secret.chars().count() >= 32,
                 "web.session_secret needs at least 32 characters"
