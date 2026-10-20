@@ -2,7 +2,8 @@
 //! files (docs/decisions/0014-web-interface.md).
 //!
 //! Everything lives under `/-/`, which no repository name can take:
-//! `/-/api/session` signs in and out, `/-/api/tokens` manages access tokens,
+//! `/-/api/session` signs in and out, `/-/api/passkeys/` signs in and up
+//! with passkeys, `/-/api/tokens` manages access tokens,
 //! `/-/api/ssh-keys` manages SSH keys,
 //! `/-/api/live` is the WebSocket, `/-/api/github/` connects GitHub,
 //! `/-/api/ssh` names the SSH address for clones, and
@@ -38,6 +39,8 @@ use worktree_core::identity::{AuthError, Identity, TOKEN_PREFIX};
 pub struct Web {
     pub sessions: session::Sessions,
     public_origin: Option<String>,
+    /// `web.sign_up`.
+    sign_up: bool,
     /// `ssh.public_url`.
     ssh_url: Option<String>,
     dir: Option<PathBuf>,
@@ -63,6 +66,7 @@ impl Web {
         }
         Self {
             public_origin: cfg.public_origin.clone(),
+            sign_up: cfg.sign_up,
             ssh_url,
             sessions: session::Sessions::new(
                 &cfg.session_secret,

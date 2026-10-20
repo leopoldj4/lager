@@ -75,7 +75,11 @@ function Passkeys() {
     <div className="grid gap-6">
       <SettingsHeader
         title="Passkeys"
-        description="Sign in with your fingerprint, face, device PIN, or security key. Your password still works for account recovery."
+        description={
+          query.data && !query.data.password
+            ? "Sign in with your fingerprint, face, device PIN, or security key. Your account has no password, so keep at least one passkey; add a second one as a backup."
+            : "Sign in with your fingerprint, face, device PIN, or security key. Your password still works for account recovery."
+        }
       />
       {(error || query.error) && (
         <Alert variant="destructive">
@@ -113,7 +117,12 @@ function Passkeys() {
                         variant="ghost"
                         size="sm"
                         className="ml-auto shrink-0"
-                        disabled={busy || !query.data.enabled}
+                        disabled={
+                          busy ||
+                          !query.data.enabled ||
+                          (!query.data.password &&
+                            query.data.passkeys.length === 1)
+                        }
                         onClick={() => remove(key.id)}
                         aria-label={`Remove ${key.name}`}
                       >

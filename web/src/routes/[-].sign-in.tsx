@@ -1,10 +1,12 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
+import { useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 
 import { signIn } from "@/lib/api"
 import {
   signInWithPasskey,
   passkeyError,
+  signUpEnabled,
   supportsPasskeys,
 } from "@/lib/passkeys"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -35,6 +37,11 @@ function SignIn() {
 
   const [passkeySupported, setPasskeySupported] = useState(false)
   useEffect(() => setPasskeySupported(supportsPasskeys()), [])
+  const signUp = useQuery({
+    queryKey: ["sign-up"],
+    queryFn: signUpEnabled,
+    retry: false,
+  })
 
   function destination() {
     return next &&
@@ -124,6 +131,14 @@ function SignIn() {
               {busy ? "Signing in…" : "Sign in"}
             </Button>
           </form>
+          {signUp.data?.enabled && (
+            <p className="mt-4 text-center text-sm text-muted-foreground">
+              No account yet?{" "}
+              <Link to="/-/sign-up" className="underline">
+                Sign up with a passkey
+              </Link>
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>
