@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import { BookMarked, GitPullRequest, LayoutDashboard, Tag } from "lucide-react"
+import { BookMarked, GitPullRequest, LayoutDashboard } from "lucide-react"
 
 import { usePullCounts, useRefs, useWatch } from "@/lib/api"
 import { href, splitRev, type Location, type View } from "@/lib/paths"
@@ -11,7 +11,7 @@ import { CloneButton } from "./clone"
 import { CodeView } from "./code"
 import { CommitList } from "./commits"
 import { CommitView } from "./commit"
-import { RefList } from "./refs"
+import { BranchList } from "./refs"
 import { EmptyRepo } from "./empty"
 import { PullList } from "./pulls"
 import { PullView } from "./pull"
@@ -52,12 +52,7 @@ export function RepoPage({ loc }: { loc: Location }) {
             : split.rev
         }
         mirror={!!refs.data?.mirror}
-        counts={
-          refs.data && {
-            tags: refs.data.tags.length,
-            pulls: pulls.data?.open,
-          }
-        }
+        counts={refs.data && { pulls: pulls.data?.open }}
       />
       {refs.error ? (
         <QueryError error={refs.error} />
@@ -67,9 +62,7 @@ export function RepoPage({ loc }: { loc: Location }) {
           <Skeleton className="h-64" />
         </div>
       ) : loc.view === "branches" ? (
-        <RefList repo={loc.repo} kind="branch" refs={refs.data} />
-      ) : loc.view === "tags" ? (
-        <RefList repo={loc.repo} kind="tag" refs={refs.data} />
+        <BranchList repo={loc.repo} refs={refs.data} />
       ) : loc.view === "pulls" ? (
         <PullList
           repo={loc.repo}
@@ -146,12 +139,12 @@ function Tabs({
   rev: string
   /** Mirrors have no pull requests. */
   mirror: boolean
-  counts?: { tags: number; pulls?: number }
+  counts?: { pulls?: number }
 }) {
   const all: {
     view: View
     label: string
-    icon: typeof Tag
+    icon: typeof BookMarked
     count?: number
   }[] = [
     { view: "overview", label: "Overview", icon: LayoutDashboard },
@@ -162,7 +155,6 @@ function Tabs({
       count: counts?.pulls,
     },
     { view: "tree", label: "Code", icon: BookMarked },
-    { view: "tags", label: "Tags", icon: Tag, count: counts?.tags },
   ]
   const tabs = all.filter((t) => !mirror || t.view !== "pulls")
   // History and branches are reached from the overview and the code; they

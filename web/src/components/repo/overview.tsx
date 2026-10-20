@@ -265,7 +265,7 @@ function LatestTag({ repo, refs }: { repo: string; refs: Refs }) {
   const tag = [...refs.tags].sort((a, b) => b.time - a.time)[0]
   if (!tag) return null
   return (
-    <Section title="Latest tag" more={{ label: "All", to: href(repo, "tags") }}>
+    <Section title="Latest tag">
       <Link
         to="/$"
         params={{ _splat: href(repo, "tree", tag.name) }}
