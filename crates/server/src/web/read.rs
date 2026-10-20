@@ -45,6 +45,21 @@ pub enum Query {
         #[serde(default)]
         public: bool,
     },
+    // Repository settings, answered by `super::settings`. They need a
+    // session and the repository's owner.
+    /// Gives the repository a new full name under the same owner.
+    RepoRename {
+        repo: String,
+        name: String,
+    },
+    /// Anyone may read it, also without signing in.
+    RepoVisibility {
+        repo: String,
+        public: bool,
+    },
+    RepoDelete {
+        repo: String,
+    },
     Refs {
         repo: String,
     },
@@ -228,6 +243,9 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
         | Query::GithubUnmirror { .. }
         | Query::GithubDisconnect => return super::github::run(s, who, q).await,
         Query::RepoCreate { name, public } => return create(s, who, name, *public).await,
+        Query::RepoRename { .. } | Query::RepoVisibility { .. } | Query::RepoDelete { .. } => {
+            return super::settings::run(s, who, q).await;
+        }
         Query::Refs { repo }
         | Query::Log { repo, .. }
         | Query::Tree { repo, .. }
@@ -266,6 +284,9 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
         | Query::GithubUnmirror { .. }
         | Query::GithubDisconnect
         | Query::RepoCreate { .. }
+        | Query::RepoRename { .. }
+        | Query::RepoVisibility { .. }
+        | Query::RepoDelete { .. }
         | Query::Pulls { .. }
         | Query::Pull { .. }
         | Query::Compare { .. }
@@ -300,6 +321,7 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
     };
     out["generation"] = json!(view.generation);
     out["mirror"] = json!(repo.mirror);
+    out["public"] = json!(repo.anonymous_read);
     Ok(out)
 }
 
@@ -350,12 +372,23 @@ pub async fn raw(
 }
 
 #[derive(Serialize)]
-struct RepoSummary {
-    name: String,
-    default_branch: String,
-    anonymous_read: bool,
+pub(super) struct RepoSummary {
+    pub name: String,
+    pub default_branch: String,
+    pub anonymous_read: bool,
     /// The GitHub repository of a read-only mirror.
-    mirror: Option<String>,
+    pub mirror: Option<String>,
+}
+
+impl From<RepoSettings> for RepoSummary {
+    fn from(r: RepoSettings) -> Self {
+        Self {
+            name: r.name,
+            default_branch: r.default_branch,
+            anonymous_read: r.anonymous_read,
+            mirror: r.mirror,
+        }
+    }
 }
 
 async fn repos(s: &AppInner, who: &Identity) -> Result<Value, ReadError> {

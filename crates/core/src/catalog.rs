@@ -266,6 +266,53 @@ impl Catalog {
         Ok(record.repository)
     }
 
+    /// Gives an active repository a new name. The record under the new name
+    /// comes first, with the same repository UUID and settings; then the old
+    /// record is marked deleted, without the tombstone head of
+    /// [`Self::delete`]. If the old record changed meanwhile, the new one is
+    /// marked deleted again and the rename fails with
+    /// [`CatalogError::Conflict`]. Other servers may still serve the old name
+    /// for the cache time.
+    pub async fn rename(&self, name: &str, new_name: &str) -> Result<RepoSettings, CatalogError> {
+        let Some((record, etag)) = self.record(name).await? else {
+            return Err(CatalogError::NotFound(name.into()));
+        };
+        if record.state != RepoState::Active {
+            return Err(CatalogError::NotFound(name.into()));
+        }
+        if new_name == name {
+            return Ok(record.settings());
+        }
+        let mode = self.free_name(new_name).await?;
+        let mut renamed = record.clone();
+        renamed.name = new_name.into();
+        renamed.revision = RevisionId::new();
+        self.write(&renamed, mode, || CatalogError::Exists(new_name.into()))
+            .await?;
+        let mut old = record;
+        old.state = RepoState::Deleted;
+        old.revision = RevisionId::new();
+        match self
+            .write(&old, WriteMode::Update(etag.0), || CatalogError::Conflict)
+            .await
+        {
+            Ok(()) => Ok(renamed.settings()),
+            Err(e) => {
+                let id = renamed.repository;
+                if let Some((mut r, etag)) = self.record(new_name).await?
+                    && r.repository == id
+                    && r.state == RepoState::Active
+                {
+                    r.state = RepoState::Deleted;
+                    r.revision = RevisionId::new();
+                    self.write(&r, WriteMode::Update(etag.0), || CatalogError::Conflict)
+                        .await?;
+                }
+                Err(e)
+            }
+        }
+    }
+
     /// Changes the default branch in the history (Git `HEAD`), then in the
     /// record.
     pub async fn set_default_branch(
