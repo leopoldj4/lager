@@ -29,6 +29,9 @@ session_secret = "CHANGE"
 # Enable passkeys for the browser-facing HTTPS origin, without a trailing slash.
 # public_origin = "https://git.example.com"
 
+# Let anyone create an account with a passkey and no password; needs public_origin.
+# sign_up = true
+
 # Mirrors of GitHub repositories: a GitHub OAuth app (Settings > Developer
 # settings > OAuth Apps) with callback URL
 # https://<domain>/-/api/github/callback.

@@ -110,9 +110,9 @@ export async function signInWithPasskey() {
   queryClient.clear()
 }
 
-export async function addPasskey(name: string) {
+async function createPasskey(path: string, body: unknown) {
   requireSupport()
-  const { publicKey } = await request("/register/start", { name })
+  const { publicKey } = await request(`${path}/start`, body)
   const credential = (await navigator.credentials.create({
     publicKey: {
       ...publicKey,
@@ -122,11 +122,28 @@ export async function addPasskey(name: string) {
     },
   })) as PublicKeyCredential | null
   if (!credential) throw new Error("No passkey was created.")
-  await request("/register/finish", serialize(credential))
+  await request(`${path}/finish`, serialize(credential))
+}
+
+export function addPasskey(name: string) {
+  return createPasskey("/register", { name })
+}
+
+/** Creates an account whose only credential is a new passkey, and signs in. */
+export async function signUpWithPasskey(user: string) {
+  await createPasskey("/signup", { user })
+  live.reconnect()
+  queryClient.clear()
+}
+
+export function signUpEnabled(): Promise<{ enabled: boolean }> {
+  return request("/signup", undefined, "GET")
 }
 
 export function listPasskeys(): Promise<{
   enabled: boolean
+  /** False for accounts that signed up with a passkey only. */
+  password: boolean
   passkeys: PasskeyInfo[]
 }> {
   return request("", undefined, "GET")

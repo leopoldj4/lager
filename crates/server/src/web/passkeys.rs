@@ -1,4 +1,5 @@
 //! Browser passkey endpoints. Origin and browser binding are required on every ceremony.
+//! With `web.sign_up`, `signup/` creates accounts whose only credential is a passkey.
 use super::{Web, json_error};
 use crate::http::AppState;
 use axum::{
@@ -9,6 +10,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
+use worktree_core::identity::passkeys::PasskeyError;
 use worktree_core::identity::{AuthError, Identity};
 
 const COOKIE: &str = "worktree_passkey";
@@ -21,6 +23,9 @@ pub fn router() -> Router<AppState> {
         .route("/-/api/passkeys/register/finish", post(register_finish))
         .route("/-/api/passkeys/login/start", post(login_start))
         .route("/-/api/passkeys/login/finish", post(login_finish))
+        .route("/-/api/passkeys/signup", get(sign_up_enabled))
+        .route("/-/api/passkeys/signup/start", post(sign_up_start))
+        .route("/-/api/passkeys/signup/finish", post(sign_up_finish))
 }
 
 fn context<'a>(s: &'a AppState, headers: &HeaderMap) -> Result<(&'a Web, &'a str), Response> {
@@ -67,6 +72,14 @@ fn failure(error: AuthError) -> Response {
                 "passkeys unavailable; retry later",
             )
         }
+    }
+}
+
+fn refused(error: PasskeyError) -> Response {
+    match error {
+        PasskeyError::Invalid(m) => json_error(StatusCode::BAD_REQUEST, "bad_request", &m),
+        PasskeyError::Conflict(m) => json_error(StatusCode::CONFLICT, "conflict", &m),
+        PasskeyError::Auth(e) => failure(e),
     }
 }
 
@@ -124,9 +137,19 @@ async fn list(State(s): State<AppState>, headers: HeaderMap) -> Result<Response,
         .ok_or_else(|| StatusCode::NOT_FOUND.into_response())?;
     let name = user(&s, web, &headers).await?;
     let keys = s.directory.users().passkeys(&name).await.map_err(failure)?;
+    let password = s
+        .directory
+        .users()
+        .has_password(&name)
+        .await
+        .map_err(failure)?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({ "enabled": web.public_origin.is_some(), "passkeys": keys })),
+        Json(serde_json::json!({
+            "enabled": web.public_origin.is_some(),
+            "password": password,
+            "passkeys": keys,
+        })),
     )
         .into_response())
 }
@@ -141,7 +164,7 @@ async fn remove(
         .users()
         .delete_passkey(&name, &id)
         .await
-        .map_err(failure)?;
+        .map_err(refused)?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -208,16 +231,7 @@ async fn login_finish(
     {
         Ok((user, stamp)) => {
             s.registry.svc.metrics.inc("web_sign_ins");
-            let mut response = Json(serde_json::json!({ "user": user })).into_response();
-            response.headers_mut().insert(
-                header::SET_COOKIE,
-                HeaderValue::from_str(&web.sessions.issue(&user, &stamp)).expect("session cookie"),
-            );
-            response.headers_mut().append(
-                header::SET_COOKIE,
-                HeaderValue::from_str(&web.sessions.clear_old()).expect("session cookie"),
-            );
-            response
+            signed_in(web, &user, &stamp)
         }
         Err(e) => {
             s.registry.svc.metrics.inc("web_sign_in_failures");
@@ -225,4 +239,119 @@ async fn login_finish(
         }
     };
     Ok(finished(response, origin))
+}
+
+fn signed_in(web: &Web, user: &str, stamp: &[u8; 32]) -> Response {
+    let mut response = Json(serde_json::json!({ "user": user })).into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&web.sessions.issue(user, stamp)).expect("session cookie"),
+    );
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&web.sessions.clear_old()).expect("session cookie"),
+    );
+    response
+}
+
+/// Whether the sign-in page offers sign-up.
+async fn sign_up_enabled(State(s): State<AppState>) -> Response {
+    let enabled = s
+        .web
+        .as_ref()
+        .is_some_and(|w| w.sign_up && w.public_origin.is_some());
+    Json(serde_json::json!({ "enabled": enabled })).into_response()
+}
+
+fn sign_up_context<'a>(
+    s: &'a AppState,
+    headers: &HeaderMap,
+) -> Result<(&'a Web, &'a str), Response> {
+    let (web, origin) = context(s, headers)?;
+    if !web.sign_up {
+        return Err(json_error(
+            StatusCode::NOT_FOUND,
+            "disabled",
+            "sign-up is not enabled on this server",
+        ));
+    }
+    Ok((web, origin))
+}
+
+#[derive(serde::Deserialize)]
+struct SignUp {
+    user: String,
+}
+async fn sign_up_start(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SignUp>,
+) -> Result<Response, Response> {
+    let (_, origin) = sign_up_context(&s, &headers)?;
+    // Checked before the browser saves a passkey, and again before the account exists.
+    if owns_repositories(&s, &body.user).await? {
+        return Err(taken(&body.user));
+    }
+    let started_up = s
+        .directory
+        .users()
+        .start_sign_up(origin, &body.user, binding(&headers).ok())
+        .await
+        .map_err(refused)?;
+    Ok(started(Ok(started_up), origin))
+}
+async fn sign_up_finish(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<RegisterPublicKeyCredential>,
+) -> Result<Response, Response> {
+    let (web, origin) = sign_up_context(&s, &headers)?;
+    let id = binding(&headers)?;
+    let users = s.directory.users();
+    let response = match users.finish_sign_up(origin, id, &body).await {
+        Ok(sign_up) => match owns_repositories(&s, sign_up.name()).await {
+            Err(response) => response,
+            // Repositories under a name belong to whoever has it (decision 18).
+            Ok(true) => taken(sign_up.name()),
+            Ok(false) => {
+                let user = sign_up.name().to_string();
+                match users.create_signed_up(sign_up).await {
+                    Ok(stamp) => {
+                        s.registry.svc.metrics.inc("web_sign_ups");
+                        tracing::info!(user = %user, "signed up on the web");
+                        signed_in(web, &user, &stamp)
+                    }
+                    Err(e) => refused(e),
+                }
+            }
+        },
+        Err(e) => failure(e),
+    };
+    Ok(finished(response, origin))
+}
+
+fn taken(user: &str) -> Response {
+    json_error(
+        StatusCode::CONFLICT,
+        "conflict",
+        &format!("the user name {user} is taken"),
+    )
+}
+
+/// Whether any repository, even a deleted one, is named under `user`.
+async fn owns_repositories(s: &AppState, user: &str) -> Result<bool, Response> {
+    let prefix = format!("{user}/").to_lowercase();
+    match s.directory.catalog().list().await {
+        Ok(records) => Ok(records
+            .iter()
+            .any(|r| r.name.to_lowercase().starts_with(&prefix))),
+        Err(e) => {
+            tracing::warn!(error = %e, "repository catalog unavailable");
+            Err(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                "repository catalog unavailable; retry later",
+            ))
+        }
+    }
 }
