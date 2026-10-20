@@ -18,6 +18,7 @@ pub mod pulls;
 pub mod raw;
 pub mod read;
 pub mod session;
+mod settings;
 mod ssh_keys;
 mod tokens;
 

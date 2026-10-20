@@ -1,7 +1,12 @@
 import { Link } from "@tanstack/react-router"
-import { BookMarked, GitPullRequest, LayoutDashboard } from "lucide-react"
+import {
+  BookMarked,
+  GitPullRequest,
+  LayoutDashboard,
+  Settings,
+} from "lucide-react"
 
-import { usePullCounts, useRefs, useWatch } from "@/lib/api"
+import { useLive, usePullCounts, useRefs, useWatch } from "@/lib/api"
 import { href, splitRev, type Location, type View } from "@/lib/paths"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -17,6 +22,7 @@ import { PullList } from "./pulls"
 import { PullView } from "./pull"
 import { ComparePage } from "./compare"
 import { Overview } from "./overview"
+import { RepoSettings } from "./settings"
 
 export function RepoPage({ loc }: { loc: Location }) {
   useWatch(loc.repo)
@@ -29,6 +35,8 @@ export function RepoPage({ loc }: { loc: Location }) {
   const split = splitRev(loc.rest, names)
   const rev = split.rev || refs.data?.head || ""
   const empty = refs.data && refs.data.branches.length === 0
+  // Only the owner changes the settings (the server checks it too).
+  const owner = useLive()?.user === loc.repo.split("/")[0]
   return (
     <div className="grid w-full grid-cols-1 gap-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -47,11 +55,13 @@ export function RepoPage({ loc }: { loc: Location }) {
           loc.view === "commit" ||
           loc.view === "pulls" ||
           loc.view === "pull" ||
-          loc.view === "compare"
+          loc.view === "compare" ||
+          loc.view === "settings"
             ? ""
             : split.rev
         }
         mirror={!!refs.data?.mirror}
+        owner={owner}
         counts={refs.data && { pulls: pulls.data?.open }}
       />
       {refs.error ? (
@@ -61,6 +71,15 @@ export function RepoPage({ loc }: { loc: Location }) {
           <Skeleton className="h-10" />
           <Skeleton className="h-64" />
         </div>
+      ) : loc.view === "settings" ? (
+        owner ? (
+          <RepoSettings repo={loc.repo} refs={refs.data} />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Only {loc.repo.split("/")[0]} changes the settings of this
+            repository.
+          </p>
+        )
       ) : loc.view === "branches" ? (
         <BranchList repo={loc.repo} refs={refs.data} />
       ) : loc.view === "pulls" ? (
@@ -133,12 +152,15 @@ function Tabs({
   loc,
   rev,
   mirror,
+  owner,
   counts,
 }: {
   loc: Location
   rev: string
   /** Mirrors have no pull requests. */
   mirror: boolean
+  /** Only the owner sees the settings. */
+  owner: boolean
   counts?: { pulls?: number }
 }) {
   const all: {
@@ -155,8 +177,11 @@ function Tabs({
       count: counts?.pulls,
     },
     { view: "tree", label: "Code", icon: BookMarked },
+    { view: "settings", label: "Settings", icon: Settings },
   ]
-  const tabs = all.filter((t) => !mirror || t.view !== "pulls")
+  const tabs = all.filter(
+    (t) => (!mirror || t.view !== "pulls") && (owner || t.view !== "settings")
+  )
   // History and branches are reached from the overview and the code; they
   // count as part of the code.
   const active =

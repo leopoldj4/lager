@@ -46,6 +46,8 @@ export interface Refs {
   generation: number
   /** The GitHub repository of a read-only mirror. */
   mirror: string | null
+  /** Anyone may read it, also without signing in. */
+  public: boolean
   head: string
   branches: RefInfo[]
   tags: RefInfo[]
@@ -200,6 +202,22 @@ export function useCreateRepo() {
     mutationFn: (repo: { name: string; public: boolean }) =>
       live.request<{ repo: RepoSummary }>({ op: "repo_create", ...repo }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["repos"] }),
+  })
+}
+
+/**
+ * Changes a repository's settings: `repo_rename` (with the new full
+ * `name`), `repo_visibility` (with `public`), or `repo_delete`.
+ */
+export function useRepoSettingsChange(repo: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (change: { op: string; [k: string]: unknown }) =>
+      live.request<{ repo?: RepoSummary }>({ ...change, repo }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["repos"] })
+      qc.invalidateQueries({ queryKey: ["repo", repo] })
+    },
   })
 }
 

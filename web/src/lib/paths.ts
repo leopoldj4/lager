@@ -10,6 +10,7 @@
 //   /<repo>/-/pulls, /-/pulls/closed    pull requests
 //   /<repo>/-/pull/<n>[/commits|/files]  one pull request
 //   /<repo>/-/compare/<base>...<head>   a comparison, to open a pull request
+//   /<repo>/-/settings               rename, visibility, deletion
 // Branch names can contain "/" too; the page splits <rev>/<path> with the
 // repository's refs.
 
@@ -23,6 +24,7 @@ export type View =
   | "pulls"
   | "pull"
   | "compare"
+  | "settings"
 
 export interface Location {
   repo: string
@@ -40,6 +42,7 @@ const views = new Set<string>([
   "pulls",
   "pull",
   "compare",
+  "settings",
 ])
 
 export function parse(splat: string): Location | null {

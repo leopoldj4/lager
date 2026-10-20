@@ -181,6 +181,17 @@ impl GithubDb {
         Ok(())
     }
 
+    /// Follows a rename of the mirror's repository.
+    pub async fn rename(&self, repo: RepoId, name: &str) -> Result<(), GithubDbError> {
+        sqlx::query("UPDATE worktree_github_mirrors SET name = $2 WHERE repository = $1")
+            .bind(repo.to_string())
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
     /// Takes the mirror that is due longest and leases it for `lease`.
     pub async fn claim(&self, lease: Duration) -> Result<Option<Due>, GithubDbError> {
         let row: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
