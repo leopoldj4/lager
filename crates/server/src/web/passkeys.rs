@@ -1,5 +1,5 @@
 //! Browser passkey endpoints. Origin and browser binding are required on every ceremony.
-//! With `web.sign_up`, `signup/` creates accounts whose only credential is a passkey.
+//! With `LAGER_SIGN_UP`, `signup/` creates accounts whose only credential is a passkey.
 use super::{Web, json_error};
 use crate::http::AppState;
 use axum::{
@@ -23,7 +23,6 @@ pub fn router() -> Router<AppState> {
         .route("/-/api/passkeys/register/finish", post(register_finish))
         .route("/-/api/passkeys/login/start", post(login_start))
         .route("/-/api/passkeys/login/finish", post(login_finish))
-        .route("/-/api/passkeys/signup", get(sign_up_enabled))
         .route("/-/api/passkeys/signup/start", post(sign_up_start))
         .route("/-/api/passkeys/signup/finish", post(sign_up_finish))
 }
@@ -75,7 +74,7 @@ fn failure(error: AuthError) -> Response {
     }
 }
 
-fn refused(error: PasskeyError) -> Response {
+pub(super) fn refused(error: PasskeyError) -> Response {
     match error {
         PasskeyError::Invalid(m) => json_error(StatusCode::BAD_REQUEST, "bad_request", &m),
         PasskeyError::Conflict(m) => json_error(StatusCode::CONFLICT, "conflict", &m),
@@ -241,7 +240,7 @@ async fn login_finish(
     Ok(finished(response, origin))
 }
 
-fn signed_in(web: &Web, user: &str, stamp: &[u8; 32]) -> Response {
+pub(super) fn signed_in(web: &Web, user: &str, stamp: &[u8; 32]) -> Response {
     let mut response = Json(serde_json::json!({ "user": user })).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
@@ -252,15 +251,6 @@ fn signed_in(web: &Web, user: &str, stamp: &[u8; 32]) -> Response {
         HeaderValue::from_str(&web.sessions.clear_old()).expect("session cookie"),
     );
     response
-}
-
-/// Whether the sign-in page offers sign-up.
-async fn sign_up_enabled(State(s): State<AppState>) -> Response {
-    let enabled = s
-        .web
-        .as_ref()
-        .is_some_and(|w| w.sign_up && w.public_origin.is_some());
-    Json(serde_json::json!({ "enabled": enabled })).into_response()
 }
 
 fn sign_up_context<'a>(
@@ -330,7 +320,7 @@ async fn sign_up_finish(
     Ok(finished(response, origin))
 }
 
-fn taken(user: &str) -> Response {
+pub(super) fn taken(user: &str) -> Response {
     json_error(
         StatusCode::CONFLICT,
         "conflict",
@@ -339,7 +329,7 @@ fn taken(user: &str) -> Response {
 }
 
 /// Whether any repository, even a deleted one, is named under `user`.
-async fn owns_repositories(s: &AppState, user: &str) -> Result<bool, Response> {
+pub(super) async fn owns_repositories(s: &AppState, user: &str) -> Result<bool, Response> {
     let prefix = format!("{user}/").to_lowercase();
     match s.directory.catalog().list().await {
         Ok(records) => Ok(records

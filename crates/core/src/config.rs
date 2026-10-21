@@ -19,7 +19,7 @@
 //! | `LAGER_DATABASE_URL` | required | |
 //! | `LAGER_NATS_URL` | | Without it, events stay on this server |
 //! | `LAGER_SESSION_SECRET` | | Turns on the web interface |
-//! | `LAGER_SIGN_UP` | `false` | Needs `LAGER_DOMAIN` |
+//! | `LAGER_SIGN_UP` | `false` | Anyone can create an account: with a password, and with a passkey with `LAGER_DOMAIN` |
 //! | `LAGER_GITHUB_CLIENT_ID`, `LAGER_GITHUB_CLIENT_SECRET` | | Both or neither |
 //! | `LAGER_SSH_HOST_KEY` | | Turns on Git over SSH |
 //! | `LAGER_SSH_LISTEN` | `0.0.0.0:2222` | |
@@ -89,8 +89,9 @@ pub struct WebConfig {
     /// `https://<LAGER_DOMAIN>`, or `http://` for `localhost`. Used to
     /// verify passkey requests; without it, passkeys are off.
     pub public_origin: Option<String>,
-    /// Lets anyone create an account with a passkey and no password
-    /// (docs/decisions/0023-passkey-sign-up.md). Needs `public_origin`.
+    /// Lets anyone create an account: with a password
+    /// (docs/decisions/0025-password-sign-up.md), and with a passkey and no
+    /// password when `public_origin` is set (docs/decisions/0023-passkey-sign-up.md).
     pub sign_up: bool,
 }
 
@@ -188,10 +189,6 @@ impl Config {
                 crate::identity::passkeys::webauthn(origin)?;
             }
         }
-        anyhow::ensure!(
-            !sign_up || domain.is_some(),
-            "LAGER_SIGN_UP needs LAGER_DOMAIN"
-        );
         anyhow::ensure!(
             !sign_up || web.is_some(),
             "LAGER_SIGN_UP needs LAGER_SESSION_SECRET"

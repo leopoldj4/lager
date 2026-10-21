@@ -19,6 +19,7 @@ pub mod raw;
 pub mod read;
 pub mod session;
 mod settings;
+mod sign_up;
 mod ssh_keys;
 mod tokens;
 
@@ -146,6 +147,7 @@ impl Web {
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(passkeys::router())
+        .merge(sign_up::router())
         .merge(github::router())
         .merge(tokens::router())
         .merge(ssh_keys::router())

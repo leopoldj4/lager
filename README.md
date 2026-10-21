@@ -170,7 +170,7 @@ An empty variable counts as unset. Limits and timings are fixed in
 | `LAGER_DATABASE_URL` | required | PostgreSQL for users and access tokens, such as `postgres://lager:...@db.example.com/lager?sslmode=verify-full`. |
 | `LAGER_NATS_URL` | none | Change events between servers. Without it, events stay on this server. |
 | `LAGER_SESSION_SECRET` | none | Turns on the web interface and its API under `/-/`. At least 32 characters, the same on every server; a new one signs everyone out. |
-| `LAGER_SIGN_UP` | `false` | `true`: anyone can create an account with a passkey. Needs `LAGER_DOMAIN`. |
+| `LAGER_SIGN_UP` | `false` | `true`: anyone can create an account with a password, and with a passkey when `LAGER_DOMAIN` is set. |
 | `LAGER_GITHUB_CLIENT_ID`, `LAGER_GITHUB_CLIENT_SECRET` | none | A GitHub OAuth app for mirrors, with the callback URL `https://<domain>/-/api/github/callback`. |
 | `LAGER_SSH_HOST_KEY` | none | Turns on Git over SSH. An OpenSSH private key without a passphrase, in double quotes across its lines; the same on every server, and kept: clients refuse a changed host key. |
 | `LAGER_SSH_LISTEN` | `0.0.0.0:2222` | |
@@ -327,13 +327,15 @@ login remain available. Removing a passkey blocks future logins with it;
 it does not revoke existing sessions. Changing the account password ends
 sessions and pending ceremonies, but enrolled passkeys remain valid.
 
-With `LAGER_SIGN_UP=true` (it needs `LAGER_DOMAIN`), the sign-in page also
-offers **Sign up with a passkey**: people pick a free user name and save a
-passkey, and the account exists and is signed in once the passkey is
-verified. Such accounts have no password: they cannot remove their last
-passkey, and Git uses access tokens or SSH keys from the settings. They
-own repositories under their name and have no other access until granted.
-See [decision 23](docs/decisions/0023-passkey-sign-up.md).
+With `LAGER_SIGN_UP=true`, the sign-in page links to **Sign up**: people
+pick a free user name and a password, and are signed in
+([decision 25](docs/decisions/0025-password-sign-up.md)). With
+`LAGER_DOMAIN` set, they can save a passkey instead; the account exists and
+is signed in once the passkey is verified. Such accounts have no password:
+they cannot remove their last passkey, and Git uses access tokens or SSH
+keys from the settings. Either way, they own repositories under their name
+and have no other access until granted. See
+[decision 23](docs/decisions/0023-passkey-sign-up.md).
 
 Schema migrations run at startup. Public credentials and five-minute,
 single-use ceremony state live in PostgreSQL, so no sticky sessions are

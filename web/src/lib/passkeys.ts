@@ -136,10 +136,6 @@ export async function signUpWithPasskey(user: string) {
   queryClient.clear()
 }
 
-export function signUpEnabled(): Promise<{ enabled: boolean }> {
-  return request("/signup", undefined, "GET")
-}
-
 export function listPasskeys(): Promise<{
   enabled: boolean
   /** False for accounts that signed up with a passkey only. */

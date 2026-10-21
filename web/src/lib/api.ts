@@ -434,6 +434,34 @@ export function useGithubChange() {
   })
 }
 
+/** Which ways of signing up the server offers; passkeys need its domain. */
+export async function signUpOptions(): Promise<{
+  enabled: boolean
+  passkey: boolean
+}> {
+  const r = await fetch("/-/api/signup")
+  if (!r.ok) return { enabled: false, passkey: false }
+  return r.json()
+}
+
+/** Creates an account with a password, and signs in. */
+export async function signUpWithPassword(user: string, password: string) {
+  const r = await fetch("/-/api/signup", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ user, password }),
+  })
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}))
+    throw new LiveError(
+      body.code ?? "error",
+      body.message ?? `sign-up failed (${r.status})`
+    )
+  }
+  live.reconnect()
+  queryClient.clear()
+}
+
 export async function signIn(user: string, password: string) {
   const r = await fetch("/-/api/session", {
     method: "POST",

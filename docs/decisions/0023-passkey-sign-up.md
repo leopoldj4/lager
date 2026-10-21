@@ -2,6 +2,9 @@
 
 Status: accepted; implemented in `crates/core/src/identity/passkeys.rs` and
 `crates/server/src/web/passkeys.rs`. Date: October 20, 2026.
+[Decision 25](0025-password-sign-up.md) adds sign-up with a password; the
+flag no longer needs a public origin, and `GET /-/api/signup` replaces
+`GET /-/api/passkeys/signup`.
 
 ## Context
 

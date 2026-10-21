@@ -509,6 +509,38 @@ impl PgUsers {
         tx.commit().await.map_err(unavailable)?;
         Ok(password_stamp(&hash))
     }
+
+    /// Creates an account signed up with a password; returns its session
+    /// stamp. `password_hash` is from [`crate::password::PasswordHash`].
+    pub async fn create_signed_up_with_password(
+        &self,
+        name: &str,
+        password_hash: &str,
+    ) -> std::result::Result<[u8; 32], PasskeyError> {
+        validate_user_name(name).map_err(|e| PasskeyError::Invalid(e.to_string()))?;
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        // The same lock as passkey sign-up: names that differ only in case
+        // are taken by whichever sign-up commits first.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(ANONYMOUS_LOCK)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        if name_taken(&mut tx, name).await? {
+            return Err(taken(name));
+        }
+        sqlx::query(
+            "INSERT INTO lager_users (name, password_hash, updated_by)
+             VALUES ($1, $2, $1)",
+        )
+        .bind(name)
+        .bind(password_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(password_stamp(password_hash))
+    }
 }
 
 fn taken(name: &str) -> PasskeyError {
