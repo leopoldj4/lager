@@ -44,7 +44,9 @@ LAGER_S3_ACCESS_KEY_ID=...
 LAGER_S3_SECRET_ACCESS_KEY=...
 LAGER_S3_PREFIX=lager
 LAGER_SESSION_SECRET=...      # openssl rand -hex 32
-LAGER_SSH_HOST_KEY=...        # base64 -w0 ssh_host_ed25519_key
+LAGER_SSH_HOST_KEY="-----BEGIN OPENSSH PRIVATE KEY-----
+...
+-----END OPENSSH PRIVATE KEY-----"
 POSTGRES_PASSWORD=...         # openssl rand -hex 32; goes into a URL, so hex only
 # Optional:
 # LAGER_SIGN_UP=true
@@ -56,5 +58,5 @@ PostgreSQL takes `POSTGRES_PASSWORD` only when it creates the database. To
 change it later, change it in the database first
 (`ALTER USER lager PASSWORD '...'`), then in Dokploy.
 
-For a new SSH host key: `ssh-keygen -t ed25519 -N '' -C lager -f key`, then
-`base64 -w0 key`. Keep the value: clients refuse a changed host key.
+For a new SSH host key: `ssh-keygen -t ed25519 -N '' -C lager -f key`, and
+paste the contents of `key`. Keep it: clients refuse a changed host key.

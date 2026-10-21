@@ -28,8 +28,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use base64::Engine;
-
 #[derive(Clone, Debug)]
 pub struct Config {
     pub server: ServerConfig,
@@ -111,8 +109,7 @@ pub struct GithubConfig {
 pub struct SshConfig {
     pub listen: SocketAddr,
     /// An OpenSSH private key without a passphrase, the same on every
-    /// server: clients check that the host key never changes. The variable
-    /// holds the key itself or, to fit on one line, its base64 encoding.
+    /// server: clients check that the host key never changes.
     pub host_key: String,
     /// The SSH address that clients clone from, shown in the web interface:
     /// `ssh://git@<LAGER_DOMAIN>`, or for local development the listen
@@ -226,7 +223,7 @@ impl Config {
                 };
                 Some(SshConfig {
                     listen,
-                    host_key: host_key(&key)?,
+                    host_key: key,
                     public_url,
                 })
             }
@@ -258,18 +255,6 @@ impl Config {
             .join(format!("lager-{}", &hex::encode(digest)[..16]))
             .join("hook.sock")
     }
-}
-
-/// The key in OpenSSH format, from itself or its base64 encoding.
-fn host_key(value: &str) -> anyhow::Result<String> {
-    let value = value.trim();
-    if value.starts_with("-----BEGIN") {
-        return Ok(format!("{value}\n"));
-    }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(value.split_whitespace().collect::<String>())
-        .map_err(|e| anyhow::anyhow!("LAGER_SSH_HOST_KEY is neither a key nor base64: {e}"))?;
-    String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("LAGER_SSH_HOST_KEY is not a key"))
 }
 
 /// Longest Unix socket path that works on Linux and macOS.

@@ -26,8 +26,8 @@ for Traefik, as `web.public_origin`, and in `ssh.public_url`.
   web interface, `LAGER_NATS_URL` for the bus, `LAGER_GITHUB_CLIENT_ID` and
   `_SECRET` for mirrors, `LAGER_SSH_HOST_KEY` for SSH. Listen addresses have
   defaults (`0.0.0.0:8080`, `0.0.0.0:2222`).
-- `LAGER_SSH_HOST_KEY` holds the key itself, or its base64 encoding to fit
-  on one line.
+- `LAGER_SSH_HOST_KEY` holds the key itself, several lines in double
+  quotes.
 - On Dokploy, the service's environment holds everything, secrets included;
   the compose file builds `LAGER_DATABASE_URL` from `POSTGRES_PASSWORD`.
 

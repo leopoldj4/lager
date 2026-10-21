@@ -167,7 +167,7 @@ An empty variable counts as unset. Limits and timings are fixed in
 | `LAGER_SESSION_SECRET` | none | Turns on the web interface and its API under `/-/`. At least 32 characters, the same on every server; a new one signs everyone out. |
 | `LAGER_SIGN_UP` | `false` | `true`: anyone can create an account with a passkey. Needs `LAGER_DOMAIN`. |
 | `LAGER_GITHUB_CLIENT_ID`, `LAGER_GITHUB_CLIENT_SECRET` | none | A GitHub OAuth app for mirrors, with the callback URL `https://<domain>/-/api/github/callback`. |
-| `LAGER_SSH_HOST_KEY` | none | Turns on Git over SSH. An OpenSSH private key without a passphrase, or its base64 encoding (`base64 -w0 key`); the same on every server, and kept: clients refuse a changed host key. |
+| `LAGER_SSH_HOST_KEY` | none | Turns on Git over SSH. An OpenSSH private key without a passphrase, in double quotes across its lines; the same on every server, and kept: clients refuse a changed host key. |
 | `LAGER_SSH_LISTEN` | `0.0.0.0:2222` | |
 
 Every server is plain HTTP behind a load balancer that terminates HTTPS
