@@ -59,8 +59,9 @@ function Github() {
         <Skeleton className="h-14" />
       ) : !data.configured ? (
         <p className="text-sm text-muted-foreground">
-          GitHub is not set up on this server. An administrator adds a GitHub
-          OAuth app to the server configuration under <code>[github]</code>.
+          GitHub is not set up on this server. An administrator sets up a
+          GitHub OAuth app with <code>LAGER_GITHUB_CLIENT_ID</code> and{" "}
+          <code>LAGER_GITHUB_CLIENT_SECRET</code>.
         </p>
       ) : (
         <section className="grid gap-2">

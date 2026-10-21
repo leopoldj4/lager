@@ -15,7 +15,7 @@ export function cloneUrl(repo: string) {
   return `${location.origin}/${repo}.git`
 }
 
-/** The server's SSH address (`ssh.public_url`), or null without SSH. */
+/** The server's SSH address (`ssh://git@<LAGER_DOMAIN>`), or null without SSH. */
 export function useSshUrl() {
   return useQuery({
     queryKey: ["ssh-url"],

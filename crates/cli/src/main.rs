@@ -15,10 +15,8 @@ use lager_core::storage::Storage;
     name = "lager",
     about = "Administration of a lager Git server and its storage"
 )]
+// The configuration comes from the server's LAGER_* environment variables.
 struct Cli {
-    /// Server configuration [default: lager.toml].
-    #[arg(long, short, env = "LAGER_CONFIG", global = true)]
-    config: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -203,8 +201,7 @@ fn main() {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
-    let config_path = cli.config.unwrap_or_else(|| DEFAULT_CONFIG.into());
-    let cfg = Config::load(&config_path)?;
+    let cfg = Config::from_env()?;
     let cmd = match cli.cmd {
         Cmd::User { cmd } => return user_cmd(&cfg, cmd).await,
         Cmd::Token { cmd } => return token_cmd(&cfg, cmd).await,
@@ -373,8 +370,6 @@ fn print_ref_rules(r: &RepoSettings) {
         );
     }
 }
-
-const DEFAULT_CONFIG: &str = "lager.toml";
 
 /// Who changed a user, as the database records it.
 fn operator() -> String {

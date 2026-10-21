@@ -49,4 +49,3 @@ USER 10001:10001
 EXPOSE 8080 2222
 VOLUME /var/cache/lager
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/lager-server"]
-CMD ["-c", "/etc/lager/lager.toml"]

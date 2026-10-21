@@ -116,7 +116,6 @@ impl RunningServer {
 
 /// Starts a server with the given storage.
 pub async fn start(cfg: Config, storage: Storage) -> anyhow::Result<RunningServer> {
-    cfg.validate()?;
     let listener = TcpListener::bind(cfg.server.listen).await?;
     start_with_listener(cfg, storage, listener).await
 }
@@ -127,7 +126,7 @@ pub async fn start_with_listener(
     listener: TcpListener,
 ) -> anyhow::Result<RunningServer> {
     let addr = listener.local_addr()?;
-    // Before anything starts: a wrong key file or a used port stops here.
+    // Before anything starts: a wrong key or a used port stops here.
     let ssh = match &cfg.ssh {
         Some(c) => {
             let key = crate::ssh::load_host_key(&c.host_key)?;

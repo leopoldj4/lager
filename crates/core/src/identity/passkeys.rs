@@ -54,7 +54,7 @@ pub fn webauthn(origin: &str) -> anyhow::Result<Webauthn> {
     let url = Url::parse(origin)?;
     anyhow::ensure!(
         url.origin().ascii_serialization() == origin,
-        "web.public_origin must be an origin without a path or trailing slash"
+        "LAGER_DOMAIN must be a lowercase host name"
     );
     anyhow::ensure!(
         url.scheme() == "https" || (url.scheme() == "http" && url.host_str() == Some("localhost")),

@@ -14,8 +14,8 @@ changes of a repository.
 One server built from this checkout, a local S3-compatible service
 (SeaweedFS), PostgreSQL for users, NATS for change events, and a
 development user. SeaweedFS, PostgreSQL, and NATS run in Docker; stored
-data is kept between runs in Docker volumes. The configuration and the
-cache live under `./.local`.
+data is kept between runs in Docker volumes. The configuration
+(`.local/lager.env`), the SSH host key, and the cache live under `./.local`.
 
 ```bash
 scripts/local.sh
@@ -30,9 +30,8 @@ The script adds your `~/.ssh/id_ed25519.pub` (or ECDSA or RSA key) to `dev`
 for Git over SSH ([decision 22](docs/decisions/0022-git-over-ssh.md)).
 
 The web interface is at http://127.0.0.1:8080/ (sign in as `dev` / `dev-password`).
-A `.local/lager.toml` from before the minimal configuration
-([decision 15](docs/decisions/0015-minimal-configuration.md)) no longer
-loads; remove it and the script writes a new one.
+To run `lager` by hand, load the configuration first:
+`set -a; . .local/lager.env; set +a`.
 
 For GitHub mirrors, register a GitHub OAuth app with the callback URL
 `http://127.0.0.1:8080/-/api/github/callback` and start with
@@ -53,22 +52,21 @@ with the default branch `trunk`, a private one only `demo` reads, and an
 empty one. `alex` has `write` on the website and `read` on the others.
 
 ```bash
-bun scripts/seed.ts                                            # the local server
-bun scripts/seed.ts --url https://git.example.com --ssh lager # a deployment
+bun scripts/seed.ts                                                  # the local server
+bun scripts/seed.ts --url https://git.example.com --cli "<command>"  # a deployment
 ```
 
-`--ssh` runs the administration commands in the Compose deployment on that
-host (`--compose-dir`, default `/opt/lager`); `--cli "<command>"` names
-any other. Repositories that exist already are skipped; `--reset` deletes
-and seeds them again. `--user`, `--reviewer`, and `--password` change the
-names and the password.
+`--cli "<command>"` names the administration command for a deployment, for
+example `ssh root@dokploy docker exec -i <container> lager`. Repositories
+that exist already are skipped; `--reset` deletes and seeds them again.
+`--user`, `--reviewer`, and `--password` change the names and the password.
 
 ## Commands
 
 The server and the administration command line are separate programs:
 
 ```text
-lager-server [-c lager.toml]
+lager-server
 ```
 
 ```text
@@ -96,8 +94,8 @@ lager backup export <name> <dir>
 lager backup import <dir> [--name <name>]
 ```
 
-Both programs read the server configuration (`-c`, `LAGER_CONFIG`, or
-`./lager.toml`). `repo`, `cleanup`, and `backup` use the
+Both programs read the configuration from the environment (see below).
+`repo`, `cleanup`, and `backup` use the
 storage service directly; `user`, `token`, and `ssh-key` use the database.
 The server has no management API
 ([decision 10](docs/decisions/0010-no-admin-api.md)).
@@ -147,38 +145,30 @@ and review it. Packs and records have separate retention periods
 
 ## Configuration
 
-The file holds only what a server needs to start
-([decision 15](docs/decisions/0015-minimal-configuration.md)). Limits and
-timings are fixed in `crates/core/src/limits.rs`.
+Environment variables hold only what a server needs to start
+([decision 15](docs/decisions/0015-minimal-configuration.md),
+[decision 24](docs/decisions/0024-configuration-in-the-environment.md)).
+An empty variable counts as unset. Limits and timings are fixed in
+`crates/core/src/limits.rs`.
 
-```toml
-[server]
-listen = "0.0.0.0:8080"            # plain HTTP; a load balancer terminates HTTPS
-# cache_dir = "/var/cache/lager"     # the default; local SSD, can be removed at any time
-
-[storage]                          # S3-compatible, with conditional writes
-endpoint = "https://s3.example.com"  # leave out for AWS S3; http:// for local development
-region = "eu-central-1"            # default us-east-1
-bucket = "git-repositories"
-access_key_id = "..."
-secret_access_key = "..."          # restrict to the prefix
-prefix = "prod"                    # key prefix in the bucket; default none
-
-[database]                         # users and access tokens
-url = "postgres://lager:...@db.example.com/lager?sslmode=verify-full"
-
-[bus]                              # change events between servers (NATS)
-url = "nats://nats.internal:4222"  # without [bus], events stay on this server
-
-[web]                              # web interface and its API under /-/
-session_secret = "..."             # at least 32 characters, the same on every server
-public_origin = "https://git.example.com" # optional; exact public origin, no trailing slash
-sign_up = true                     # optional; anyone can create an account with a passkey
-
-[github]                           # optional; a GitHub OAuth app for mirrors
-client_id = "..."                  # callback URL: https://git.example.com/-/api/github/callback
-client_secret = "..."
-```
+| Variable | Default | |
+|---|---|---|
+| `LAGER_DOMAIN` | none | The public host name, such as `git.example.com`. Passkeys and the GitHub callback use `https://<domain>`, the clone menu `ssh://git@<domain>`. Without it, passkeys are off. `localhost` or `localhost:<port>` means `http://` for development. |
+| `LAGER_LISTEN` | `0.0.0.0:8080` | Plain HTTP; a load balancer terminates HTTPS. |
+| `LAGER_CACHE_DIR` | `/var/cache/lager` | Local SSD; can be removed at any time. |
+| `LAGER_S3_ENDPOINT` | AWS S3 | An S3-compatible service with conditional writes; `http://` for local development. |
+| `LAGER_S3_REGION` | `us-east-1` | `auto` for Cloudflare R2. |
+| `LAGER_S3_BUCKET` | required | |
+| `LAGER_S3_ACCESS_KEY_ID` | required | |
+| `LAGER_S3_SECRET_ACCESS_KEY` | required | Restrict the key to the prefix. |
+| `LAGER_S3_PREFIX` | none | Key prefix in the bucket. |
+| `LAGER_DATABASE_URL` | required | PostgreSQL for users and access tokens, such as `postgres://lager:...@db.example.com/lager?sslmode=verify-full`. |
+| `LAGER_NATS_URL` | none | Change events between servers. Without it, events stay on this server. |
+| `LAGER_SESSION_SECRET` | none | Turns on the web interface and its API under `/-/`. At least 32 characters, the same on every server; a new one signs everyone out. |
+| `LAGER_SIGN_UP` | `false` | `true`: anyone can create an account with a passkey. Needs `LAGER_DOMAIN`. |
+| `LAGER_GITHUB_CLIENT_ID`, `LAGER_GITHUB_CLIENT_SECRET` | none | A GitHub OAuth app for mirrors, with the callback URL `https://<domain>/-/api/github/callback`. |
+| `LAGER_SSH_HOST_KEY` | none | Turns on Git over SSH. An OpenSSH private key without a passphrase, or its base64 encoding (`base64 -w0 key`); the same on every server, and kept: clients refuse a changed host key. |
+| `LAGER_SSH_LISTEN` | `0.0.0.0:2222` | |
 
 Every server is plain HTTP behind a load balancer that terminates HTTPS
 and spreads requests over the servers. Any server can answer any request;
@@ -193,7 +183,7 @@ API under `/-/api/` answers.
 
 - `GET /_lager/health`: the load balancer check. 503 while the storage
   service does not answer (checked at most once per second), while the NATS
-  connection of `[bus]` is down for longer than 5 seconds or has
+  connection of `LAGER_NATS_URL` is down for longer than 5 seconds or has
   not been made yet, or while the server stops. `GET /_lager/live` only shows that the process runs.
 - On `SIGTERM` or `SIGINT` the server stops cleanly: the health check fails
   for 5 seconds while requests are still served, then the server
@@ -209,7 +199,7 @@ API under `/-/api/` answers.
   on NATS; other servers then update their caches. Lost events are harmless:
   every request checks the storage head. See
   [decision 12](docs/decisions/0012-nats-change-bus.md).
-- The web interface (`[web]`) shows repositories, files, history, and
+- The web interface (`LAGER_SESSION_SECRET`) shows repositories, files, history, and
   commits, and updates open pages on every push. Browsers sign in with the
   Git password and keep a signed session cookie; one WebSocket per tab
   (`/-/api/live`) carries queries and change events, and
@@ -228,7 +218,7 @@ API under `/-/api/` answers.
   PostgreSQL, their refs and merges in the log; a push that brings the
   source into the target marks the pull request merged. See
   [decision 19](docs/decisions/0019-pull-requests.md).
-- GitHub mirrors (`[github]`): **Settings** in the user menu has
+- GitHub mirrors (`LAGER_GITHUB_CLIENT_ID`): **Settings** in the user menu has
   **Connect with GitHub**. Then pick GitHub repositories; each becomes
   `<user>/<name>` here and follows GitHub's branches, tags, and default
   branch within about a minute. Mirrors are read-only: pushes and pull
@@ -254,41 +244,15 @@ The image holds lager (`/usr/local/bin/lager-server` and
 `/usr/local/bin/lager`), the
 built web interface (`/usr/local/share/lager/web`), Git from Debian
 trixie, tini as PID 1,
-and CA certificates. It runs `lager-server` as user 10001 and reads
-`/etc/lager/lager.toml`; mount the configuration as a secret, and the
-cache at `/var/cache/lager` on local disk. Set the container stop timeout
+and CA certificates. It runs `lager-server` as user 10001 with the
+configuration from the environment; mount the cache at `/var/cache/lager`
+on local disk. Set the container stop timeout
 above 185 seconds, so that running pushes finish.
 
-`deploy/` runs it on one host with Docker Compose: Caddy for HTTPS, lager,
-NATS, and PostgreSQL, with repositories in an external S3-compatible service.
-
-For updates to an existing deployment, see the [deployment update guide](deploy/README.md).
-
-```bash
-docker build -t lager:$(git rev-parse --short HEAD) .   # note the image name
-cd deploy
-cp .env.example .env                               # domain, image, database password
-cp lager.example.toml lager.toml                   # storage keys, session secret
-docker compose up -d
-docker compose exec lager lager user create <name> --access '*=force'
-docker compose exec lager lager token create <name> laptop
-```
-
-To run storage on the same host instead (for example SeaweedFS on the
-Docker bridge, 172.17.0.1), add a `compose.override.yaml` that gives the
-server a name for the host, set `endpoint = "http://s3:8333"`, and let the
-containers through the host firewall:
-
-```yaml
-services:
-  lager:
-    extra_hosts:
-      - "s3:host-gateway"
-```
-
-```bash
-ufw allow from 172.16.0.0/12 to 172.17.0.1 port 8333 proto tcp
-```
+`deploy/dokploy.compose.yaml` runs it with NATS and PostgreSQL under
+[Dokploy](https://dokploy.com), which builds the image on the server and
+terminates HTTPS; repositories live in an external S3-compatible service.
+`master` deploys to staging this way; see [deploy/README.md](deploy/README.md).
 
 On a Mac, build for x86_64 servers with
 `docker build --platform linux/amd64 ...`; it runs under emulation and is
@@ -342,12 +306,12 @@ two years after it is released.
 
 ### Passkey login
 
-Set `web.public_origin` to the exact public origin (for example
-`https://git.example.com`) on every server and restart. HTTPS is required;
-`http://localhost:8080` is allowed for local development. For the Vite UI,
-use its origin instead, for example `http://localhost:3000`, and open that
-same address in the browser. The RP ID is the origin's hostname; changing
-that hostname requires enrolling new passkeys.
+Set `LAGER_DOMAIN` (for example `git.example.com`) on every server and
+restart; passkeys then use the origin `https://<domain>`. For local
+development, `LAGER_DOMAIN=localhost:8080` uses `http://localhost:8080`;
+for the Vite UI, use its address instead, for example `localhost:3000`, and
+open that same address in the browser. The RP ID is the host name; changing
+it requires enrolling new passkeys.
 
 Sign in, open **Passkeys** in the user menu, then name
 and add a passkey. On later visits, choose
@@ -357,7 +321,7 @@ login remain available. Removing a passkey blocks future logins with it;
 it does not revoke existing sessions. Changing the account password ends
 sessions and pending ceremonies, but enrolled passkeys remain valid.
 
-With `web.sign_up = true` (it needs `public_origin`), the sign-in page also
+With `LAGER_SIGN_UP=true` (it needs `LAGER_DOMAIN`), the sign-in page also
 offers **Sign up with a passkey**: people pick a free user name and save a
 passkey, and the account exists and is signed in once the passkey is
 verified. Such accounts have no password: they cannot remove their last

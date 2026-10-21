@@ -384,7 +384,7 @@ export interface GithubMirror {
 }
 
 export interface GithubStatus {
-  /** False without [github] in the server configuration. */
+  /** False without LAGER_GITHUB_CLIENT_ID on the server. */
   configured: boolean
   account: { login: string } | null
   mirrors: GithubMirror[]

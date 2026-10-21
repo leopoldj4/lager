@@ -19,10 +19,8 @@ Actions.
   certificate and hides `/_lager/metrics`. Its entry points must not time
   out long pushes: `transport.respondingTimeouts.readTimeout` is `0s` for
   `web` and `websecure` in Dokploy's Traefik settings.
-- **Secrets.** They stay on the server, outside Dokploy and the repository,
-  in `/etc/lager`: `lager.toml`, `ssh_host_ed25519_key`, and
-  `postgres_password`, mounted into the containers. `/etc/lager/set-r2-keys` writes the storage keys into
-  `lager.toml` without showing them.
+- **Configuration.** Dokploy's environment for the service holds it, secrets
+  included; `dokploy.compose.yaml` passes it to the containers. See below.
 - **Network.** The cloud firewall allows only TCP 22 (Git over SSH, served by
   lager), 80, 443, and Tailscale's UDP 41641. The host's own SSH server is
   disabled; administration uses Tailscale SSH (`ssh root@dokploy`).
@@ -31,118 +29,32 @@ Each deployment recreates the lager container, so requests can briefly fail.
 Database schema changes apply when the new server starts; there is no
 rollback of the schema.
 
-## Self-hosting with compose.yaml
+## Environment
 
-[`compose.yaml`](compose.yaml) runs lager with Caddy, PostgreSQL, and NATS
-on one host. The steps below build on that host and switch the running
-container. The examples use the SSH alias `lager` and the Compose
-directory `/opt/lager`.
-
-### Update with the script
-
-Use a full commit SHA so the same image can also be deployed with the update
-script:
+Set these in the Dokploy service's **Environment**. lager's variables are
+listed in the [README](../README.md#configuration); the compose file sets
+`LAGER_DATABASE_URL` and `LAGER_NATS_URL` itself.
 
 ```bash
-ssh lager "bash -s -- lager:$(git rev-parse HEAD) /opt/lager" < deploy/update.sh
+LAGER_DOMAIN=staging.lager.sh
+LAGER_S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com
+LAGER_S3_REGION=auto
+LAGER_S3_BUCKET=...
+LAGER_S3_ACCESS_KEY_ID=...
+LAGER_S3_SECRET_ACCESS_KEY=...
+LAGER_S3_PREFIX=lager
+LAGER_SESSION_SECRET=...      # openssl rand -hex 32
+LAGER_SSH_HOST_KEY=...        # base64 -w0 ssh_host_ed25519_key
+POSTGRES_PASSWORD=...         # openssl rand -hex 32; goes into a URL, so hex only
+# Optional:
+# LAGER_SIGN_UP=true
+# LAGER_GITHUB_CLIENT_ID=...
+# LAGER_GITHUB_CLIENT_SECRET=...
 ```
 
-Run that command **after** building the image on the host as described below.
-It replaces the manual switch and adds health checking and rollback. Do not
-run the manual `.env` editing steps at the same time; they do not take the
-script's lock.
+PostgreSQL takes `POSTGRES_PASSWORD` only when it creates the database. To
+change it later, change it in the database first
+(`ALTER USER lager PASSWORD '...'`), then in Dokploy.
 
-### 1. Select the revision
-
-Check out the branch or commit you want to deploy and inspect its state:
-
-```bash
-git status --short
-git log -1 --oneline
-```
-
-Build from a clean checkout so the deployment corresponds to a recorded
-commit. To update the default branch first, use `git pull --ff-only` from
-a checkout of `master`. You can also deploy a committed feature branch.
-
-### 2. Build the image on the server
-
-```bash
-deployment_image=lager:$(git rev-parse HEAD)
-set -o pipefail
-git archive --format=tar HEAD | ssh lager \
-  "set -eu
-   build_context=\$(mktemp -d /tmp/lager-build.XXXXXXXXXX)
-   trap 'rm -rf -- \"\$build_context\"' EXIT
-   tar -xf - -C \"\$build_context\"
-   DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --tag '$deployment_image' \"\$build_context\" < /dev/null"
-```
-
-The `Dockerfile` builds both the server and the web interface using the
-server's persistent build cache. Save `$deployment_image` for the next step.
-Only committed files are included. Building does not change the running
-container.
-
-### 3. Switch the running container
-
-Connect to the deployment host:
-
-```bash
-ssh lager
-cd /opt/lager
-grep '^LAGER_IMAGE=' .env
-cp -p .env .env.before-update
-```
-
-Edit only `LAGER_IMAGE` in `.env` to the full image name used by
-`docker build`, then run:
-
-```bash
-docker compose up -d --no-deps lager
-docker compose ps lager
-docker compose logs --tail 50 lager
-```
-
-This recreates the lager container while keeping Caddy, PostgreSQL, and
-NATS running. Compose allows up to three minutes and ten seconds for the old server to drain
-requests and shut down. Brief connection failures can occur during the
-replacement; browser live connections reconnect automatically.
-
-Keep the existing `lager.toml`, database, storage, and Docker volumes.
-The image contains the new code and web assets; copying example configuration
-over the deployment configuration would discard its settings.
-
-### 4. Verify the deployment
-
-From your local machine:
-
-```bash
-curl -fsS https://git.example.com/_lager/health
-git ls-remote https://git.example.com/examples/hello.git HEAD
-curl -fsS -D - https://git.example.com/examples/hello/-/raw/main/README.md
-```
-
-The health endpoint should return `ok`, Git should return the public
-repository's HEAD, and the raw route should return the README with
-`Content-Type: text/plain; charset=utf-8`.
-
-Open https://git.example.com/examples/hello and check that the connection says
-**Live** and the README renders as Markdown. Open `README.md` to check the
-Preview/Code toggle and Raw button. For changes involving authentication,
-also sign in and check a private repository.
-
-## Roll back the image
-
-The backup made above records the image and configuration from before the
-latest update. On the deployment host:
-
-```bash
-cd /opt/lager
-cp -p .env.before-update .env
-docker compose up -d --no-deps lager
-docker compose ps lager
-docker compose logs --tail 50 lager
-```
-
-Repeat the health and browser checks. Keep the previous Docker image until
-the update is verified; rollback uses that image without rebuilding it.
+For a new SSH host key: `ssh-keygen -t ed25519 -N '' -C lager -f key`, then
+`base64 -w0 key`. Keep the value: clients refuse a changed host key.

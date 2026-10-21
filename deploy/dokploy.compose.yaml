@@ -1,24 +1,20 @@
-# Dokploy variant of compose.yaml: a Dokploy "Compose" service builds the
-# image from this repository on the server, and Dokploy's Traefik terminates
-# HTTPS instead of Caddy. Repositories live in an external S3-compatible
-# service; see lager.example.toml.
+# A Dokploy "Compose" service builds the image from this repository on the
+# server, and Dokploy's Traefik terminates HTTPS. Repositories live in an
+# external S3-compatible service.
 #
-# In Dokploy, set the compose path to ./deploy/dokploy.compose.yaml and the
-# environment to LAGER_DOMAIN=git.example.com. The secrets stay on the
-# server, outside Dokploy, in /etc/lager (directory root:10001, mode 0750):
-#   lager.toml             from lager.example.toml (root:10001, 0640)
-#   ssh_host_ed25519_key   ssh-keygen -t ed25519 -N '' -C lager (root:10001, 0640)
-#   postgres_password      the password in lager.toml, without a newline
-#                          (999:999, 0400; Postgres reads it as uid 999)
-# Dokploy runs Compose in its own container, so files on the server work
-# only as bind mounts, which the Docker daemon resolves, not as env_file.
+# In Dokploy, set the compose path to ./deploy/dokploy.compose.yaml. The
+# configuration is Dokploy's environment for this service; deploy/README.md
+# lists the variables.
 #
 # Traefik's entry points must not time out long pushes: set
 # transport.respondingTimeouts.readTimeout to 0s for web and websecure in
-# Dokploy's Traefik settings.
+# Dokploy's Traefik settings. The routing labels are in dokploy.traefik.yaml.
 
 services:
   lager:
+    extends:
+      file: dokploy.traefik.yaml
+      service: lager
     build:
       context: ..
       dockerfile: Dockerfile
@@ -29,42 +25,29 @@ services:
     # Git over SSH. The host's own SSH server must use another port.
     ports:
       - "22:2222"
+    # The configuration; `docker compose exec lager lager ...` gets it too.
     environment:
-      # For `docker compose exec lager lager ...`.
-      LAGER_CONFIG: /etc/lager/lager.toml
+      LAGER_DOMAIN: ${LAGER_DOMAIN:?set LAGER_DOMAIN}
+      LAGER_S3_ENDPOINT: ${LAGER_S3_ENDPOINT:-}
+      LAGER_S3_REGION: ${LAGER_S3_REGION:-}
+      LAGER_S3_BUCKET: ${LAGER_S3_BUCKET:?set LAGER_S3_BUCKET}
+      LAGER_S3_ACCESS_KEY_ID: ${LAGER_S3_ACCESS_KEY_ID:?set LAGER_S3_ACCESS_KEY_ID}
+      LAGER_S3_SECRET_ACCESS_KEY: ${LAGER_S3_SECRET_ACCESS_KEY:?set LAGER_S3_SECRET_ACCESS_KEY}
+      LAGER_S3_PREFIX: ${LAGER_S3_PREFIX:-}
+      LAGER_DATABASE_URL: postgres://lager:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/lager
+      LAGER_NATS_URL: nats://nats:4222
+      LAGER_SESSION_SECRET: ${LAGER_SESSION_SECRET:?set LAGER_SESSION_SECRET}
+      LAGER_SIGN_UP: ${LAGER_SIGN_UP:-}
+      LAGER_GITHUB_CLIENT_ID: ${LAGER_GITHUB_CLIENT_ID:-}
+      LAGER_GITHUB_CLIENT_SECRET: ${LAGER_GITHUB_CLIENT_SECRET:-}
+      # Keep it: clients refuse a changed host key.
+      LAGER_SSH_HOST_KEY: ${LAGER_SSH_HOST_KEY:?set LAGER_SSH_HOST_KEY}
     volumes:
-      - /etc/lager/lager.toml:/etc/lager/lager.toml:ro
-      # Keep this file: clients refuse a changed host key.
-      - /etc/lager/ssh_host_ed25519_key:/etc/lager/ssh_host_ed25519_key:ro
       # Caches only; any of it can be removed. Use local disk.
       - lager-cache:/var/cache/lager
     networks:
       - default
       - dokploy-network
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=dokploy-network
-      - traefik.http.services.lager.loadbalancer.server.port=8080
-      - traefik.http.services.lager.loadbalancer.healthcheck.path=/_lager/health
-      - traefik.http.services.lager.loadbalancer.healthcheck.interval=5s
-      - traefik.http.routers.lager-http.rule=Host(`${LAGER_DOMAIN:?set LAGER_DOMAIN}`)
-      - traefik.http.routers.lager-http.entrypoints=web
-      - traefik.http.routers.lager-http.middlewares=redirect-to-https@file
-      - traefik.http.routers.lager.rule=Host(`${LAGER_DOMAIN}`)
-      - traefik.http.routers.lager.entrypoints=websecure
-      - traefik.http.routers.lager.tls.certresolver=letsencrypt
-      - traefik.http.routers.lager.service=lager
-      - traefik.http.routers.lager.middlewares=lager-compress
-      # Compress only text-like types, so Git packs pass through unchanged.
-      - traefik.http.middlewares.lager-compress.compress.includedcontenttypes=text/html,text/css,text/plain,text/javascript,application/javascript,application/json,image/svg+xml
-      # Counters for monitoring only; scrape them inside the network.
-      - traefik.http.routers.lager-metrics.rule=Host(`${LAGER_DOMAIN}`) && PathPrefix(`/_lager/metrics`)
-      - traefik.http.routers.lager-metrics.entrypoints=websecure
-      - traefik.http.routers.lager-metrics.tls.certresolver=letsencrypt
-      - traefik.http.routers.lager-metrics.priority=1000
-      - traefik.http.routers.lager-metrics.service=lager
-      - traefik.http.routers.lager-metrics.middlewares=lager-internal-only
-      - traefik.http.middlewares.lager-internal-only.ipallowlist.sourcerange=127.0.0.1/32
     depends_on:
       nats:
         condition: service_started
@@ -82,9 +65,9 @@ services:
     environment:
       POSTGRES_USER: lager
       POSTGRES_DB: lager
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # Only used when the database is created.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
-      - /etc/lager/postgres_password:/run/secrets/postgres_password:ro
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "lager", "-d", "lager"]

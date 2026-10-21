@@ -3,19 +3,18 @@
 // trying out a new deployment or a local server (scripts/local.sh).
 //
 //   bun scripts/seed.ts                                  # local server
-//   bun scripts/seed.ts --url https://git.example.com --ssh lager
+//   bun scripts/seed.ts --url https://git.example.com --cli "ssh root@dokploy docker exec -i <container> lager"
 //   bun scripts/seed.ts --reset                          # recreate the demo repositories
 //
 // Users and repositories need the administration commands: by default the
-// local build with .local/lager.toml, `--ssh <host>` runs them in the
-// Compose deployment on that host (`--compose-dir`, default /opt/lager),
-// and `--cli "<command>"` names any other command. Git pushes and the pull
+// local build with the configuration in .local/lager.env, and
+// `--cli "<command>"` names any other command. Git pushes and the pull
 // requests go to `--url` over HTTP(S), as the demo users.
 //
 // Without `--reset`, repositories that exist already are left alone; the
 // users are created, or get the password and access levels again.
 
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { parseArgs } from "node:util"
@@ -23,8 +22,6 @@ import { parseArgs } from "node:util"
 const { values: opts } = parseArgs({
   options: {
     url: { type: "string", default: "http://127.0.0.1:8080" },
-    ssh: { type: "string" },
-    "compose-dir": { type: "string", default: "/opt/lager" },
     cli: { type: "string" },
     user: { type: "string", default: "demo" },
     reviewer: { type: "string", default: "alex" },
@@ -35,7 +32,7 @@ const { values: opts } = parseArgs({
 })
 if (opts.help) {
   console.log(
-    "usage: bun scripts/seed.ts [--url URL] [--ssh HOST [--compose-dir DIR] | --cli CMD]\n" +
+    "usage: bun scripts/seed.ts [--url URL] [--cli CMD]\n" +
       "                           [--user demo] [--reviewer alex] [--password P] [--reset]"
   )
   process.exit(0)
@@ -75,29 +72,28 @@ function run(cmd: string[], o: { cwd?: string; input?: string; env?: Record<stri
   return r.stdout.toString()
 }
 
-const shq = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replaceAll("'", `'\\''`)}'`)
-
-function adminCommand(): (args: string[]) => string[] {
-  if (opts.ssh) {
-    const dir = opts["compose-dir"]!
-    return (args) => [
-      "ssh",
-      opts.ssh!,
-      `cd ${shq(dir)} && docker compose exec -T lager lager ${args.map(shq).join(" ")}`,
-    ]
-  }
+function adminCommand(): { cmd: (args: string[]) => string[]; env?: Record<string, string> } {
   if (opts.cli) {
     const prefix = opts.cli.split(/\s+/).filter(Boolean)
-    return (args) => [...prefix, ...args]
+    return { cmd: (args) => [...prefix, ...args] }
   }
-  const local = join(repoRoot, ".local/lager.toml")
+  // The KEY=value lines that scripts/local.sh writes.
+  const local = join(repoRoot, ".local/lager.env")
   const target = process.env.CARGO_TARGET_DIR ?? join(repoRoot, "target")
   const bin = join(target, "debug/lager")
-  if (existsSync(local) && existsSync(bin)) return (args) => [bin, "-c", local, ...args]
-  return (args) => ["lager", ...args]
+  if (existsSync(local) && existsSync(bin)) {
+    const env = Object.fromEntries(
+      readFileSync(local, "utf8")
+        .split("\n")
+        .filter((l) => l.includes("="))
+        .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)])
+    )
+    return { cmd: (args) => [bin, ...args], env }
+  }
+  return { cmd: (args) => ["lager", ...args] }
 }
 const adminCmd = adminCommand()
-const admin = (args: string[], input?: string) => run(adminCmd(args), { input })
+const admin = (args: string[], input?: string) => run(adminCmd.cmd(args), { input, env: adminCmd.env })
 
 // ---------------------------------------------------------------------------
 // Local repositories with made-up history

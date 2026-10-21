@@ -1,18 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use clap::Parser;
 use lager_core::config::Config;
 use lager_core::storage::Storage;
 
+// The configuration comes from LAGER_* environment variables.
 #[derive(Parser)]
 #[command(name = "lager-server", about = "Git server with S3-compatible storage")]
-struct Cli {
-    /// Server configuration [default: lager.toml].
-    #[arg(long, short, env = "LAGER_CONFIG")]
-    config: Option<PathBuf>,
-}
-
-const DEFAULT_CONFIG: &str = "lager.toml";
+struct Cli {}
 
 fn main() {
     // Git runs this program as the proc-receive hook through a symlink.
@@ -34,9 +29,8 @@ fn main() {
     }
 }
 
-async fn run(cli: Cli) -> anyhow::Result<()> {
-    let config_path = cli.config.unwrap_or_else(|| DEFAULT_CONFIG.into());
-    let cfg = Config::load(&config_path)?;
+async fn run(_cli: Cli) -> anyhow::Result<()> {
+    let cfg = Config::from_env()?;
     let storage = Storage::from_config(&cfg)?;
     let server = lager_server::server::start(cfg, storage).await?;
     eprintln!("lager serving on {}", server.url());

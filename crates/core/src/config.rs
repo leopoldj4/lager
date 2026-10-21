@@ -1,63 +1,72 @@
-//! Configuration file (TOML). It holds only what a server needs to start:
-//! its address, the storage service, the database, the change bus, the
-//! web session secret, the GitHub OAuth app, and the SSH host key
-//! (docs/decisions/0015-minimal-configuration.md).
+//! Configuration from environment variables. It holds only what a server
+//! needs to start: its address, the storage service, the database, the
+//! change bus, the web session secret, the GitHub OAuth app, and the SSH
+//! host key (docs/decisions/0015-minimal-configuration.md,
+//! docs/decisions/0024-configuration-in-the-environment.md).
 //! Repositories live in the catalog in storage, users in the database, and
-//! limits are fixed in [`crate::limits`].
+//! limits are fixed in [`crate::limits`]. An empty variable counts as unset.
+//!
+//! | Variable | Default | |
+//! |---|---|---|
+//! | `LAGER_DOMAIN` | | Public host name: `https://<domain>` for passkeys and GitHub, `ssh://git@<domain>` for cloning; `localhost[:port]` for development |
+//! | `LAGER_LISTEN` | `0.0.0.0:8080` | Plain HTTP |
+//! | `LAGER_CACHE_DIR` | `/var/cache/lager` | |
+//! | `LAGER_S3_ENDPOINT` | AWS S3 | |
+//! | `LAGER_S3_REGION` | `us-east-1` | |
+//! | `LAGER_S3_BUCKET` | required | |
+//! | `LAGER_S3_ACCESS_KEY_ID` | required | |
+//! | `LAGER_S3_SECRET_ACCESS_KEY` | required | |
+//! | `LAGER_S3_PREFIX` | empty | |
+//! | `LAGER_DATABASE_URL` | required | |
+//! | `LAGER_NATS_URL` | | Without it, events stay on this server |
+//! | `LAGER_SESSION_SECRET` | | Turns on the web interface |
+//! | `LAGER_SIGN_UP` | `false` | Needs `LAGER_DOMAIN` |
+//! | `LAGER_GITHUB_CLIENT_ID`, `LAGER_GITHUB_CLIENT_SECRET` | | Both or neither |
+//! | `LAGER_SSH_HOST_KEY` | | Turns on Git over SSH |
+//! | `LAGER_SSH_LISTEN` | `0.0.0.0:2222` | |
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use base64::Engine;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub database: DatabaseConfig,
-    #[serde(default)]
     pub bus: Option<BusConfig>,
-    #[serde(default)]
     pub web: Option<WebConfig>,
-    #[serde(default)]
     pub github: Option<GithubConfig>,
     pub ssh: Option<SshConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct ServerConfig {
     /// Plain HTTP: a load balancer terminates HTTPS in front of the server.
     pub listen: SocketAddr,
     /// Local caches; can be removed at any time.
-    #[serde(default = "default_cache_dir")]
     pub cache_dir: PathBuf,
 }
 
 /// An S3-compatible service with conditional writes (`If-Match`,
 /// `If-None-Match`).
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct StorageConfig {
     /// For example `https://<account>.r2.cloudflarestorage.com`. Without it,
     /// AWS S3. An `http://` endpoint is permitted for local development.
-    #[serde(default)]
     pub endpoint: Option<String>,
-    #[serde(default = "default_region")]
     pub region: String,
     pub bucket: String,
     pub access_key_id: String,
     pub secret_access_key: String,
     /// Key prefix inside the bucket.
-    #[serde(default)]
     pub prefix: String,
 }
 
 /// PostgreSQL for users and their access tokens
 /// (docs/decisions/0008-users-in-postgres.md).
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct DatabaseConfig {
     /// For example `postgres://lager:...@db.example.com/lager?sslmode=verify-full`.
     pub url: String,
@@ -66,8 +75,7 @@ pub struct DatabaseConfig {
 /// NATS for change events between servers
 /// (docs/decisions/0012-nats-change-bus.md). Without it, events stay on
 /// this server.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct BusConfig {
     /// For example `nats://nats.internal:4222` or `tls://user:...@nats.example.com:4222`.
     pub url: String,
@@ -75,27 +83,23 @@ pub struct BusConfig {
 
 /// The web interface and its API (docs/decisions/0014-web-interface.md).
 /// Without it, the server answers only Git requests.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct WebConfig {
     /// Signs session cookies: at least 32 characters, the same on every
     /// server. A new secret signs every user out.
     pub session_secret: String,
-    /// Browser-facing origin of this deployment, e.g. https://git.example.com.
-    /// Used to verify passkey requests; omit to disable passkeys.
-    #[serde(default)]
+    /// `https://<LAGER_DOMAIN>`, or `http://` for `localhost`. Used to
+    /// verify passkey requests; without it, passkeys are off.
     pub public_origin: Option<String>,
     /// Lets anyone create an account with a passkey and no password
     /// (docs/decisions/0023-passkey-sign-up.md). Needs `public_origin`.
-    #[serde(default)]
     pub sign_up: bool,
 }
 
 /// A GitHub OAuth app for read-only mirrors of GitHub repositories
 /// (docs/decisions/0020-github-mirrors.md). Its callback URL is
 /// `<origin>/-/api/github/callback`. Without it, nobody can connect GitHub.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct GithubConfig {
     pub client_id: String,
     pub client_secret: String,
@@ -103,68 +107,141 @@ pub struct GithubConfig {
 
 /// Git over SSH (docs/decisions/0022-git-over-ssh.md). Without it, Git
 /// clients use only HTTP.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct SshConfig {
     pub listen: SocketAddr,
-    /// An OpenSSH private key without a passphrase, the same file on every
-    /// server: clients check that the host key never changes.
-    pub host_key: PathBuf,
-    /// The SSH address that clients clone from, shown in the web interface,
-    /// such as `ssh://git@git.example.com` or `ssh://git@git.example.com:2222`.
-    #[serde(default)]
+    /// An OpenSSH private key without a passphrase, the same on every
+    /// server: clients check that the host key never changes. The variable
+    /// holds the key itself or, to fit on one line, its base64 encoding.
+    pub host_key: String,
+    /// The SSH address that clients clone from, shown in the web interface:
+    /// `ssh://git@<LAGER_DOMAIN>`, or for local development the listen
+    /// address on the loopback address.
     pub public_url: Option<String>,
 }
 
-fn default_cache_dir() -> PathBuf {
-    PathBuf::from("/var/cache/lager")
-}
-fn default_region() -> String {
-    "us-east-1".into()
-}
-
 impl Config {
-    pub fn load(path: &Path) -> anyhow::Result<Config> {
-        let text = std::fs::read_to_string(path)?;
-        let cfg: Config = toml::from_str(&text)?;
-        cfg.validate()?;
-        Ok(cfg)
+    /// Reads the process environment.
+    pub fn from_env() -> anyhow::Result<Config> {
+        Self::from_vars(|name| std::env::var(name).ok())
     }
 
-    pub fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(!self.database.url.is_empty(), "database.url is empty");
-        if let Some(b) = &self.bus {
-            anyhow::ensure!(!b.url.is_empty(), "bus.url is empty");
+    pub fn from_vars(var: impl Fn(&str) -> Option<String>) -> anyhow::Result<Config> {
+        let get = |name: &str| var(name).filter(|v| !v.is_empty());
+        let required = |name: &str| get(name).ok_or_else(|| anyhow::anyhow!("{name} is not set"));
+        let addr = |name: &str, default: &str| -> anyhow::Result<SocketAddr> {
+            let v = get(name).unwrap_or_else(|| default.into());
+            v.parse()
+                .map_err(|e| anyhow::anyhow!("{name}: {v:?} is not an address and port: {e}"))
+        };
+
+        let domain = get("LAGER_DOMAIN");
+        // `localhost` and `localhost:<port>` for development: plain HTTP,
+        // and SSH on its own port.
+        let local = domain
+            .as_deref()
+            .is_some_and(|d| d == "localhost" || d.starts_with("localhost:"));
+        if let Some(d) = &domain {
+            anyhow::ensure!(
+                (local || !d.contains(':'))
+                    && !d.contains(['/', '@'])
+                    && !d.contains(char::is_whitespace),
+                "LAGER_DOMAIN must be a host name, such as git.example.com"
+            );
         }
-        if let Some(w) = &self.web {
+        let public_origin = domain
+            .as_ref()
+            .map(|d| format!("{}://{d}", if local { "http" } else { "https" }));
+
+        let server = ServerConfig {
+            listen: addr("LAGER_LISTEN", "0.0.0.0:8080")?,
+            cache_dir: get("LAGER_CACHE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/var/cache/lager")),
+        };
+        let storage = StorageConfig {
+            endpoint: get("LAGER_S3_ENDPOINT"),
+            region: get("LAGER_S3_REGION").unwrap_or_else(|| "us-east-1".into()),
+            bucket: required("LAGER_S3_BUCKET")?,
+            access_key_id: required("LAGER_S3_ACCESS_KEY_ID")?,
+            secret_access_key: required("LAGER_S3_SECRET_ACCESS_KEY")?,
+            prefix: get("LAGER_S3_PREFIX").unwrap_or_default(),
+        };
+        let database = DatabaseConfig {
+            url: required("LAGER_DATABASE_URL")?,
+        };
+        let bus = get("LAGER_NATS_URL").map(|url| BusConfig { url });
+
+        let sign_up = match get("LAGER_SIGN_UP").as_deref() {
+            None | Some("false") => false,
+            Some("true") => true,
+            Some(v) => anyhow::bail!("LAGER_SIGN_UP must be true or false, not {v:?}"),
+        };
+        let web = get("LAGER_SESSION_SECRET").map(|session_secret| WebConfig {
+            session_secret,
+            public_origin: public_origin.clone(),
+            sign_up,
+        });
+        if let Some(w) = &web {
+            anyhow::ensure!(
+                w.session_secret.chars().count() >= 32,
+                "LAGER_SESSION_SECRET needs at least 32 characters"
+            );
             if let Some(origin) = &w.public_origin {
                 crate::identity::passkeys::webauthn(origin)?;
             }
-            anyhow::ensure!(
-                !w.sign_up || w.public_origin.is_some(),
-                "web.sign_up needs web.public_origin"
-            );
-            anyhow::ensure!(
-                w.session_secret.chars().count() >= 32,
-                "web.session_secret needs at least 32 characters"
-            );
         }
-        if let Some(g) = &self.github {
-            anyhow::ensure!(self.web.is_some(), "[github] needs [web]");
-            anyhow::ensure!(
-                !g.client_id.is_empty() && !g.client_secret.is_empty(),
-                "github.client_id and github.client_secret are required"
-            );
-        }
-        if let Some(s) = &self.ssh
-            && let Some(url) = &s.public_url
-        {
-            anyhow::ensure!(
-                url.starts_with("ssh://") && !url.ends_with('/'),
-                "ssh.public_url must start with ssh:// and not end with /"
-            );
-        }
-        Ok(())
+        anyhow::ensure!(
+            !sign_up || domain.is_some(),
+            "LAGER_SIGN_UP needs LAGER_DOMAIN"
+        );
+        anyhow::ensure!(
+            !sign_up || web.is_some(),
+            "LAGER_SIGN_UP needs LAGER_SESSION_SECRET"
+        );
+
+        let github = match (
+            get("LAGER_GITHUB_CLIENT_ID"),
+            get("LAGER_GITHUB_CLIENT_SECRET"),
+        ) {
+            (Some(client_id), Some(client_secret)) => Some(GithubConfig {
+                client_id,
+                client_secret,
+            }),
+            (None, None) => None,
+            _ => anyhow::bail!("set both LAGER_GITHUB_CLIENT_ID and LAGER_GITHUB_CLIENT_SECRET"),
+        };
+        anyhow::ensure!(
+            github.is_none() || web.is_some(),
+            "LAGER_GITHUB_CLIENT_ID needs LAGER_SESSION_SECRET"
+        );
+
+        let ssh = match get("LAGER_SSH_HOST_KEY") {
+            Some(key) => {
+                let listen = addr("LAGER_SSH_LISTEN", "0.0.0.0:2222")?;
+                let public_url = match &domain {
+                    Some(d) if !local => Some(format!("ssh://git@{d}")),
+                    _ if listen.ip().is_loopback() => Some(format!("ssh://git@{listen}")),
+                    _ => None,
+                };
+                Some(SshConfig {
+                    listen,
+                    host_key: host_key(&key)?,
+                    public_url,
+                })
+            }
+            None => None,
+        };
+
+        Ok(Config {
+            server,
+            storage,
+            database,
+            bus,
+            web,
+            github,
+            ssh,
+        })
     }
 
     /// The hook socket. Unix socket paths are short (about 100 bytes), so a
@@ -181,6 +258,18 @@ impl Config {
             .join(format!("lager-{}", &hex::encode(digest)[..16]))
             .join("hook.sock")
     }
+}
+
+/// The key in OpenSSH format, from itself or its base64 encoding.
+fn host_key(value: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    if value.starts_with("-----BEGIN") {
+        return Ok(format!("{value}\n"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value.split_whitespace().collect::<String>())
+        .map_err(|e| anyhow::anyhow!("LAGER_SSH_HOST_KEY is neither a key nor base64: {e}"))?;
+    String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("LAGER_SSH_HOST_KEY is not a key"))
 }
 
 /// Longest Unix socket path that works on Linux and macOS.

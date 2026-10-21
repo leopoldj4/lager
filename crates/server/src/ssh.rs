@@ -9,7 +9,6 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -44,9 +43,9 @@ const MAX_UPLOAD_PACK_INPUT: u64 = 64 * 1024 * 1024;
 const MAX_STDERR: u64 = 64 * 1024;
 
 /// Reads the host key: an OpenSSH private key without a passphrase.
-pub fn load_host_key(path: &Path) -> anyhow::Result<PrivateKey> {
-    russh::keys::load_secret_key(path, None)
-        .map_err(|e| anyhow::anyhow!("ssh.host_key {}: {e}", path.display()))
+pub fn load_host_key(key: &str) -> anyhow::Result<PrivateKey> {
+    russh::keys::decode_secret_key(key, None)
+        .map_err(|e| anyhow::anyhow!("LAGER_SSH_HOST_KEY: {e}"))
 }
 
 pub fn config(host_key: PrivateKey) -> Arc<Config> {
