@@ -21,7 +21,7 @@ Actions.
   `web` and `websecure` in Dokploy's Traefik settings.
 - **Secrets.** They stay on the server, outside Dokploy and the repository,
   in `/etc/lager`: `lager.toml`, `ssh_host_ed25519_key`, and
-  `postgres.env`. `/etc/lager/set-r2-keys` writes the storage keys into
+  `postgres_password`, mounted into the containers. `/etc/lager/set-r2-keys` writes the storage keys into
   `lager.toml` without showing them.
 - **Network.** The cloud firewall allows only TCP 22 (Git over SSH, served by
   lager), 80, 443, and Tailscale's UDP 41641. The host's own SSH server is

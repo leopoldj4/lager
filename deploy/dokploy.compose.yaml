@@ -8,7 +8,10 @@
 # server, outside Dokploy, in /etc/lager (directory root:10001, mode 0750):
 #   lager.toml             from lager.example.toml (root:10001, 0640)
 #   ssh_host_ed25519_key   ssh-keygen -t ed25519 -N '' -C lager (root:10001, 0640)
-#   postgres.env           POSTGRES_PASSWORD=<the password in lager.toml>
+#   postgres_password      the password in lager.toml, without a newline
+#                          (999:999, 0400; Postgres reads it as uid 999)
+# Dokploy runs Compose in its own container, so files on the server work
+# only as bind mounts, which the Docker daemon resolves, not as env_file.
 #
 # Traefik's entry points must not time out long pushes: set
 # transport.respondingTimeouts.readTimeout to 0s for web and websecure in
@@ -76,11 +79,12 @@ services:
   postgres:
     image: postgres:17
     restart: unless-stopped
-    env_file: /etc/lager/postgres.env
     environment:
       POSTGRES_USER: lager
       POSTGRES_DB: lager
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     volumes:
+      - /etc/lager/postgres_password:/run/secrets/postgres_password:ro
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "lager", "-d", "lager"]
