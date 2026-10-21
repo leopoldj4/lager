@@ -1,9 +1,9 @@
 # Services for local mode (scripts/local.sh): SeaweedFS as the
 # S3-compatible service, PostgreSQL for users, and NATS for change events,
 # on the loopback address only. Data stays in named volumes between runs;
-# `docker compose -p worktree-local down -v` removes it.
+# `docker compose -p lager-local down -v` removes it.
 
-name: worktree-local
+name: lager-local
 
 services:
   storage:
@@ -17,34 +17,34 @@ services:
       - -dir=/data
       - -s3.port=8333
       - -s3.config=/etc/seaweedfs/s3.json
-      - -bucket=worktree
+      - -bucket=lager
       - -admin.ui=false
       - -webdav=false
     ports:
-      - "127.0.0.1:${WORKTREE_S3_PORT:-8333}:8333"
+      - "127.0.0.1:${LAGER_S3_PORT:-8333}:8333"
     volumes:
       - storage-data:/data
-      - ${WORKTREE_LOCAL_DIR:?}/s3.json:/etc/seaweedfs/s3.json:ro
+      - ${LAGER_LOCAL_DIR:?}/s3.json:/etc/seaweedfs/s3.json:ro
 
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_USER: worktree
-      POSTGRES_DB: worktree
+      POSTGRES_USER: lager
+      POSTGRES_DB: lager
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
-      - "127.0.0.1:${WORKTREE_PG_PORT:-5433}:5432"
+      - "127.0.0.1:${LAGER_PG_PORT:-5433}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "worktree", "-d", "worktree"]
+      test: ["CMD", "pg_isready", "-U", "lager", "-d", "lager"]
       interval: 1s
       retries: 30
 
   nats:
     image: nats:2
     ports:
-      - "127.0.0.1:${WORKTREE_NATS_PORT:-4222}:4222"
+      - "127.0.0.1:${LAGER_NATS_PORT:-4222}:4222"
 
 volumes:
   storage-data:

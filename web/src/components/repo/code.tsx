@@ -40,7 +40,7 @@ export function CodeView({
 
   return (
     <SidePanelLayout
-      id="worktree-code"
+      id="lager-code"
       title="Files"
       side={tree}
       toolbar={

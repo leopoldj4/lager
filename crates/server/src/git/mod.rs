@@ -13,7 +13,7 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-use worktree_core::model::{ObjectFormat, Oid, RefName, RefUpdate};
+use lager_core::model::{ObjectFormat, Oid, RefName, RefUpdate};
 
 /// Minimum Git version: `proc-receive` and `update-ref --stdin` transactions
 /// with `--ref-format`.
@@ -324,7 +324,7 @@ impl Git {
         }
     }
 
-    /// Merges two commits without a worktree (`git merge-tree`). The tree
+    /// Merges two commits without a lager (`git merge-tree`). The tree
     /// and its new objects are written to the object directory of `dir`,
     /// or of `objects` when given (with `dir`'s objects as alternates).
     pub async fn merge_tree(

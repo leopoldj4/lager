@@ -15,8 +15,8 @@ use futures::StreamExt;
 use tokio::sync::{broadcast, watch};
 
 use crate::metrics::Metrics;
-use worktree_core::config::BusConfig;
-use worktree_core::model::RepoId;
+use lager_core::config::BusConfig;
+use lager_core::model::RepoId;
 
 /// Local subscribers that fall this far behind lose the oldest events.
 const LOCAL_CAPACITY: usize = 1024;
@@ -89,7 +89,7 @@ impl Bus {
                 let link = Arc::new(Link::default());
                 let l = link.clone();
                 let client = async_nats::ConnectOptions::new()
-                    .name(format!("worktree-server {self_id}"))
+                    .name(format!("lager-server {self_id}"))
                     .retry_on_initial_connect()
                     // Own events go to local subscribers directly.
                     .no_echo()
@@ -115,8 +115,8 @@ impl Bus {
                     .await?;
                 Some(Nats {
                     client,
-                    prefix: worktree_core::limits::BUS_SUBJECT_PREFIX.into(),
-                    grace: worktree_core::limits::BUS_HEALTH_GRACE,
+                    prefix: lager_core::limits::BUS_SUBJECT_PREFIX.into(),
+                    grace: lager_core::limits::BUS_HEALTH_GRACE,
                     link,
                 })
             }

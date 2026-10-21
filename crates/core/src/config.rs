@@ -59,7 +59,7 @@ pub struct StorageConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
-    /// For example `postgres://worktree:...@db.example.com/worktree?sslmode=verify-full`.
+    /// For example `postgres://lager:...@db.example.com/lager?sslmode=verify-full`.
     pub url: String,
 }
 
@@ -117,7 +117,7 @@ pub struct SshConfig {
 }
 
 fn default_cache_dir() -> PathBuf {
-    PathBuf::from("/var/cache/worktree")
+    PathBuf::from("/var/cache/lager")
 }
 fn default_region() -> String {
     "us-east-1".into()
@@ -178,7 +178,7 @@ impl Config {
         use sha2::Digest;
         let digest = sha2::Sha256::digest(self.server.cache_dir.as_os_str().as_encoded_bytes());
         std::env::temp_dir()
-            .join(format!("worktree-{}", &hex::encode(digest)[..16]))
+            .join(format!("lager-{}", &hex::encode(digest)[..16]))
             .join("hook.sock")
     }
 }

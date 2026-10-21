@@ -9,8 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const ENV_SOCKET: &str = "WORKTREE_HOOK_SOCKET";
-pub const ENV_TOKEN: &str = "WORKTREE_HOOK_TOKEN";
+pub const ENV_SOCKET: &str = "LAGER_HOOK_SOCKET";
+pub const ENV_TOKEN: &str = "LAGER_HOOK_TOKEN";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HookRequest {

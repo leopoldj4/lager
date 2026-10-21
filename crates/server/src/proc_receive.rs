@@ -18,7 +18,7 @@ pub fn run_proc_receive() -> i32 {
     match proc_receive() {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("worktree: proc-receive: {e}");
+            eprintln!("lager: proc-receive: {e}");
             1
         }
     }

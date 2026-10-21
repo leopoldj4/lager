@@ -18,9 +18,9 @@ use super::read::{self, ReadError};
 use super::{Web, session};
 use crate::bus::Event;
 use crate::http::AppState;
-use worktree_core::identity::{AuthError, Identity};
-use worktree_core::model::RepoId;
-use worktree_core::repo::Access;
+use lager_core::identity::{AuthError, Identity};
+use lager_core::model::RepoId;
+use lager_core::repo::Access;
 
 pub const VERSION: u32 = 1;
 const HEARTBEAT: Duration = Duration::from_secs(25);

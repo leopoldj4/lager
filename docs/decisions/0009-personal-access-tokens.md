@@ -1,13 +1,13 @@
 # 9. Personal access tokens
 
-Status: accepted; tokens are managed with `worktree token`, and `login` is
+Status: accepted; tokens are managed with `lager token`, and `login` is
 gone, since [decision 10](0010-no-admin-api.md). Date: October 9, 2026.
 
 ## Context
 
 Git clients send HTTP Basic credentials and credential helpers keep one
 fixed secret, so the account password ended up in CI settings and, through
-`worktree login` (decision 6), in a plain-text file. A leaked password gives
+`lager login` (decision 6), in a plain-text file. A leaked password gives
 all of a user's access, cannot be withdrawn without changing it everywhere,
 and every use needs the slow password hash.
 
@@ -15,7 +15,7 @@ and every use needs the slow password hash.
 
 **Tokens.** A database user (decision 8) can have up to 100 tokens. A token
 is `rgpat_` and 32 random bytes in URL-safe base64. Only its SHA-256 is
-stored (`worktree_tokens`), with a name, the creation time, an optional
+stored (`lager_tokens`), with a name, the creation time, an optional
 expiry (1 to 3650 days), and the last use, updated at most once a minute
 off the request. The token is shown once, when it is created. File users
 and identity-service users have no tokens.
@@ -27,7 +27,7 @@ token needs no slow hash and no cache. A wrong, expired, or deleted token,
 or one for another user name, fails with 401.
 
 **Access.** A token has its user's access, or, with `access`, the lower of
-its own and the user's level for every repository (`worktree_token_access`).
+its own and the user's level for every repository (`lager_token_access`).
 A token therefore never has more than its user, also after the user's access
 changes.
 
@@ -46,11 +46,11 @@ check used by other changes. Listing and deleting work with a token, so
 `logout` can delete its own. `GET me` also answers `token`, the id the caller
 signed in with.
 
-**Command line.** `worktree login` checks the credentials, creates a token
+**Command line.** `lager login` checks the credentials, creates a token
 named after the computer, and keeps the token instead of the password;
 `logout` deletes it. Where the server has no tokens for the user (a file
 user, no `[database]`, an older server), the password is kept as before.
-`worktree token create | list | delete` manage tokens; `create` asks for
+`lager token create | list | delete` manage tokens; `create` asks for
 the password.
 
 ## Consequences

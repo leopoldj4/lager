@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
-use worktree_core::cas::{Resolution, resolve_unknown_cas};
-use worktree_core::model::{
+use lager_core::cas::{Resolution, resolve_unknown_cas};
+use lager_core::model::{
     EntryId, FORMAT_VERSION, LOG_FORMAT_VERSION, LogEntry, Oid, Operation, RepoState, RequestId,
     Snapshot, SnapshotId, now_ms, request_checksum,
 };
-use worktree_core::storage::CasOutcome;
+use lager_core::storage::CasOutcome;
+use serde::Serialize;
 
 use crate::metrics::StepTimer;
 use crate::repository::push::{Fence, fence_check};
@@ -91,7 +91,7 @@ pub async fn snapshot(c: &Controller, user: &str) -> Result<SnapshotReport, Repo
 
     // 6-7. Maintenance entry after the current latest entry, attached with CAS.
     let request = RequestId::new();
-    for attempt in 1..=worktree_core::limits::PUSH_RETRY_LIMIT * 2 {
+    for attempt in 1..=lager_core::limits::PUSH_RETRY_LIMIT * 2 {
         let (head, etag) = svc
             .storage
             .load_head(c.repo)
@@ -157,7 +157,7 @@ pub async fn snapshot(c: &Controller, user: &str) -> Result<SnapshotReport, Repo
             CasOutcome::Accepted(_) => true,
             CasOutcome::Conflict => false,
             CasOutcome::Unknown(_) => {
-                let until = Instant::now() + worktree_core::limits::UNKNOWN_RESULT_DEADLINE;
+                let until = Instant::now() + lager_core::limits::UNKNOWN_RESULT_DEADLINE;
                 match resolve_unknown_cas(&svc.storage, &next, &etag, entry.id, until).await {
                     Resolution::Accepted(_) => true,
                     Resolution::Rejected => false,
@@ -213,7 +213,7 @@ pub async fn auto_snapshot(registry: &Arc<Registry>, after_entries: u64) -> usiz
             c.pushed_here.store(false, Ordering::SeqCst);
             continue;
         }
-        match snapshot(&c, "worktree-maintenance").await {
+        match snapshot(&c, "lager-maintenance").await {
             Ok(r) => {
                 n += 1;
                 c.pushed_here.store(false, Ordering::SeqCst);

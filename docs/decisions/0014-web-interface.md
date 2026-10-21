@@ -37,7 +37,7 @@ coexist.
 **Sign-in.** `POST /-/api/session {user, password}` checks the Git
 password with the identity provider. Personal access tokens are refused:
 a session would get the user's full access. The answer sets the session
-cookie `worktree_session` (`HttpOnly`, `SameSite=Lax`, `Path=/-/api`
+cookie `lager_session` (`HttpOnly`, `SameSite=Lax`, `Path=/-/api`
 ([decision 16](0016-raw-files-and-markdown.md) widens it to `/`),
 `Secure` unless the server serves plain HTTP on the loopback address).
 `DELETE /-/api/session` removes it.

@@ -18,10 +18,10 @@ use crate::http::access::Directory;
 use crate::http::{AppInner, AppState};
 use crate::metrics::Metrics;
 use crate::repository::{Registry, Services};
-use worktree_core::catalog::Catalog;
-use worktree_core::config::Config;
-use worktree_core::limits;
-use worktree_core::storage::Storage;
+use lager_core::catalog::Catalog;
+use lager_core::config::Config;
+use lager_core::limits;
+use lager_core::storage::Storage;
 
 pub struct RunningServer {
     pub addr: SocketAddr,
@@ -165,8 +165,8 @@ pub async fn start_with_listener(
         disk: DiskReservations::new(&cache_root, limits::MIN_FREE_DISK_BYTES),
     });
     let registry = Registry::new(svc.clone())?;
-    let users = worktree_core::identity::connect(&cfg).await?;
-    let pull_db = worktree_core::pulls::Pulls::new(users.pool().clone());
+    let users = lager_core::identity::connect(&cfg).await?;
+    let pull_db = lager_core::pulls::Pulls::new(users.pool().clone());
     let catalog = Catalog::new(svc.storage.clone(), limits::CATALOG_CACHE);
     let directory = Arc::new(Directory::new(users, catalog));
     let pulls = Arc::new(crate::pulls::PullService::new(
@@ -177,7 +177,7 @@ pub async fn start_with_listener(
     let github = match &cfg.github {
         Some(g) => Some(Arc::new(crate::github::Github::new(
             g.clone(),
-            worktree_core::github::GithubDb::new(directory.users().pool().clone()),
+            lager_core::github::GithubDb::new(directory.users().pool().clone()),
             registry.clone(),
             directory.clone(),
         )?)),
@@ -297,12 +297,12 @@ pub async fn start_with_listener(
         tokio::spawn(
             async move { serve_http(listener, app, limits::CLIENT_IDLE_TIMEOUT, stop).await },
         );
-    tracing::info!(%addr, "worktree listening");
+    tracing::info!(%addr, "lager listening");
     let (ssh, ssh_addr) = match ssh {
         Some((config, l)) => {
             let ssh_addr = l.local_addr()?;
             let (state, stop) = (state.clone(), stop_http.subscribe());
-            tracing::info!(addr = %ssh_addr, "worktree listening for SSH");
+            tracing::info!(addr = %ssh_addr, "lager listening for SSH");
             (
                 Some(tokio::spawn(async move {
                     crate::ssh::serve(l, config, state, stop).await
@@ -338,7 +338,7 @@ pub(crate) async fn stopped(stop: &mut watch::Receiver<bool>) {
 fn bind_socket(path: &Path) -> anyhow::Result<UnixListener> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     anyhow::ensure!(
-        path.as_os_str().len() < worktree_core::config::MAX_SOCKET_PATH,
+        path.as_os_str().len() < lager_core::config::MAX_SOCKET_PATH,
         "socket path too long: {}",
         path.display()
     );
@@ -429,7 +429,7 @@ fn server_id() -> String {
     let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     match std::str::from_utf8(&buf[..end]) {
         Ok(name) if ok && !name.is_empty() => name.to_string(),
-        _ => "worktree".into(),
+        _ => "lager".into(),
     }
 }
 

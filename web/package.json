@@ -1,5 +1,5 @@
 {
-  "name": "worktree-web",
+  "name": "lager-web",
   "private": true,
   "type": "module",
   "scripts": {

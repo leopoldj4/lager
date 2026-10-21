@@ -20,7 +20,7 @@ Age alone fails in two cases:
 
 ## Decision
 
-Data removal (`worktree cleanup --delete`) runs in three steps:
+Data removal (`lager cleanup --delete`) runs in three steps:
 
 1. **Plan.** Read the head and find the obsolete objects: superseded
    snapshots, packs that only entries at or before the snapshot base use,

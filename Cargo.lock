@@ -5379,7 +5379,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "worktree-cli"
+name = "lager-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5388,11 +5388,11 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing-subscriber",
- "worktree-core",
+ "lager-core",
 ]
 
 [[package]]
-name = "worktree-core"
+name = "lager-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5416,7 +5416,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "worktree-server"
+name = "lager-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5443,7 +5443,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "webauthn-rs",
- "worktree-core",
+ "lager-core",
 ]
 
 [[package]]

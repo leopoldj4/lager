@@ -1,12 +1,12 @@
-//! Users in PostgreSQL (`[database]`), managed with `worktree user` and
-//! `worktree token`. They are the only users.
+//! Users in PostgreSQL (`[database]`), managed with `lager user` and
+//! `lager token`. They are the only users.
 //!
-//! `worktree_users` holds one row per user with a salted password hash;
-//! `worktree_user_access` holds its access levels. Every lookup reads the
+//! `lager_users` holds one row per user with a salted password hash;
+//! `lager_user_access` holds its access levels. Every lookup reads the
 //! database, so a change applies to the next request on every server.
-//! `worktree_tokens` holds personal access tokens as SHA-256 digests, and
-//! `worktree_token_access` the levels a token is limited to.
-//! `worktree_ssh_keys` holds public keys for Git over SSH.
+//! `lager_tokens` holds personal access tokens as SHA-256 digests, and
+//! `lager_token_access` the levels a token is limited to.
+//! `lager_ssh_keys` holds public keys for Git over SSH.
 //! The schema is brought up to date when the server starts.
 
 use std::collections::BTreeMap;
@@ -25,28 +25,28 @@ use crate::config::DatabaseConfig;
 use crate::limits::{DATABASE_CONNECTIONS, DATABASE_TIMEOUT};
 use crate::repo::Access;
 
-/// Schema changes, applied in order and recorded in `worktree_schema`.
+/// Schema changes, applied in order and recorded in `lager_schema`.
 /// Never edit an applied entry; append a new one.
 const MIGRATIONS: &[&str] = &[
     r#"
-CREATE TABLE worktree_users (
+CREATE TABLE lager_users (
     name text PRIMARY KEY,
     password_hash text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     updated_by text NOT NULL
 );
-CREATE TABLE worktree_user_access (
-    user_name text NOT NULL REFERENCES worktree_users (name) ON DELETE CASCADE,
+CREATE TABLE lager_user_access (
+    user_name text NOT NULL REFERENCES lager_users (name) ON DELETE CASCADE,
     -- A repository name or '*'.
     repository text NOT NULL,
     level text NOT NULL CHECK (level IN ('none', 'read', 'write', 'force')),
     PRIMARY KEY (user_name, repository)
 );
-CREATE INDEX worktree_user_access_repository ON worktree_user_access (repository);
-CREATE TABLE worktree_tokens (
+CREATE INDEX lager_user_access_repository ON lager_user_access (repository);
+CREATE TABLE lager_tokens (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_name text NOT NULL REFERENCES worktree_users (name) ON DELETE CASCADE,
+    user_name text NOT NULL REFERENCES lager_users (name) ON DELETE CASCADE,
     name text NOT NULL,
     -- SHA-256 of the whole token. The token itself is never stored.
     token_sha256 bytea NOT NULL UNIQUE,
@@ -54,48 +54,48 @@ CREATE TABLE worktree_tokens (
     expires_at timestamptz,
     last_used_at timestamptz
 );
-CREATE INDEX worktree_tokens_user ON worktree_tokens (user_name);
+CREATE INDEX lager_tokens_user ON lager_tokens (user_name);
 -- Without rows here a token has its user's access; with rows, at most these
 -- levels and never more than the user has.
-CREATE TABLE worktree_token_access (
-    token_id bigint NOT NULL REFERENCES worktree_tokens (id) ON DELETE CASCADE,
+CREATE TABLE lager_token_access (
+    token_id bigint NOT NULL REFERENCES lager_tokens (id) ON DELETE CASCADE,
     repository text NOT NULL,
     level text NOT NULL CHECK (level IN ('none', 'read', 'write', 'force')),
     PRIMARY KEY (token_id, repository)
 );
 "#,
     r#"
-ALTER TABLE worktree_users ADD COLUMN passkey_user_id text NOT NULL DEFAULT gen_random_uuid()::text;
-CREATE TABLE worktree_passkeys (
+ALTER TABLE lager_users ADD COLUMN passkey_user_id text NOT NULL DEFAULT gen_random_uuid()::text;
+CREATE TABLE lager_passkeys (
     credential_id text PRIMARY KEY,
-    user_name text NOT NULL REFERENCES worktree_users(name) ON DELETE CASCADE,
+    user_name text NOT NULL REFERENCES lager_users(name) ON DELETE CASCADE,
     name text NOT NULL,
     credential text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX worktree_passkeys_user ON worktree_passkeys(user_name);
-CREATE TABLE worktree_passkey_challenges (
+CREATE INDEX lager_passkeys_user ON lager_passkeys(user_name);
+CREATE TABLE lager_passkey_challenges (
     id text PRIMARY KEY,
-    user_name text NOT NULL REFERENCES worktree_users(name) ON DELETE CASCADE,
+    user_name text NOT NULL REFERENCES lager_users(name) ON DELETE CASCADE,
     state text NOT NULL,
     expires_at timestamptz NOT NULL DEFAULT now() + interval '5 minutes'
 );
-CREATE INDEX worktree_passkey_challenges_user ON worktree_passkey_challenges(user_name);
-CREATE INDEX worktree_passkey_challenges_expiry ON worktree_passkey_challenges(expires_at);
+CREATE INDEX lager_passkey_challenges_user ON lager_passkey_challenges(user_name);
+CREATE INDEX lager_passkey_challenges_expiry ON lager_passkey_challenges(expires_at);
 "#,
     r#"
-ALTER TABLE worktree_passkey_challenges ALTER COLUMN user_name DROP NOT NULL;
+ALTER TABLE lager_passkey_challenges ALTER COLUMN user_name DROP NOT NULL;
 -- Pending login state changes shape for account discovery.
-DELETE FROM worktree_passkey_challenges;
+DELETE FROM lager_passkey_challenges;
 "#,
     // Pull requests (docs/decisions/0019-pull-requests.md), by repository
     // UUID: a reused name starts without the old pull requests.
     r#"
-CREATE TABLE worktree_pull_numbers (
+CREATE TABLE lager_pull_numbers (
     repository text PRIMARY KEY,
     last bigint NOT NULL
 );
-CREATE TABLE worktree_pulls (
+CREATE TABLE lager_pulls (
     repository text NOT NULL,
     number bigint NOT NULL,
     title text NOT NULL,
@@ -123,10 +123,10 @@ CREATE TABLE worktree_pulls (
     closed_at timestamptz,
     PRIMARY KEY (repository, number)
 );
-CREATE INDEX worktree_pulls_state ON worktree_pulls (repository, state, number);
-CREATE UNIQUE INDEX worktree_pulls_open_branches
-    ON worktree_pulls (repository, source, target) WHERE state = 'open';
-CREATE TABLE worktree_pull_events (
+CREATE INDEX lager_pulls_state ON lager_pulls (repository, state, number);
+CREATE UNIQUE INDEX lager_pulls_open_branches
+    ON lager_pulls (repository, source, target) WHERE state = 'open';
+CREATE TABLE lager_pull_events (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     repository text NOT NULL,
     number bigint NOT NULL,
@@ -138,28 +138,28 @@ CREATE TABLE worktree_pull_events (
     oid text,
     request text UNIQUE,
     created_at timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (repository, number) REFERENCES worktree_pulls (repository, number)
+    FOREIGN KEY (repository, number) REFERENCES lager_pulls (repository, number)
         ON DELETE CASCADE
 );
-CREATE INDEX worktree_pull_events_pull ON worktree_pull_events (repository, number, id);
+CREATE INDEX lager_pull_events_pull ON lager_pull_events (repository, number, id);
 "#,
     // GitHub accounts and read-only mirrors
     // (docs/decisions/0020-github-mirrors.md).
     r#"
-CREATE TABLE worktree_github_accounts (
-    user_name text PRIMARY KEY REFERENCES worktree_users (name) ON DELETE CASCADE,
+CREATE TABLE lager_github_accounts (
+    user_name text PRIMARY KEY REFERENCES lager_users (name) ON DELETE CASCADE,
     github_id bigint NOT NULL,
     login text NOT NULL,
     -- The OAuth token. Git needs it in plain text to fetch.
     token text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE TABLE worktree_github_mirrors (
+CREATE TABLE lager_github_mirrors (
     -- The repository UUID.
     repository text PRIMARY KEY,
     name text NOT NULL,
     -- Whose GitHub account the sync uses.
-    user_name text NOT NULL REFERENCES worktree_users (name) ON DELETE CASCADE,
+    user_name text NOT NULL REFERENCES lager_users (name) ON DELETE CASCADE,
     -- owner/name on GitHub.
     github text NOT NULL,
     -- A server that starts a sync moves this ahead by a lease, so others
@@ -169,15 +169,15 @@ CREATE TABLE worktree_github_mirrors (
     error text,
     created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX worktree_github_mirrors_due ON worktree_github_mirrors (next_sync_at);
-CREATE INDEX worktree_github_mirrors_user ON worktree_github_mirrors (user_name);
+CREATE INDEX lager_github_mirrors_due ON lager_github_mirrors (next_sync_at);
+CREATE INDEX lager_github_mirrors_user ON lager_github_mirrors (user_name);
 "#,
     // Git over SSH (docs/decisions/0022-git-over-ssh.md). A key signs in
     // as one user, so a fingerprint is unique over all users.
     r#"
-CREATE TABLE worktree_ssh_keys (
+CREATE TABLE lager_ssh_keys (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_name text NOT NULL REFERENCES worktree_users (name) ON DELETE CASCADE,
+    user_name text NOT NULL REFERENCES lager_users (name) ON DELETE CASCADE,
     name text NOT NULL,
     -- 'SHA256:' and the unpadded base64 digest of the wire encoding.
     fingerprint text NOT NULL UNIQUE,
@@ -186,7 +186,7 @@ CREATE TABLE worktree_ssh_keys (
     created_at timestamptz NOT NULL DEFAULT now(),
     last_used_at timestamptz
 );
-CREATE INDEX worktree_ssh_keys_user ON worktree_ssh_keys (user_name);
+CREATE INDEX lager_ssh_keys_user ON lager_ssh_keys (user_name);
 "#,
 ];
 
@@ -200,7 +200,7 @@ SELECT id,
        public_key,
        (extract(epoch FROM created_at) * 1000)::bigint,
        (extract(epoch FROM last_used_at) * 1000)::bigint
-FROM worktree_ssh_keys
+FROM lager_ssh_keys
 WHERE user_name = $1 AND ($2::bigint IS NULL OR id = $2)
 ORDER BY id";
 
@@ -220,15 +220,15 @@ const SELECT_TOKEN_ACCESS: &str = "
 WITH t AS (
     SELECT id, user_name,
            last_used_at IS NULL OR last_used_at < now() - interval '1 minute' AS stale
-    FROM worktree_tokens
+    FROM lager_tokens
     WHERE token_sha256 = $1 AND user_name = $2
       AND (expires_at IS NULL OR expires_at > now())
 )
 SELECT t.id, t.stale, false, a.repository, a.level
-FROM t LEFT JOIN worktree_user_access a ON a.user_name = t.user_name
+FROM t LEFT JOIN lager_user_access a ON a.user_name = t.user_name
 UNION ALL
 SELECT t.id, t.stale, true, a.repository, a.level
-FROM t JOIN worktree_token_access a ON a.token_id = t.id";
+FROM t JOIN lager_token_access a ON a.token_id = t.id";
 
 /// Token id, used recently, a level of the token (not the user), repository,
 /// level.
@@ -243,8 +243,8 @@ SELECT t.id,
        (extract(epoch FROM t.last_used_at) * 1000)::bigint,
        a.repository,
        a.level
-FROM worktree_tokens t
-LEFT JOIN worktree_token_access a ON a.token_id = t.id
+FROM lager_tokens t
+LEFT JOIN lager_token_access a ON a.token_id = t.id
 WHERE t.user_name = $1
   AND ($2::bigint IS NULL OR t.id = $2)
   AND (t.expires_at IS NULL OR t.expires_at > now())
@@ -271,8 +271,8 @@ SELECT u.name,
        u.updated_by,
        a.repository,
        a.level
-FROM worktree_users u
-LEFT JOIN worktree_user_access a ON a.user_name = u.name
+FROM lager_users u
+LEFT JOIN lager_user_access a ON a.user_name = u.name
 WHERE $1::text IS NULL OR u.name = $1
 ORDER BY u.name";
 
@@ -345,11 +345,10 @@ impl PgUsers {
             // Off the request: a lost update only makes the time older.
             let pool = self.pool.clone();
             tokio::spawn(async move {
-                let r =
-                    sqlx::query("UPDATE worktree_tokens SET last_used_at = now() WHERE id = $1")
-                        .bind(id)
-                        .execute(&pool)
-                        .await;
+                let r = sqlx::query("UPDATE lager_tokens SET last_used_at = now() WHERE id = $1")
+                    .bind(id)
+                    .execute(&pool)
+                    .await;
                 if let Err(e) = r {
                     tracing::warn!(token = id, error = %e, "token use not recorded");
                 }
@@ -371,14 +370,14 @@ async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
         .execute(&mut *tx)
         .await?;
     sqlx::raw_sql(
-        "CREATE TABLE IF NOT EXISTS worktree_schema (
+        "CREATE TABLE IF NOT EXISTS lager_schema (
              version integer PRIMARY KEY,
              applied_at timestamptz NOT NULL DEFAULT now()
          )",
     )
     .execute(&mut *tx)
     .await?;
-    let current: i32 = sqlx::query_scalar("SELECT coalesce(max(version), 0) FROM worktree_schema")
+    let current: i32 = sqlx::query_scalar("SELECT coalesce(max(version), 0) FROM lager_schema")
         .fetch_one(&mut *tx)
         .await?;
     let known = MIGRATIONS.len() as i32;
@@ -388,7 +387,7 @@ async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
     );
     for (version, &sql) in (1..).zip(MIGRATIONS).skip(current as usize) {
         sqlx::raw_sql(sql).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO worktree_schema (version) VALUES ($1)")
+        sqlx::query("INSERT INTO lager_schema (version) VALUES ($1)")
             .bind(version)
             .execute(&mut *tx)
             .await?;
@@ -410,8 +409,8 @@ impl PgUsers {
         }
         let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
             "SELECT u.password_hash, a.repository, a.level
-             FROM worktree_users u
-             LEFT JOIN worktree_user_access a ON a.user_name = u.name
+             FROM lager_users u
+             LEFT JOIN lager_user_access a ON a.user_name = u.name
              WHERE u.name = $1",
         )
         .bind(user)
@@ -444,8 +443,8 @@ impl PgUsers {
     pub async fn lookup(&self, name: &str) -> Result<Option<NamedUser>, AuthError> {
         let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
             "SELECT u.password_hash, a.repository, a.level
-             FROM worktree_users u
-             LEFT JOIN worktree_user_access a ON a.user_name = u.name
+             FROM lager_users u
+             LEFT JOIN lager_user_access a ON a.user_name = u.name
              WHERE u.name = $1",
         )
         .bind(name)
@@ -484,7 +483,7 @@ impl PgUsers {
         let mut conn = self.conn().await?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
         let inserted = sqlx::query(
-            "INSERT INTO worktree_users (name, password_hash, updated_by)
+            "INSERT INTO lager_users (name, password_hash, updated_by)
              VALUES ($1, $2, $3)
              ON CONFLICT (name) DO NOTHING",
         )
@@ -513,7 +512,7 @@ impl PgUsers {
         let mut tx = conn.begin().await.map_err(unavailable)?;
         // Also locks the row until the end of the change.
         let updated = sqlx::query(
-            "UPDATE worktree_users
+            "UPDATE lager_users
              SET password_hash = coalesce($2, password_hash),
                  updated_at = now(),
                  updated_by = $3
@@ -529,7 +528,7 @@ impl PgUsers {
             return Err(UserError::NotFound(name.into()));
         }
         if let Some(access) = &change.access {
-            sqlx::query("DELETE FROM worktree_user_access WHERE user_name = $1")
+            sqlx::query("DELETE FROM lager_user_access WHERE user_name = $1")
                 .bind(name)
                 .execute(&mut *tx)
                 .await
@@ -542,7 +541,7 @@ impl PgUsers {
     }
 
     pub async fn delete(&self, name: &str, _by: &str) -> Result<(), UserError> {
-        let deleted = sqlx::query("DELETE FROM worktree_users WHERE name = $1")
+        let deleted = sqlx::query("DELETE FROM lager_users WHERE name = $1")
             .bind(name)
             .execute(&self.pool)
             .await
@@ -567,13 +566,13 @@ impl PgUsers {
         let digest = Sha256::digest(secret.as_bytes()).to_vec();
         let mut conn = self.conn().await?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
-        sqlx::query("DELETE FROM worktree_tokens WHERE user_name = $1 AND expires_at <= now()")
+        sqlx::query("DELETE FROM lager_tokens WHERE user_name = $1 AND expires_at <= now()")
             .bind(user)
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
         let count: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM worktree_tokens WHERE user_name = $1")
+            sqlx::query_scalar("SELECT count(*) FROM lager_tokens WHERE user_name = $1")
                 .bind(user)
                 .fetch_one(&mut *tx)
                 .await
@@ -584,9 +583,9 @@ impl PgUsers {
             )));
         }
         let id: Option<TokenId> = sqlx::query_scalar(
-            "INSERT INTO worktree_tokens (user_name, name, token_sha256, expires_at)
+            "INSERT INTO lager_tokens (user_name, name, token_sha256, expires_at)
              SELECT name, $2, $3, now() + make_interval(days => $4)
-             FROM worktree_users WHERE name = $1
+             FROM lager_users WHERE name = $1
              RETURNING id",
         )
         .bind(user)
@@ -602,7 +601,7 @@ impl PgUsers {
         if let Some(access) = &new.access {
             let (repos, levels) = columns(access);
             sqlx::query(
-                "INSERT INTO worktree_token_access (token_id, repository, level)
+                "INSERT INTO lager_token_access (token_id, repository, level)
                  SELECT $1, r, l FROM unnest($2::text[], $3::text[]) AS t (r, l)",
             )
             .bind(id)
@@ -626,7 +625,7 @@ impl PgUsers {
     }
 
     pub async fn delete_token(&self, user: &str, id: TokenId) -> Result<(), UserError> {
-        let deleted = sqlx::query("DELETE FROM worktree_tokens WHERE id = $1 AND user_name = $2")
+        let deleted = sqlx::query("DELETE FROM lager_tokens WHERE id = $1 AND user_name = $2")
             .bind(id)
             .bind(user)
             .execute(&self.pool)
@@ -650,8 +649,8 @@ impl PgUsers {
             "SELECT k.id, k.user_name,
                     k.last_used_at IS NULL OR k.last_used_at < now() - interval '1 minute',
                     a.repository, a.level
-             FROM worktree_ssh_keys k
-             LEFT JOIN worktree_user_access a ON a.user_name = k.user_name
+             FROM lager_ssh_keys k
+             LEFT JOIN lager_user_access a ON a.user_name = k.user_name
              WHERE k.fingerprint = $1",
         )
         .bind(fingerprint)
@@ -674,11 +673,10 @@ impl PgUsers {
             // Off the request: a lost update only makes the time older.
             let pool = self.pool.clone();
             tokio::spawn(async move {
-                let r =
-                    sqlx::query("UPDATE worktree_ssh_keys SET last_used_at = now() WHERE id = $1")
-                        .bind(id)
-                        .execute(&pool)
-                        .await;
+                let r = sqlx::query("UPDATE lager_ssh_keys SET last_used_at = now() WHERE id = $1")
+                    .bind(id)
+                    .execute(&pool)
+                    .await;
                 if let Err(e) = r {
                     tracing::warn!(ssh_key = id, error = %e, "SSH key use not recorded");
                 }
@@ -702,7 +700,7 @@ impl PgUsers {
         let mut conn = self.conn().await?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
         let count: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM worktree_ssh_keys WHERE user_name = $1")
+            sqlx::query_scalar("SELECT count(*) FROM lager_ssh_keys WHERE user_name = $1")
                 .bind(user)
                 .fetch_one(&mut *tx)
                 .await
@@ -713,8 +711,8 @@ impl PgUsers {
             )));
         }
         let id: Option<SshKeyId> = sqlx::query_scalar(
-            "INSERT INTO worktree_ssh_keys (user_name, name, fingerprint, public_key)
-             SELECT name, $2, $3, $4 FROM worktree_users WHERE name = $1
+            "INSERT INTO lager_ssh_keys (user_name, name, fingerprint, public_key)
+             SELECT name, $2, $3, $4 FROM lager_users WHERE name = $1
              ON CONFLICT (fingerprint) DO NOTHING
              RETURNING id",
         )
@@ -727,7 +725,7 @@ impl PgUsers {
         .map_err(unavailable)?;
         let Some(id) = id else {
             let exists: bool =
-                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM worktree_users WHERE name = $1)")
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM lager_users WHERE name = $1)")
                     .bind(user)
                     .fetch_one(&mut *tx)
                     .await
@@ -752,7 +750,7 @@ impl PgUsers {
     }
 
     pub async fn delete_ssh_key(&self, user: &str, id: SshKeyId) -> Result<(), UserError> {
-        let deleted = sqlx::query("DELETE FROM worktree_ssh_keys WHERE id = $1 AND user_name = $2")
+        let deleted = sqlx::query("DELETE FROM lager_ssh_keys WHERE id = $1 AND user_name = $2")
             .bind(id)
             .bind(user)
             .execute(&self.pool)
@@ -830,7 +828,7 @@ async fn set_access(
 ) -> Result<(), UserError> {
     let (repos, levels) = columns(access);
     sqlx::query(
-        "INSERT INTO worktree_user_access (user_name, repository, level)
+        "INSERT INTO lager_user_access (user_name, repository, level)
          SELECT $1, r, l FROM unnest($2::text[], $3::text[]) AS t (r, l)",
     )
     .bind(name)

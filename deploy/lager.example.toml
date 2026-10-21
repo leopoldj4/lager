@@ -1,4 +1,4 @@
-# Production configuration for compose.yaml. Copy to worktree.toml, fill in
+# Production configuration for compose.yaml. Copy to lager.toml, fill in
 # the values marked CHANGE, and keep the file private: it holds secrets.
 # Caddy terminates HTTPS in front of the server.
 
@@ -14,10 +14,10 @@ region = "auto"
 bucket = "CHANGE"
 access_key_id = "CHANGE"
 secret_access_key = "CHANGE"
-prefix = "worktree"
+prefix = "lager"
 
 [database]                     # users and access tokens
-url = "postgres://worktree:CHANGE@postgres:5432/worktree"
+url = "postgres://lager:CHANGE@postgres:5432/lager"
 
 [bus]                          # change events
 url = "nats://nats:4222"
@@ -41,6 +41,6 @@ session_secret = "CHANGE"
 
 [ssh]                          # Git over SSH; compose.yaml publishes it on port 22
 listen = "0.0.0.0:2222"
-host_key = "/etc/worktree/ssh_host_ed25519_key"
+host_key = "/etc/lager/ssh_host_ed25519_key"
 # Shown in the clone menu: git@git.example.com:<repo>.git
 public_url = "ssh://git@CHANGE"

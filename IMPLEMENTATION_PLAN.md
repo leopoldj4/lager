@@ -1,4 +1,4 @@
-# worktree implementation plan
+# lager implementation plan
 
 Build the server in three stages. Keep one Rust program for local and production use.
 

@@ -3,12 +3,12 @@
 // trying out a new deployment or a local server (scripts/local.sh).
 //
 //   bun scripts/seed.ts                                  # local server
-//   bun scripts/seed.ts --url https://git.example.com --ssh worktree
+//   bun scripts/seed.ts --url https://git.example.com --ssh lager
 //   bun scripts/seed.ts --reset                          # recreate the demo repositories
 //
 // Users and repositories need the administration commands: by default the
-// local build with .local/worktree.toml, `--ssh <host>` runs them in the
-// Compose deployment on that host (`--compose-dir`, default /opt/worktree),
+// local build with .local/lager.toml, `--ssh <host>` runs them in the
+// Compose deployment on that host (`--compose-dir`, default /opt/lager),
 // and `--cli "<command>"` names any other command. Git pushes and the pull
 // requests go to `--url` over HTTP(S), as the demo users.
 //
@@ -24,7 +24,7 @@ const { values: opts } = parseArgs({
   options: {
     url: { type: "string", default: "http://127.0.0.1:8080" },
     ssh: { type: "string" },
-    "compose-dir": { type: "string", default: "/opt/worktree" },
+    "compose-dir": { type: "string", default: "/opt/lager" },
     cli: { type: "string" },
     user: { type: "string", default: "demo" },
     reviewer: { type: "string", default: "alex" },
@@ -83,18 +83,18 @@ function adminCommand(): (args: string[]) => string[] {
     return (args) => [
       "ssh",
       opts.ssh!,
-      `cd ${shq(dir)} && docker compose exec -T worktree worktree ${args.map(shq).join(" ")}`,
+      `cd ${shq(dir)} && docker compose exec -T lager lager ${args.map(shq).join(" ")}`,
     ]
   }
   if (opts.cli) {
     const prefix = opts.cli.split(/\s+/).filter(Boolean)
     return (args) => [...prefix, ...args]
   }
-  const local = join(repoRoot, ".local/worktree.toml")
+  const local = join(repoRoot, ".local/lager.toml")
   const target = process.env.CARGO_TARGET_DIR ?? join(repoRoot, "target")
-  const bin = join(target, "debug/worktree")
+  const bin = join(target, "debug/lager")
   if (existsSync(local) && existsSync(bin)) return (args) => [bin, "-c", local, ...args]
-  return (args) => ["worktree", ...args]
+  return (args) => ["lager", ...args]
 }
 const adminCmd = adminCommand()
 const admin = (args: string[], input?: string) => run(adminCmd(args), { input })
@@ -110,7 +110,7 @@ const people: Record<string, { name: string; email: string }> = {
 }
 
 class Work {
-  dir = mkdtempSync(join(tmpdir(), "worktree-seed-"))
+  dir = mkdtempSync(join(tmpdir(), "lager-seed-"))
   /** Commit time in seconds; every commit moves it forward. */
   private clock: number
 
@@ -255,7 +255,7 @@ class Live {
     const cookie = r.headers
       .getSetCookie()
       .map((c) => c.split(";")[0])
-      .find((c) => /^worktree_session=./.test(c))
+      .find((c) => /^lager_session=./.test(c))
     if (!cookie) throw new Error(`signing in as ${user}: no session cookie`)
     const url = new URL("/-/api/live", base)
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:"

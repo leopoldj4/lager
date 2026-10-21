@@ -1,16 +1,16 @@
-# HTTPS with an automatic certificate for WORKTREE_DOMAIN. Caddy passes
+# HTTPS with an automatic certificate for LAGER_DOMAIN. Caddy passes
 # WebSocket upgrades and large push bodies through without extra settings.
-{$WORKTREE_DOMAIN} {
+{$LAGER_DOMAIN} {
 	# Counters for monitoring only; scrape them inside the network.
-	@internal path /_worktree/metrics
+	@internal path /_lager/metrics
 	respond @internal 404
 
 	# The server sends the interface's assets uncompressed. Caddy compresses
 	# only text-like types by default, so Git packs pass through unchanged.
 	encode zstd gzip
 
-	reverse_proxy worktree:8080 {
-		health_uri /_worktree/health
+	reverse_proxy lager:8080 {
+		health_uri /_lager/health
 		health_interval 5s
 	}
 }

@@ -2,7 +2,7 @@
 //! (docs/decisions/0008-users-in-postgres.md).
 //!
 //! Users and their access levels live in PostgreSQL ([`postgres`]); they
-//! are managed with `worktree user` and `worktree token`. [`PgUsers`] checks
+//! are managed with `lager user` and `lager token`. [`PgUsers`] checks
 //! a user name and password and answers with the user's access levels.
 //!
 //! Users can also sign in with personal access tokens
@@ -387,7 +387,7 @@ impl VerifiedHashes {
 
 /// The session stamp of a stored password.
 fn password_stamp(stored: &str) -> [u8; 32] {
-    credential_digest("worktree-session-stamp", stored)
+    credential_digest("lager-session-stamp", stored)
 }
 
 fn credential_digest(user: &str, password: &str) -> [u8; 32] {

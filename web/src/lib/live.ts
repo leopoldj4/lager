@@ -1,4 +1,4 @@
-// The live connection to the worktree server: one WebSocket per tab that
+// The live connection to the lager server: one WebSocket per tab that
 // carries read queries and change events
 // (docs/decisions/0013-live-connection-protocol.md).
 //

@@ -16,7 +16,7 @@ every click in the code view waits for one.
 ## Decision
 
 **Objects and refs in the server.** The server reads a read view with
-[gix](https://docs.rs/gix) (`=0.89.0`, without network or worktree
+[gix](https://docs.rs/gix) (`=0.89.0`, without network or lager
 features) instead of Git for: `refs`, the resolution of a `rev` with its
 check that a ref reaches a commit, `tree`, `blob`, the raw route, the
 history of a commit without a path, the commit of `commit`, the last commit

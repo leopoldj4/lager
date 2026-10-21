@@ -112,7 +112,7 @@ export function PullView({ repo, rest }: { repo: string; rest: string[] }) {
           truncated={cmp.data.truncated}
           oldRev={cmp.data.merge_base}
           newRev={cmp.data.head}
-          tree="worktree-pull-files"
+          tree="lager-pull-files"
         />
       )}
     </div>

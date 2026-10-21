@@ -6,7 +6,7 @@ Status: accepted. Date: October 10, 2026.
 ## Context
 
 After an accepted push, a server told the other servers with
-`POST /_worktree/notify` (`{repo, generation}`) to each address in
+`POST /_lager/notify` (`{repo, generation}`) to each address in
 `routing.servers`, authenticated with `routing.peer_token`. Requests were
 not retried and their results were ignored. Each push cost one request per
 other server, a stopped server missed events without notice, and only
@@ -19,7 +19,7 @@ servers.
 ## Decision
 
 - **NATS core publish/subscribe**, with no JetStream and no stored
-  messages. `[bus]` takes one `url`, a `subject_prefix` (`worktree`), and
+  messages. `[bus]` takes one `url`, a `subject_prefix` (`lager`), and
   `health_grace_secs` (5). Without `[bus]`, events stay on the server that
   accepted the push.
 - **Event.** After the head CAS, the receipt, and a change of the default
@@ -39,15 +39,15 @@ servers.
   read result, because every request reads the storage head. Receivers
   compare generations, not arrival order: two servers can publish for the
   same repository, and NATS orders messages only per publisher.
-- **Health.** `/_worktree/health` answers 503 `bus unavailable` before the
+- **Health.** `/_lager/health` answers 503 `bus unavailable` before the
   first connection and when the connection is down for longer than
   `health_grace_secs`. The server starts while NATS is unavailable and
   connects in the background; the client reconnects without limit and
   keeps its subscriptions.
-- **Removed.** `POST /_worktree/notify`, `routing.notify`, and
+- **Removed.** `POST /_lager/notify`, `routing.notify`, and
   `routing.peer_token`. `routing.servers` and `routing.forward` stay for
   request forwarding and the preferred server.
-- `/_worktree/metrics` stays without sign-in. New counters: `bus_published`,
+- `/_lager/metrics` stays without sign-in. New counters: `bus_published`,
   `bus_publish_failures`, `bus_received`, `bus_invalid_events`, and
   `health_bus_failures`.
 
@@ -66,4 +66,4 @@ servers.
 - Every server receives every event. Subscriptions per repository are
   possible later if the event rate needs them.
 - Local mode starts `nats-server` on 127.0.0.1:4222. An existing
-  `.local/worktree.toml` needs a `[bus]` table added by hand.
+  `.local/lager.toml` needs a `[bus]` table added by hand.

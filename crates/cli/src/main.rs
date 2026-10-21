@@ -3,21 +3,21 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use worktree_core::catalog::Catalog;
-use worktree_core::config::Config;
-use worktree_core::identity::{self, NewToken, NewUser, UserChange};
-use worktree_core::model::RepoId;
-use worktree_core::repo::{Access, RefRule, RepoSettings};
-use worktree_core::storage::Storage;
+use lager_core::catalog::Catalog;
+use lager_core::config::Config;
+use lager_core::identity::{self, NewToken, NewUser, UserChange};
+use lager_core::model::RepoId;
+use lager_core::repo::{Access, RefRule, RepoSettings};
+use lager_core::storage::Storage;
 
 #[derive(Parser)]
 #[command(
-    name = "worktree",
-    about = "Administration of a worktree Git server and its storage"
+    name = "lager",
+    about = "Administration of a lager Git server and its storage"
 )]
 struct Cli {
-    /// Server configuration [default: worktree.toml].
-    #[arg(long, short, env = "WORKTREE_CONFIG", global = true)]
+    /// Server configuration [default: lager.toml].
+    #[arg(long, short, env = "LAGER_CONFIG", global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
@@ -224,20 +224,20 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             unsafe_short_retention,
         } => {
             let id = repo_id(&catalog, &name).await?;
-            let opts = worktree_core::cleanup::CleanupOptions {
+            let opts = lager_core::cleanup::CleanupOptions {
                 pack_retention: Duration::from_secs(pack_retention_hours * 3600),
                 record_retention: Duration::from_secs(record_retention_hours * 3600),
                 removal_window: Duration::from_secs(600),
-                clock_margin: worktree_core::cleanup::CLOCK_MARGIN,
+                clock_margin: lager_core::cleanup::CLOCK_MARGIN,
                 report_only: !delete,
             };
-            let min = worktree_core::cleanup::CleanupOptions::minimum_retention();
+            let min = lager_core::cleanup::CleanupOptions::minimum_retention();
             anyhow::ensure!(
                 unsafe_short_retention || opts.pack_retention.min(opts.record_retention) >= min,
                 "retention periods must be at least {} seconds",
                 min.as_secs()
             );
-            let report = worktree_core::cleanup::cleanup(&storage, id, &opts).await?;
+            let report = lager_core::cleanup::cleanup(&storage, id, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::User { .. } | Cmd::Token { .. } | Cmd::SshKey { .. } => {
@@ -246,8 +246,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Backup {
             cmd: BackupCmd::Export { name, out },
         } => {
-            let m = worktree_core::backup::export(&storage, repo_id(&catalog, &name).await?, &out)
-                .await?;
+            let m =
+                lager_core::backup::export(&storage, repo_id(&catalog, &name).await?, &out).await?;
             println!(
                 "exported generation {} ({} records, {} packs)",
                 m.generation,
@@ -258,7 +258,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Backup {
             cmd: BackupCmd::Import { dir, name },
         } => {
-            let head = worktree_core::backup::import(&storage, &dir).await?;
+            let head = lager_core::backup::import(&storage, &dir).await?;
             if let Some(name) = name {
                 catalog
                     .attach(&RepoSettings::new(&name, head.repository))
@@ -316,7 +316,7 @@ async fn repo_cmd(catalog: &Catalog, cmd: RepoCmd) -> anyhow::Result<()> {
             rule.update = update.unwrap_or(rule.update);
             rule.force = force.unwrap_or(rule.force);
             rule.delete = delete.unwrap_or(rule.delete);
-            worktree_core::repo::validate_ref_rule(&rule)?;
+            lager_core::repo::validate_ref_rule(&rule)?;
             let r = catalog
                 .update(&name, |r| {
                     r.ref_rules.retain(|x| x.pattern != rule.pattern);
@@ -374,7 +374,7 @@ fn print_ref_rules(r: &RepoSettings) {
     }
 }
 
-const DEFAULT_CONFIG: &str = "worktree.toml";
+const DEFAULT_CONFIG: &str = "lager.toml";
 
 /// Who changed a user, as the database records it.
 fn operator() -> String {
@@ -422,11 +422,13 @@ fn new_password_hash() -> anyhow::Result<String> {
         );
     }
     identity::validate_password(&password)?;
-    Ok(worktree_core::password::PasswordHash::new(
-        &password,
-        worktree_core::password::DEFAULT_ITERATIONS,
+    Ok(
+        lager_core::password::PasswordHash::new(
+            &password,
+            lager_core::password::DEFAULT_ITERATIONS,
+        )
+        .to_string(),
     )
-    .to_string())
 }
 
 async fn user_cmd(cfg: &Config, cmd: UserCmd) -> anyhow::Result<()> {
@@ -563,7 +565,7 @@ async fn ssh_key_cmd(cfg: &Config, cmd: SshKeyCmd) -> anyhow::Result<()> {
 
 /// "3 days ago" or "in 3 days" for a time in milliseconds since 1970.
 fn relative(ms: u64) -> String {
-    let now = worktree_core::model::now_ms();
+    let now = lager_core::model::now_ms();
     let (d, future) = if ms > now {
         (ms - now, true)
     } else {

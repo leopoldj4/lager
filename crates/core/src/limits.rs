@@ -58,9 +58,9 @@ pub const DATABASE_CONNECTIONS: u32 = 8;
 /// Longest wait for a database connection; the request then fails with 503.
 pub const DATABASE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// First NATS subject token: events go to `worktree.repo.<id>.changed` and
-/// `worktree.repo.<id>.pull`.
-pub const BUS_SUBJECT_PREFIX: &str = "worktree";
+/// First NATS subject token: events go to `lager.repo.<id>.changed` and
+/// `lager.repo.<id>.pull`.
+pub const BUS_SUBJECT_PREFIX: &str = "lager";
 /// The health check fails when the NATS connection is down for longer.
 pub const BUS_HEALTH_GRACE: Duration = Duration::from_secs(5);
 

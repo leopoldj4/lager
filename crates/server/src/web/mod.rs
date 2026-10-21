@@ -34,8 +34,8 @@ use axum::routing::{get, post};
 use tokio::sync::watch;
 
 use crate::http::AppState;
-use worktree_core::config::WebConfig;
-use worktree_core::identity::{AuthError, Identity, TOKEN_PREFIX};
+use lager_core::config::WebConfig;
+use lager_core::identity::{AuthError, Identity, TOKEN_PREFIX};
 
 pub struct Web {
     pub sessions: session::Sessions,
@@ -71,7 +71,7 @@ impl Web {
             ssh_url,
             sessions: session::Sessions::new(
                 &cfg.session_secret,
-                worktree_core::limits::SESSION_DAYS,
+                lager_core::limits::SESSION_DAYS,
                 secure
                     || cfg
                         .public_origin
@@ -306,9 +306,9 @@ pub fn wants_page(headers: &HeaderMap) -> bool {
 }
 
 /// The built interface (`bun run build` in `web/`), installed beside the programs
-/// in `share/worktree/web`. Without it, only the API under `/-/api/` answers.
+/// in `share/lager/web`. Without it, only the API under `/-/api/` answers.
 fn built_interface() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?.parent()?.join("share/worktree/web");
+    let dir = exe.parent()?.parent()?.join("share/lager/web");
     dir.join("_shell.html").is_file().then_some(dir)
 }

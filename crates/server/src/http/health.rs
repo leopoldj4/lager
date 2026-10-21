@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::bus::Bus;
-use worktree_core::storage::Storage;
+use lager_core::storage::Storage;
 
 /// A storage answer is reused for this long, so that frequent health checks
 /// from several load balancers cost at most one storage request each time.

@@ -65,7 +65,7 @@ pub fn webauthn(origin: &str) -> anyhow::Result<Webauthn> {
             .ok_or_else(|| anyhow::anyhow!("missing passkey host"))?,
         &url,
     )?
-    .rp_name("worktree")
+    .rp_name("lager")
     .build()?)
 }
 
@@ -123,7 +123,7 @@ fn discoverable(options: CreationChallengeResponse) -> Result<serde_json::Value>
 
 /// Whether a user name, in any case, is taken.
 async fn name_taken(conn: &mut PgConnection, name: &str) -> Result<bool> {
-    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM worktree_users WHERE lower(name) = lower($1))")
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM lager_users WHERE lower(name) = lower($1))")
         .bind(name)
         .fetch_one(conn)
         .await
@@ -132,7 +132,7 @@ async fn name_taken(conn: &mut PgConnection, name: &str) -> Result<bool> {
 
 impl PgUsers {
     pub async fn passkeys(&self, user: &str) -> Result<Vec<PasskeyInfo>> {
-        let rows: Vec<(String, String)> = sqlx::query_as("SELECT credential_id, name FROM worktree_passkeys WHERE user_name = $1 ORDER BY created_at, credential_id")
+        let rows: Vec<(String, String)> = sqlx::query_as("SELECT credential_id, name FROM lager_passkeys WHERE user_name = $1 ORDER BY created_at, credential_id")
             .bind(user).fetch_all(&self.pool).await.map_err(unavailable)?;
         Ok(rows
             .into_iter()
@@ -143,7 +143,7 @@ impl PgUsers {
     /// Whether the account has a password, as opposed to passkeys only.
     pub async fn has_password(&self, user: &str) -> Result<bool> {
         let hash: Option<String> =
-            sqlx::query_scalar("SELECT password_hash FROM worktree_users WHERE name = $1")
+            sqlx::query_scalar("SELECT password_hash FROM lager_users WHERE name = $1")
                 .bind(user)
                 .fetch_optional(&self.pool)
                 .await
@@ -161,19 +161,18 @@ impl PgUsers {
     ) -> std::result::Result<(), PasskeyError> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         let (hash, _) = account(&mut tx, user).await?;
-        let deleted = sqlx::query(
-            "DELETE FROM worktree_passkeys WHERE user_name = $1 AND credential_id = $2",
-        )
-        .bind(user)
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(unavailable)?;
+        let deleted =
+            sqlx::query("DELETE FROM lager_passkeys WHERE user_name = $1 AND credential_id = $2")
+                .bind(user)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(unavailable)?;
         if deleted.rows_affected() != 1 {
             return Err(AuthError::BadCredentials.into());
         }
         let left: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM worktree_passkeys WHERE user_name = $1")
+            sqlx::query_scalar("SELECT count(*) FROM lager_passkeys WHERE user_name = $1")
                 .bind(user)
                 .fetch_one(&mut *tx)
                 .await
@@ -198,7 +197,7 @@ impl PgUsers {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         let (hash, handle) = account(&mut tx, user).await?;
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT credential FROM worktree_passkeys WHERE user_name = $1 ORDER BY credential_id",
+            "SELECT credential FROM lager_passkeys WHERE user_name = $1 ORDER BY credential_id",
         )
         .bind(user)
         .fetch_all(&mut *tx)
@@ -225,7 +224,7 @@ impl PgUsers {
             name: name.trim().into(),
         };
         // Bounded per account, including concurrent starts on different servers.
-        sqlx::query("DELETE FROM worktree_passkey_challenges WHERE expires_at <= now() OR id IN (SELECT id FROM worktree_passkey_challenges WHERE user_name = $1 ORDER BY expires_at DESC OFFSET 4)")
+        sqlx::query("DELETE FROM lager_passkey_challenges WHERE expires_at <= now() OR id IN (SELECT id FROM lager_passkey_challenges WHERE user_name = $1 ORDER BY expires_at DESC OFFSET 4)")
             .bind(user).execute(&mut *tx).await.map_err(unavailable)?;
         let id = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
         let pending = Pending {
@@ -235,7 +234,7 @@ impl PgUsers {
             ceremony,
         };
         sqlx::query(
-            "INSERT INTO worktree_passkey_challenges (id, user_name, state) VALUES ($1, $2, $3)",
+            "INSERT INTO lager_passkey_challenges (id, user_name, state) VALUES ($1, $2, $3)",
         )
         .bind(&id)
         .bind(user)
@@ -249,7 +248,7 @@ impl PgUsers {
 
     /// Consume before verification, including failed attempts. The id is an HttpOnly cookie.
     async fn take_passkey(&self, id: &str, origin: &str) -> Result<(Pending, String)> {
-        let row: Option<(String, String)> = sqlx::query_as("DELETE FROM worktree_passkey_challenges WHERE id = $1 AND expires_at > now() RETURNING state, (expires_at - interval '5 minutes')::text")
+        let row: Option<(String, String)> = sqlx::query_as("DELETE FROM lager_passkey_challenges WHERE id = $1 AND expires_at > now() RETURNING state, (expires_at - interval '5 minutes')::text")
             .bind(id).fetch_optional(&self.pool).await.map_err(unavailable)?;
         let (state, started_at) = row.ok_or(AuthError::BadCredentials)?;
         let pending: Pending = decode(&state)?;
@@ -283,7 +282,7 @@ impl PgUsers {
             return Err(AuthError::BadCredentials);
         }
         let count: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM worktree_passkeys WHERE user_name = $1")
+            sqlx::query_scalar("SELECT count(*) FROM lager_passkeys WHERE user_name = $1")
                 .bind(user)
                 .fetch_one(&mut *tx)
                 .await
@@ -291,7 +290,7 @@ impl PgUsers {
         if count >= 20 {
             return Err(AuthError::BadCredentials);
         }
-        let inserted = sqlx::query("INSERT INTO worktree_passkeys (credential_id, user_name, name, credential) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING")
+        let inserted = sqlx::query("INSERT INTO lager_passkeys (credential_id, user_name, name, credential) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING")
             .bind(credential_id(&key)).bind(user).bind(name).bind(encode(&key)?).execute(&mut *tx).await.map_err(unavailable)?;
         if inserted.rows_affected() != 1 {
             return Err(AuthError::BadCredentials);
@@ -334,10 +333,10 @@ impl PgUsers {
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
-        sqlx::query("DELETE FROM worktree_passkey_challenges WHERE expires_at <= now() OR (user_name IS NULL AND id = $1)")
+        sqlx::query("DELETE FROM lager_passkey_challenges WHERE expires_at <= now() OR (user_name IS NULL AND id = $1)")
             .bind(previous).execute(&mut *tx).await.map_err(unavailable)?;
         let count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM worktree_passkey_challenges WHERE user_name IS NULL",
+            "SELECT count(*) FROM lager_passkey_challenges WHERE user_name IS NULL",
         )
         .fetch_one(&mut *tx)
         .await
@@ -348,7 +347,7 @@ impl PgUsers {
             ));
         }
         let id = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
-        sqlx::query("INSERT INTO worktree_passkey_challenges (id, state) VALUES ($1, $2)")
+        sqlx::query("INSERT INTO lager_passkey_challenges (id, state) VALUES ($1, $2)")
             .bind(&id)
             .bind(encode(&pending)?)
             .execute(&mut *tx)
@@ -376,7 +375,7 @@ impl PgUsers {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         let row: Option<(String, String, String)> = sqlx::query_as(
             "SELECT u.name, u.password_hash, p.credential
-             FROM worktree_users u JOIN worktree_passkeys p ON p.user_name = u.name
+             FROM lager_users u JOIN lager_passkeys p ON p.user_name = u.name
              WHERE u.passkey_user_id = $1 AND p.credential_id = $2
                AND u.updated_at <= $3::text::timestamptz
              FOR UPDATE OF u, p",
@@ -395,9 +394,15 @@ impl PgUsers {
         key.update_credential(&result);
         // Verify and update the current credential while holding its row lock, so removal
         // and concurrent counter updates cannot authenticate using stale credential data.
-        sqlx::query("UPDATE worktree_passkeys SET credential = $1 WHERE credential_id = $2 AND user_name = $3")
-            .bind(encode(&key)?).bind(self::credential_id(&key)).bind(&user)
-            .execute(&mut *tx).await.map_err(unavailable)?;
+        sqlx::query(
+            "UPDATE lager_passkeys SET credential = $1 WHERE credential_id = $2 AND user_name = $3",
+        )
+        .bind(encode(&key)?)
+        .bind(self::credential_id(&key))
+        .bind(&user)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         Ok((user, password_stamp(&hash)))
     }
@@ -485,7 +490,7 @@ impl PgUsers {
             return Err(taken(&name));
         }
         sqlx::query(
-            "INSERT INTO worktree_users (name, password_hash, updated_by, passkey_user_id)
+            "INSERT INTO lager_users (name, password_hash, updated_by, passkey_user_id)
              VALUES ($1, $2, $1, $3)",
         )
         .bind(&name)
@@ -494,7 +499,7 @@ impl PgUsers {
         .execute(&mut *tx)
         .await
         .map_err(unavailable)?;
-        let inserted = sqlx::query("INSERT INTO worktree_passkeys (credential_id, user_name, name, credential) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING")
+        let inserted = sqlx::query("INSERT INTO lager_passkeys (credential_id, user_name, name, credential) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING")
             .bind(credential_id(&key)).bind(&name).bind(SIGN_UP_PASSKEY).bind(encode(&key)?).execute(&mut *tx).await.map_err(unavailable)?;
         if inserted.rows_affected() != 1 {
             return Err(PasskeyError::Conflict(
@@ -512,7 +517,7 @@ fn taken(name: &str) -> PasskeyError {
 
 async fn account(conn: &mut PgConnection, user: &str) -> Result<(String, String)> {
     sqlx::query_as(
-        "SELECT password_hash, passkey_user_id FROM worktree_users WHERE name = $1 FOR UPDATE",
+        "SELECT password_hash, passkey_user_id FROM lager_users WHERE name = $1 FOR UPDATE",
     )
     .bind(user)
     .fetch_optional(conn)

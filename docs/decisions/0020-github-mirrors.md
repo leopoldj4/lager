@@ -23,8 +23,8 @@ scope for private repositories. A GitHub App would allow read-only
 access, but needs installations and expiring tokens; it can replace the
 OAuth app later without a change to mirrors.
 
-**Data.** PostgreSQL, schema version 5: `worktree_github_accounts` (one
-GitHub account and its token per user) and `worktree_github_mirrors`
+**Data.** PostgreSQL, schema version 5: `lager_github_accounts` (one
+GitHub account and its token per user) and `lager_github_mirrors`
 (repository UUID, name, user, `owner/name` on GitHub, when the next sync
 is due, the last success, the last error). The token is stored in plain
 text: Git needs it to fetch. The catalog record of a mirror names its

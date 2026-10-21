@@ -25,12 +25,12 @@ use crate::http::access::Directory;
 use crate::repository::{
     AccessCheck, CacheInstance, Origin, PendingPush, PushAccess, Registry, RepoError,
 };
-use worktree_core::identity::Identity;
-use worktree_core::model::{
+use lager_core::identity::Identity;
+use lager_core::model::{
     Oid, Operation, RefName, RefUpdate, RepoId, RequestId, branch_ref, pull_receipt_ref, pull_ref,
 };
-use worktree_core::pulls::{Commits, NewPull, Pull, PullError, PullState, Pulls};
-use worktree_core::repo::{Access, RepoSettings};
+use lager_core::pulls::{Commits, NewPull, Pull, PullError, PullState, Pulls};
+use lager_core::repo::{Access, RepoSettings};
 
 /// The user of log entries that only move refs of pull requests. No user
 /// name contains `:`.
@@ -384,7 +384,7 @@ impl PullService {
                 "this repository is a read-only mirror of github.com/{m}"
             )));
         }
-        worktree_core::pulls::validate_text(Some(title), body)?;
+        lager_core::pulls::validate_text(Some(title), body)?;
         if source == target {
             return Err(PullOpError::Invalid("choose two different branches".into()));
         }

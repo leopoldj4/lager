@@ -2,12 +2,12 @@
 # Runs on the Compose host, after building or loading the image. Also usable over SSH stdin.
 set -Eeuo pipefail
 
-image=${1:?usage: update.sh worktree:<full-commit-sha> [compose-directory]}
-[[ "$image" =~ ^worktree:[0-9a-f]{40}$ ]] || {
+image=${1:?usage: update.sh lager:<full-commit-sha> [compose-directory]}
+[[ "$image" =~ ^lager:[0-9a-f]{40}$ ]] || {
   echo 'Expected an image tagged with the full Git commit SHA.' >&2
   exit 1
 }
-cd "${2:-/opt/worktree}"
+cd "${2:-/opt/lager}"
 
 # Serialize CI and manual invocations on this host as well as in Actions.
 exec 9>.deploy.lock
@@ -22,13 +22,13 @@ cp -p .env .env.before-update
 healthy() {
   local container ip
   for ((attempt = 0; attempt < 30; attempt++)); do
-    container=$(docker compose ps -q worktree) || container=
+    container=$(docker compose ps -q lager) || container=
     ip=
     if [[ -n "$container" ]]; then
       ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' "$container" | head -n 1) || ip=
     fi
     if [[ -n "$ip" ]] && curl --fail --silent --show-error --connect-timeout 2 --max-time 3 \
-        "http://$ip:8080/_worktree/health" >/dev/null 2>&1; then
+        "http://$ip:8080/_lager/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
@@ -41,12 +41,12 @@ rollback() {
   trap - EXIT HUP INT TERM
   if ((status != 0)); then
     echo 'Deployment failed; restoring the previous image.' >&2
-    docker compose logs --tail 50 worktree >&2 || true
+    docker compose logs --tail 50 lager >&2 || true
     cp -p .env.before-update .env
-    if docker compose up -d --no-deps --pull never worktree && healthy; then
+    if docker compose up -d --no-deps --pull never lager && healthy; then
       echo 'Previous image restored and healthy.' >&2
     else
-      echo 'ROLLBACK FAILED: inspect /opt/worktree and the worktree container.' >&2
+      echo 'ROLLBACK FAILED: inspect /opt/lager and the lager container.' >&2
     fi
   fi
   exit "$status"
@@ -64,15 +64,15 @@ import sys
 
 path = Path('.env')
 lines = path.read_text().splitlines(keepends=True)
-pattern = re.compile(r'^\s*(?:export\s+)?WORKTREE_IMAGE\s*=')
+pattern = re.compile(r'^\s*(?:export\s+)?LAGER_IMAGE\s*=')
 lines = [line for line in lines if not pattern.match(line)]
 text = ''.join(lines)
 if text and not text.endswith('\n'):
     text += '\n'
-path.write_text(text + f'WORKTREE_IMAGE={sys.argv[1]}\n')
+path.write_text(text + f'LAGER_IMAGE={sys.argv[1]}\n')
 PY
 
-docker compose up -d --no-deps --pull never worktree
+docker compose up -d --no-deps --pull never lager
 healthy
 trap - EXIT HUP INT TERM
 echo "Deployed $image; health check passed."

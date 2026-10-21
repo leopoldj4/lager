@@ -31,9 +31,9 @@ to exist for a name to be valid; until they do, only grants reach it.
 ## Consequences
 
 - Repositories with one-segment names stay in the catalog and in
-  `worktree repo list`, but no URL reaches them and their names cannot be
-  granted. Move one with `worktree backup export` and
-  `worktree backup import --name <user>/<name>`, then delete the old one.
+  `lager repo list`, but no URL reaches them and their names cannot be
+  granted. Move one with `lager backup export` and
+  `lager backup import --name <user>/<name>`, then delete the old one.
 - The local development repository is now `dev/demo`.
 - A user who is deleted and created again, or a new user with an old
   name, owns the repositories under that name.

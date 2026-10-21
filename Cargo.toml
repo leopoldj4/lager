@@ -11,7 +11,7 @@ license = "FSL-1.1-ALv2"
 # Password hashing is deliberately expensive and prohibitively slow in an
 # unoptimized local build. Keep the application debuggable while optimizing
 # the crate that performs PBKDF2.
-[profile.dev.package.worktree-core]
+[profile.dev.package.lager-core]
 opt-level = 3
 
 # Likewise for the gix crates that decompress and decode objects in the web
@@ -47,7 +47,7 @@ opt-level = 3
 
 # Versions are fixed with `=` so that the tested combination is the built one.
 [workspace.dependencies]
-worktree-core = { path = "crates/core" }
+lager-core = { path = "crates/core" }
 anyhow = "=1.0.104"
 async-nats = { version = "=0.50.0", default-features = false, features = ["ring"] }
 async-compression = { version = "=0.4.48", features = ["tokio", "gzip"] }

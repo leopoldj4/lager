@@ -31,9 +31,9 @@ use crate::http::{
 };
 use crate::repository::{Origin, PendingPush};
 use crate::server::stopped;
-use worktree_core::identity::{AuthError, Identity, ssh_fingerprint};
-use worktree_core::limits;
-use worktree_core::model::RequestId;
+use lager_core::identity::{AuthError, Identity, ssh_fingerprint};
+use lager_core::limits;
+use lager_core::model::RequestId;
 
 /// Session channels a connection can have open at the same time. Git uses
 /// one.
@@ -53,7 +53,7 @@ pub fn config(host_key: PrivateKey) -> Arc<Config> {
     let mut methods = MethodSet::empty();
     methods.push(MethodKind::PublicKey);
     Arc::new(Config {
-        server_id: russh::SshId::Standard("SSH-2.0-worktree".into()),
+        server_id: russh::SshId::Standard("SSH-2.0-lager".into()),
         methods,
         keys: vec![host_key],
         // OpenSSH clients start with "none" to learn the methods.
@@ -322,7 +322,7 @@ impl russh::server::Handler for Connection {
         let user = self.identity.as_ref().map_or("", |i| i.name());
         fail(
             pending.channel,
-            format!("Hi {user}! You signed in, but worktree serves only Git over SSH."),
+            format!("Hi {user}! You signed in, but lager serves only Git over SSH."),
         );
         Ok(())
     }
@@ -361,7 +361,7 @@ fn parse_command(data: &[u8]) -> Option<(Service, String)> {
     }
     let path = path.trim_start_matches('/').trim_end_matches('/');
     let name = path.strip_suffix(".git").unwrap_or(path);
-    worktree_core::repo::validate_repo_name(name).ok()?;
+    lager_core::repo::validate_repo_name(name).ok()?;
     Some((service, name.to_string()))
 }
 

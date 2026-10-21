@@ -10,9 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get},
 };
-use worktree_core::identity::{
-    SshKey, SshKeyId, UserError, parse_public_key, validate_ssh_key_name,
-};
+use lager_core::identity::{SshKey, SshKeyId, UserError, parse_public_key, validate_ssh_key_name};
 
 pub fn router() -> Router<AppState> {
     Router::new()

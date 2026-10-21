@@ -34,14 +34,14 @@ balancer sends a client to any server, and a changed host key stops
 clients. The key belongs with the other startup settings in the file
 (decision 15), not in the database.
 
-**Keys.** PostgreSQL holds public keys in `worktree_ssh_keys` (schema
+**Keys.** PostgreSQL holds public keys in `lager_ssh_keys` (schema
 version 6): user, name, SHA-256 fingerprint as `ssh-keygen -l` shows it,
 the key without its comment, creation and last use (updated at most once a
 minute). A fingerprint is unique across users, since a key signs in as
 one user. A user has at most 100 keys. A key has its user's full access;
 limited access stays with tokens (decision 9). Accepted types: Ed25519,
 ECDSA, and RSA; not DSA, security keys, or certificates.
-`worktree ssh-key add <user> <file|->`, `list`, and `delete` manage them;
+`lager ssh-key add <user> <file|->`, `list`, and `delete` manage them;
 deleting the user deletes its keys.
 Signed-in users manage their own keys on the settings page
 (`/-/settings/ssh-keys`) through `GET`, `POST`, and `DELETE`
@@ -58,7 +58,7 @@ commands finish within the shutdown timeout.
 
 ## Consequences
 
-- The deployment publishes port 22 for worktree; the host's own SSH server
+- The deployment publishes port 22 for lager; the host's own SSH server
   moves to another port first.
 - Log entries record the user name, as for HTTP. The request log has one
   `ssh request` record per command with its exit status.

@@ -18,10 +18,10 @@ use tokio::process::Command;
 
 use crate::http::AppInner;
 use crate::repository::{ReadView, RepoError};
-use worktree_core::catalog::CatalogError;
-use worktree_core::identity::Identity;
-use worktree_core::model::RefName;
-use worktree_core::repo::{Access, RepoSettings};
+use lager_core::catalog::CatalogError;
+use lager_core::identity::Identity;
+use lager_core::model::RefName;
+use lager_core::repo::{Access, RepoSettings};
 
 /// Files above this size are shown without contents.
 const MAX_BLOB_BYTES: u64 = 1024 * 1024;
@@ -219,7 +219,7 @@ impl From<std::io::Error> for ReadError {
 /// The repository for a name if `who` may read it. Unknown repositories
 /// and missing permission look the same.
 pub async fn readable(s: &AppInner, who: &Identity, name: &str) -> Result<RepoSettings, ReadError> {
-    if worktree_core::repo::validate_repo_name(name).is_err() {
+    if lager_core::repo::validate_repo_name(name).is_err() {
         return Err(ReadError::not_found("repository"));
     }
     let repo = s
@@ -399,7 +399,7 @@ async fn repos(s: &AppInner, who: &Identity) -> Result<Value, ReadError> {
         .await
         .map_err(|e| ReadError::from(RepoError::from(e)))?
         .into_iter()
-        .filter(|r| r.state == worktree_core::model::RepoState::Active)
+        .filter(|r| r.state == lager_core::model::RepoState::Active)
         .map(|r| r.settings())
         .collect();
     let repos: Vec<RepoSummary> = all
@@ -426,14 +426,14 @@ async fn create(
     if *who == Identity::Anonymous {
         return Err(ReadError::new("unauthorized", "sign in first"));
     }
-    worktree_core::repo::validate_repo_name(name).map_err(|e| ReadError::bad(e.to_string()))?;
+    lager_core::repo::validate_repo_name(name).map_err(|e| ReadError::bad(e.to_string()))?;
     if !s.directory.may_create_on_push(who, name) {
         return Err(ReadError::new(
             "forbidden",
             format!("you cannot create repositories under {name}"),
         ));
     }
-    let mut settings = RepoSettings::new(name, worktree_core::model::RepoId::new());
+    let mut settings = RepoSettings::new(name, lager_core::model::RepoId::new());
     settings.anonymous_read = public;
     let repo = match s.directory.catalog().create(&settings, who.name()).await {
         Ok(r) => r,

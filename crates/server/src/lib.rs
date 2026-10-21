@@ -1,4 +1,4 @@
-//! worktree-server: the Git HTTP server that keeps repositories in
+//! lager-server: the Git HTTP server that keeps repositories in
 //! S3-compatible storage.
 //!
 //! See IMPLEMENTATION_PLAN.md for the stages.

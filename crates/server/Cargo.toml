@@ -1,16 +1,16 @@
 [package]
-name = "worktree-server"
+name = "lager-server"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "worktree-server"
+name = "lager-server"
 path = "src/main.rs"
 
 [dependencies]
-worktree-core.workspace = true
+lager-core.workspace = true
 anyhow.workspace = true
 async-compression.workspace = true
 async-nats.workspace = true

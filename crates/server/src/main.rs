@@ -1,27 +1,24 @@
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use worktree_core::config::Config;
-use worktree_core::storage::Storage;
+use lager_core::config::Config;
+use lager_core::storage::Storage;
 
 #[derive(Parser)]
-#[command(
-    name = "worktree-server",
-    about = "Git server with S3-compatible storage"
-)]
+#[command(name = "lager-server", about = "Git server with S3-compatible storage")]
 struct Cli {
-    /// Server configuration [default: worktree.toml].
-    #[arg(long, short, env = "WORKTREE_CONFIG")]
+    /// Server configuration [default: lager.toml].
+    #[arg(long, short, env = "LAGER_CONFIG")]
     config: Option<PathBuf>,
 }
 
-const DEFAULT_CONFIG: &str = "worktree.toml";
+const DEFAULT_CONFIG: &str = "lager.toml";
 
 fn main() {
     // Git runs this program as the proc-receive hook through a symlink.
     let argv0 = std::env::args_os().next().unwrap_or_default();
     if Path::new(&argv0).file_name().and_then(|f| f.to_str()) == Some("proc-receive") {
-        std::process::exit(worktree_server::proc_receive::run_proc_receive());
+        std::process::exit(lager_server::proc_receive::run_proc_receive());
     }
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -41,8 +38,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let config_path = cli.config.unwrap_or_else(|| DEFAULT_CONFIG.into());
     let cfg = Config::load(&config_path)?;
     let storage = Storage::from_config(&cfg)?;
-    let server = worktree_server::server::start(cfg, storage).await?;
-    eprintln!("worktree serving on {}", server.url());
+    let server = lager_server::server::start(cfg, storage).await?;
+    eprintln!("lager serving on {}", server.url());
     use tokio::signal::unix::{SignalKind, signal};
     let mut term = signal(SignalKind::terminate())?;
     let mut int = signal(SignalKind::interrupt())?;
@@ -50,7 +47,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         _ = term.recv() => {}
         _ = int.recv() => {}
     }
-    eprintln!("worktree stopping; a second signal stops at once");
+    eprintln!("lager stopping; a second signal stops at once");
     // Stopping at any point is safe: storage decides every push.
     tokio::select! {
         _ = server.shutdown() => {}

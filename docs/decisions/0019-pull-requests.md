@@ -17,10 +17,10 @@ head (decision 7). A push must not depend on anything but storage.
 
 **Where the data lives.** PostgreSQL holds the pull requests, keyed by
 repository UUID, so a reused name starts without the old ones:
-`worktree_pulls` (number, title, body, author, source and target branch,
+`lager_pulls` (number, title, body, author, source and target branch,
 state, the source and target commits last recorded, their merge base, the
-merge), `worktree_pull_events` (comments, pushes to the source branch,
-closing, reopening, merging), and `worktree_pull_numbers` (the last number
+merge), `lager_pull_events` (comments, pushes to the source branch,
+closing, reopening, merging), and `lager_pull_numbers` (the last number
 per repository). It is schema version 4. Every change raises the pull
 request's `version`. One open pull request per source and target branch.
 
@@ -81,7 +81,7 @@ by the server have an empty one.
 need a session; creating and commenting need read access, closing needs
 authorship or write access, merging needs write access. The server sends
 `pull {repo, number, version}` to subscribers of the repository, through
-NATS subject `worktree.repo.<id>.pull`. `pull` answers the comparison that
+NATS subject `lager.repo.<id>.pull`. `pull` answers the comparison that
 shows the changes (`base`, `head`) and, for open pull requests, whether
 they merge cleanly; the check writes its objects to a temporary directory.
 

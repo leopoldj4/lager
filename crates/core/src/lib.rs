@@ -1,4 +1,4 @@
-//! The parts of worktree that the server and the command line share:
+//! The parts of lager that the server and the command line share:
 //! configuration, fixed limits, the stored data model, storage, the catalog,
 //! repository settings, identities, pull requests, GitHub mirrors,
 //! and the storage-only operations of the administration commands.

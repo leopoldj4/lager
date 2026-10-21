@@ -18,14 +18,14 @@ changed.
 
 - **Only in the database:** users, their passwords and access levels, and
   personal access tokens. `[[users]]`, development passwords,
-  `worktree hash-password`, and `[identity]` are removed.
+  `lager hash-password`, and `[identity]` are removed.
 - **Only in the catalog in storage:** the repository name to UUID map, the
   default branch, `anonymous_read`, and ref rules. `[[repos]]` and
-  `catalog.kind` are removed. `worktree repo set-ref-rule`,
-  `delete-ref-rule`, and `show` manage ref rules; `worktree backup import
+  `catalog.kind` are removed. `lager repo set-ref-rule`,
+  `delete-ref-rule`, and `show` manage ref rules; `lager backup import
   --name` gives an imported repository a name in the catalog.
 - **Only in the file:** `server.listen`, `server.cache_dir` (default
-  `/var/cache/worktree`), the storage service (`[storage]`: endpoint,
+  `/var/cache/lager`), the storage service (`[storage]`: endpoint,
   region, bucket, keys, prefix), `database.url`, `bus.url`, and
   `web.session_secret`.
 - **Fixed in code** (`crates/core/src/limits.rs`): all former `[limits]`,
@@ -37,7 +37,7 @@ changed.
   balancer terminates HTTPS; plain HTTP is permitted on every address),
   `[routing]` and request forwarding, `web.origins` (the Vite development
   server forwards with its own host, which passes the origin check), and
-  `web.dir`: the interface is found in `share/worktree/web` beside the
+  `web.dir`: the interface is found in `share/lager/web` beside the
   programs, where the container image installs it.
 - **Snapshots** without a server list: the server that accepted a push
   creates the next automatic snapshot. Two servers that both do keep one
@@ -49,11 +49,11 @@ changed.
 
 - Every server needs PostgreSQL for signed-in requests and storage for
   everything, as before; there is no way in without the database.
-- The first user is created with `worktree user create`. The local script
+- The first user is created with `lager user create`. The local script
   does this for `dev`.
 - Existing configuration files do not load until rewritten. Repositories
-  in `[[repos]]` must be moved to the catalog with `worktree backup export`
-  and `worktree backup import --name`.
+  in `[[repos]]` must be moved to the catalog with `lager backup export`
+  and `lager backup import --name`.
 - Catalog records of earlier versions keep loading: their `customer` field
   is ignored.
 - Without forwarding, a repository's cache can be built on every server

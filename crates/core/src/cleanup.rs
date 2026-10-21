@@ -260,7 +260,7 @@ async fn attach_fence(
         id: EntryId::new(),
         generation: head.generation + 1,
         request: RequestId::new(),
-        request_checksum: request_checksum("worktree-cleanup", &[]),
+        request_checksum: request_checksum("lager-cleanup", &[]),
         operation: Operation::Removal {
             packs,
             expires_at_ms,
@@ -268,7 +268,7 @@ async fn attach_fence(
         },
         refs: vec![],
         packs: vec![],
-        user: "worktree-cleanup".into(),
+        user: "lager-cleanup".into(),
         rules_version: 0,
         received_at_ms: now_ms(),
     };

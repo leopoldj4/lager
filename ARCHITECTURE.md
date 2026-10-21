@@ -1,4 +1,4 @@
-# worktree design
+# lager design
 
 Status: proposed design. Date: September 27, 2026.
 
@@ -317,7 +317,7 @@ Set separate retention periods for operation records and recoverable contents. O
 
 ## 10. Rust code arrangement
 
-Use one Cargo workspace with three crates: `worktree-core` for the shared modules, `worktree-server` for the modules that run Git and serve clients, and `worktree-cli` for the administration commands. The command line does not depend on the server crate and does not run Git ([decision 11](docs/decisions/0011-snapshots-only-on-the-server.md)).
+Use one Cargo workspace with three crates: `lager-core` for the shared modules, `lager-server` for the modules that run Git and serve clients, and `lager-cli` for the administration commands. The command line does not depend on the server crate and does not run Git ([decision 11](docs/decisions/0011-snapshots-only-on-the-server.md)).
 
 | Module | Crate | Work |
 |---|---|---|

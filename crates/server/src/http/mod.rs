@@ -22,14 +22,14 @@ use self::access::{AuthError, Directory, Identity};
 use self::process::{Guards, Input, spawn_service};
 use crate::git::hook;
 use crate::repository::{Origin, PendingPush, PushAccess, Registry, RepoError};
-use worktree_core::catalog::CatalogError;
-use worktree_core::limits;
-use worktree_core::model::RequestId;
-use worktree_core::repo::{Access, RepoSettings};
+use lager_core::catalog::CatalogError;
+use lager_core::limits;
+use lager_core::model::RequestId;
+use lager_core::repo::{Access, RepoSettings};
 
-pub const REQUEST_ID_HEADER: &str = "x-worktree-request-id";
+pub const REQUEST_ID_HEADER: &str = "x-lager-request-id";
 /// Set on every response while the server stops.
-pub const DRAINING_HEADER: &str = "x-worktree-draining";
+pub const DRAINING_HEADER: &str = "x-lager-draining";
 
 pub struct AppInner {
     pub registry: Arc<Registry>,
@@ -51,16 +51,16 @@ pub fn router(state: AppState) -> Router {
     if state.web.is_some() {
         r = r.merge(crate::web::router());
     }
-    r.route("/_worktree/health", get(ready))
-        .route("/_worktree/live", get(|| async { "ok\n" }))
-        .route("/_worktree/metrics", get(metrics))
+    r.route("/_lager/health", get(ready))
+        .route("/_lager/live", get(|| async { "ok\n" }))
+        .route("/_lager/metrics", get(metrics))
         .fallback(git_handler)
         .layer(middleware::from_fn_with_state(state.clone(), request_id))
         .with_state(state)
 }
 
 /// Readiness for a load balancer: 503 while the storage service does not
-/// answer, while the change bus is disconnected, or while the server stops. `/_worktree/live` only shows that the
+/// answer, while the change bus is disconnected, or while the server stops. `/_lager/live` only shows that the
 /// process runs.
 async fn ready(State(s): State<AppState>) -> Response {
     use health::NotReady;
@@ -133,25 +133,25 @@ async fn metrics(State(s): State<AppState>) -> Response {
             st.downloaded_bytes.load(Relaxed),
         ),
     ] {
-        text.push_str(&format!("worktree_{name} {v}\n"));
+        text.push_str(&format!("lager_{name} {v}\n"));
     }
     let mut caches = 0;
     for c in s.registry.controllers() {
         caches += c.cached_generation().await.is_some() as u64;
     }
-    text.push_str(&format!("worktree_caches {caches}\n"));
+    text.push_str(&format!("lager_caches {caches}\n"));
     if let Some(web) = &s.web {
         text.push_str(&format!(
-            "worktree_live_open_connections {}\n",
+            "lager_live_open_connections {}\n",
             web.connections.load(Relaxed)
         ));
     }
     text.push_str(&format!(
-        "worktree_draining {}\n",
+        "lager_draining {}\n",
         s.health.is_draining() as u8
     ));
     text.push_str(&format!(
-        "worktree_git_processes_in_use {}\n",
+        "lager_git_processes_in_use {}\n",
         limits::MAX_GIT_PROCESSES - s.processes.available_permits()
     ));
     (
@@ -217,7 +217,7 @@ fn parse_git_path(path: &str) -> Option<GitRoute> {
         )
     };
     let name = name.strip_suffix(".git").unwrap_or(name);
-    worktree_core::repo::validate_repo_name(name).ok()?;
+    lager_core::repo::validate_repo_name(name).ok()?;
     Some(match route {
         None => GitRoute::InfoRefs(name.to_string()),
         Some(s) => GitRoute::Rpc(name.to_string(), s),
@@ -235,7 +235,7 @@ fn unauthorized() -> Response {
     let mut r = plain(StatusCode::UNAUTHORIZED, "authentication required");
     r.headers_mut().insert(
         header::WWW_AUTHENTICATE,
-        HeaderValue::from_static("Basic realm=\"worktree\""),
+        HeaderValue::from_static("Basic realm=\"lager\""),
     );
     r
 }

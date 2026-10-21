@@ -1,4 +1,4 @@
-# worktree
+# lager
 
 A Git server in Rust that keeps repositories in an S3-compatible storage
 service. Clients use standard Git over smart HTTP. Any number of servers
@@ -30,17 +30,17 @@ The script adds your `~/.ssh/id_ed25519.pub` (or ECDSA or RSA key) to `dev`
 for Git over SSH ([decision 22](docs/decisions/0022-git-over-ssh.md)).
 
 The web interface is at http://127.0.0.1:8080/ (sign in as `dev` / `dev-password`).
-A `.local/worktree.toml` from before the minimal configuration
+A `.local/lager.toml` from before the minimal configuration
 ([decision 15](docs/decisions/0015-minimal-configuration.md)) no longer
 loads; remove it and the script writes a new one.
 
 For GitHub mirrors, register a GitHub OAuth app with the callback URL
 `http://127.0.0.1:8080/-/api/github/callback` and start with
-`WORKTREE_GITHUB_CLIENT_ID=... WORKTREE_GITHUB_CLIENT_SECRET=... scripts/local.sh`.
+`LAGER_GITHUB_CLIENT_ID=... LAGER_GITHUB_CLIENT_SECRET=... scripts/local.sh`.
 
 It needs Rust (rustup reads `rust-toolchain.toml`), the OpenSSL headers
 (`libssl-dev`), Bun, Docker with Compose, and Git 2.45 or later.
-`docker compose -p worktree-local down -v` removes the stored data.
+`docker compose -p lager-local down -v` removes the stored data.
 
 ### Demo data
 
@@ -54,11 +54,11 @@ empty one. `alex` has `write` on the website and `read` on the others.
 
 ```bash
 bun scripts/seed.ts                                            # the local server
-bun scripts/seed.ts --url https://git.example.com --ssh worktree # a deployment
+bun scripts/seed.ts --url https://git.example.com --ssh lager # a deployment
 ```
 
 `--ssh` runs the administration commands in the Compose deployment on that
-host (`--compose-dir`, default `/opt/worktree`); `--cli "<command>"` names
+host (`--compose-dir`, default `/opt/lager`); `--cli "<command>"` names
 any other. Repositories that exist already are skipped; `--reset` deletes
 and seeds them again. `--user`, `--reviewer`, and `--password` change the
 names and the password.
@@ -68,36 +68,36 @@ names and the password.
 The server and the administration command line are separate programs:
 
 ```text
-worktree-server [-c worktree.toml]
+lager-server [-c lager.toml]
 ```
 
 ```text
-worktree user create <name> [--access repo=level]...   # asks for the password
-worktree user list
-worktree user set-password <name>
-worktree user set-access <name> [repo=level]...       # replaces all levels
-worktree user delete <name>
-worktree token create <user> <name> [--access repo=level]... [--expires-days N]
-worktree token list <user>
-worktree token delete <user> <id>
-worktree ssh-key add <user> <file|-> [--name <name>]  # e.g. ~/.ssh/id_ed25519.pub
-worktree ssh-key list <user>
-worktree ssh-key delete <user> <id>
-worktree repo create <name> [--default-branch main]
-worktree repo delete <name>
-worktree repo set-default-branch <name> <branch>
-worktree repo set-public <name> true|false   # read without signing in
-worktree repo set-ref-rule <name> <pattern> [--update L] [--force L] [--delete L]
-worktree repo delete-ref-rule <name> <pattern>
-worktree repo show <name>
-worktree repo list
-worktree cleanup <name> [--delete]            # report, or remove, obsolete data
-worktree backup export <name> <dir>
-worktree backup import <dir> [--name <name>]
+lager user create <name> [--access repo=level]...   # asks for the password
+lager user list
+lager user set-password <name>
+lager user set-access <name> [repo=level]...       # replaces all levels
+lager user delete <name>
+lager token create <user> <name> [--access repo=level]... [--expires-days N]
+lager token list <user>
+lager token delete <user> <id>
+lager ssh-key add <user> <file|-> [--name <name>]  # e.g. ~/.ssh/id_ed25519.pub
+lager ssh-key list <user>
+lager ssh-key delete <user> <id>
+lager repo create <name> [--default-branch main]
+lager repo delete <name>
+lager repo set-default-branch <name> <branch>
+lager repo set-public <name> true|false   # read without signing in
+lager repo set-ref-rule <name> <pattern> [--update L] [--force L] [--delete L]
+lager repo delete-ref-rule <name> <pattern>
+lager repo show <name>
+lager repo list
+lager cleanup <name> [--delete]            # report, or remove, obsolete data
+lager backup export <name> <dir>
+lager backup import <dir> [--name <name>]
 ```
 
-Both programs read the server configuration (`-c`, `WORKTREE_CONFIG`, or
-`./worktree.toml`). `repo`, `cleanup`, and `backup` use the
+Both programs read the server configuration (`-c`, `LAGER_CONFIG`, or
+`./lager.toml`). `repo`, `cleanup`, and `backup` use the
 storage service directly; `user`, `token`, and `ssh-key` use the database.
 The server has no management API
 ([decision 10](docs/decisions/0010-no-admin-api.md)).
@@ -129,13 +129,13 @@ Ref rules set the levels that changes to matching refs need. A pattern is a
 ref name or a prefix ending in `*`; the most specific one applies:
 
 ```bash
-worktree repo set-ref-rule org/app refs/heads/main --delete force
-worktree repo set-ref-rule org/app 'refs/heads/release/*' --update force
+lager repo set-ref-rule org/app refs/heads/main --delete force
+lager repo set-ref-rule org/app 'refs/heads/release/*' --update force
 ```
 
 Personal access tokens (`rgpat_…`) work in place of a user's
 password: `git clone https://alice:rgpat_…@git.example.com/org/app.git`.
-`worktree token create` prints one once, optionally limited to some
+`lager token create` prints one once, optionally limited to some
 repositories (`--access org/app=read`) and with an expiry. A token never has
 more access than its user. See
 [decision 9](docs/decisions/0009-personal-access-tokens.md).
@@ -154,7 +154,7 @@ timings are fixed in `crates/core/src/limits.rs`.
 ```toml
 [server]
 listen = "0.0.0.0:8080"            # plain HTTP; a load balancer terminates HTTPS
-# cache_dir = "/var/cache/worktree"  # the default; local SSD, can be removed at any time
+# cache_dir = "/var/cache/lager"     # the default; local SSD, can be removed at any time
 
 [storage]                          # S3-compatible, with conditional writes
 endpoint = "https://s3.example.com"  # leave out for AWS S3; http:// for local development
@@ -165,7 +165,7 @@ secret_access_key = "..."          # restrict to the prefix
 prefix = "prod"                    # key prefix in the bucket; default none
 
 [database]                         # users and access tokens
-url = "postgres://worktree:...@db.example.com/worktree?sslmode=verify-full"
+url = "postgres://lager:...@db.example.com/lager?sslmode=verify-full"
 
 [bus]                              # change events between servers (NATS)
 url = "nats://nats.internal:4222"  # without [bus], events stay on this server
@@ -184,25 +184,25 @@ Every server is plain HTTP behind a load balancer that terminates HTTPS
 and spreads requests over the servers. Any server can answer any request;
 it fills its cache for the repository on first use. The server that
 accepts a push creates the next automatic snapshot (every 200 entries).
-The web interface is served from `share/worktree/web` beside the programs
+The web interface is served from `share/lager/web` beside the programs
 (the container image includes it; `scripts/local.sh` links it into
 `target/`); without it, only the
 API under `/-/api/` answers.
 
 ## Operation
 
-- `GET /_worktree/health`: the load balancer check. 503 while the storage
+- `GET /_lager/health`: the load balancer check. 503 while the storage
   service does not answer (checked at most once per second), while the NATS
   connection of `[bus]` is down for longer than 5 seconds or has
-  not been made yet, or while the server stops. `GET /_worktree/live` only shows that the process runs.
+  not been made yet, or while the server stops. `GET /_lager/live` only shows that the process runs.
 - On `SIGTERM` or `SIGINT` the server stops cleanly: the health check fails
   for 5 seconds while requests are still served, then the server
   accepts no new connections and waits up to 180 seconds for
   running requests and pushes. Responses meanwhile carry
-  `x-worktree-draining: 1`. A
+  `x-lager-draining: 1`. A
   second signal stops at once, which is also safe. Allow the service
   manager enough time (for systemd, `TimeoutStopSec` above 185 seconds).
-- `GET /_worktree/metrics`: counters and median, 95th, and 99th percentile
+- `GET /_lager/metrics`: counters and median, 95th, and 99th percentile
   delays per push step, in Prometheus text format. It needs no sign-in;
   keep it away from the public network.
 - After an accepted push, the server publishes the repository and generation
@@ -234,9 +234,9 @@ API under `/-/api/` answers.
   branch within about a minute. Mirrors are read-only: pushes and pull
   requests are refused. **Stop syncing** keeps the repository and makes it
   writable. See [decision 20](docs/decisions/0020-github-mirrors.md).
-- Every response has an `x-worktree-request-id` header. A push uses the same
+- Every response has an `x-lager-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
-  `remote: worktree: accepted ...` line. Logs never contain credentials or
+  `remote: lager: accepted ...` line. Logs never contain credentials or
   repository contents.
 - If the storage service is unavailable, new reads and writes fail with 503.
   A push whose result is unknown says so; the client should fetch before it
@@ -247,31 +247,31 @@ API under `/-/api/` answers.
 Build it from the `Dockerfile`, tagged with the commit:
 
 ```bash
-docker build -t worktree:$(git rev-parse --short HEAD) .
+docker build -t lager:$(git rev-parse --short HEAD) .
 ```
 
-The image holds worktree (`/usr/local/bin/worktree-server` and
-`/usr/local/bin/worktree`), the
-built web interface (`/usr/local/share/worktree/web`), Git from Debian
+The image holds lager (`/usr/local/bin/lager-server` and
+`/usr/local/bin/lager`), the
+built web interface (`/usr/local/share/lager/web`), Git from Debian
 trixie, tini as PID 1,
-and CA certificates. It runs `worktree-server` as user 10001 and reads
-`/etc/worktree/worktree.toml`; mount the configuration as a secret, and the
-cache at `/var/cache/worktree` on local disk. Set the container stop timeout
+and CA certificates. It runs `lager-server` as user 10001 and reads
+`/etc/lager/lager.toml`; mount the configuration as a secret, and the
+cache at `/var/cache/lager` on local disk. Set the container stop timeout
 above 185 seconds, so that running pushes finish.
 
-`deploy/` runs it on one host with Docker Compose: Caddy for HTTPS, worktree,
+`deploy/` runs it on one host with Docker Compose: Caddy for HTTPS, lager,
 NATS, and PostgreSQL, with repositories in an external S3-compatible service.
 
 For updates to an existing deployment, see the [deployment update guide](deploy/README.md).
 
 ```bash
-docker build -t worktree:$(git rev-parse --short HEAD) .   # note the image name
+docker build -t lager:$(git rev-parse --short HEAD) .   # note the image name
 cd deploy
 cp .env.example .env                               # domain, image, database password
-cp worktree.example.toml worktree.toml             # storage keys, session secret
+cp lager.example.toml lager.toml                   # storage keys, session secret
 docker compose up -d
-docker compose exec worktree worktree user create <name> --access '*=force'
-docker compose exec worktree worktree token create <name> laptop
+docker compose exec lager lager user create <name> --access '*=force'
+docker compose exec lager lager token create <name> laptop
 ```
 
 To run storage on the same host instead (for example SeaweedFS on the
@@ -281,7 +281,7 @@ containers through the host firewall:
 
 ```yaml
 services:
-  worktree:
+  lager:
     extra_hosts:
       - "s3:host-gateway"
 ```
@@ -327,10 +327,10 @@ The Cargo workspace has three crates:
 
 | Crate | Contents |
 |---|---|
-| `crates/core` (`worktree-core`) | Configuration, fixed limits, record formats, storage, catalog, identities, repository creation and deletion, history reading, data removal, and backup. |
-| `crates/server` (`worktree-server`) | The Git process wrapper, the repository engine (caches and pushes), snapshots, Git HTTP requests, access checks, limits, change events, the web API and live connection, server assembly, and the `proc-receive` hook program. |
+| `crates/core` (`lager-core`) | Configuration, fixed limits, record formats, storage, catalog, identities, repository creation and deletion, history reading, data removal, and backup. |
+| `crates/server` (`lager-server`) | The Git process wrapper, the repository engine (caches and pushes), snapshots, Git HTTP requests, access checks, limits, change events, the web API and live connection, server assembly, and the `proc-receive` hook program. |
 | `web` | The web interface. The server serves its built files. |
-| `crates/cli` (`worktree-cli`, binary `worktree`) | The administration commands. It does not depend on the server crate. |
+| `crates/cli` (`lager-cli`, binary `lager`) | The administration commands. It does not depend on the server crate. |
 
 ## License
 

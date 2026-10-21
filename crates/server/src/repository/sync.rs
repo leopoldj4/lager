@@ -6,15 +6,15 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use lager_core::history::{Chain, chain_state, load_chain, load_entries};
 use serde::{Deserialize, Serialize};
-use worktree_core::history::{Chain, chain_state, load_chain, load_entries};
 
 use super::{CacheInstance, CacheState, Controller, Known, RepoError};
 use crate::metrics::StepTimer;
-use worktree_core::model::{
+use lager_core::model::{
     EntryId, Head, IncarnationId, LogEntry, PackRef, RefState, RefUpdate, RepoId,
 };
-use worktree_core::storage::{ETag, Storage};
+use lager_core::storage::{ETag, Storage};
 
 /// Saved in each cache after a complete local change. Never trusted alone.
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,7 +25,7 @@ struct Marker {
     entry: EntryId,
 }
 
-const MARKER: &str = "worktree-state.json";
+const MARKER: &str = "lager-state.json";
 
 /// Downloads a pack, checks it, and adds it to the repository.
 pub async fn install_pack(
@@ -317,7 +317,7 @@ impl Controller {
         if m.generation != head.generation {
             // Unknown revision of that older head: the next check differs and
             // updates the cache from the marker's generation.
-            marker_head.revision = worktree_core::model::RevisionId::new();
+            marker_head.revision = lager_core::model::RevisionId::new();
             marker_head.snapshot = None;
         }
         Ok(Known {

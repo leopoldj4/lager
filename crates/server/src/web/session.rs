@@ -10,10 +10,10 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 
 use crate::http::access::Directory;
-use worktree_core::identity::{AuthError, Identity};
-use worktree_core::password::{constant_time_eq, hmac_sha256};
+use lager_core::identity::{AuthError, Identity};
+use lager_core::password::{constant_time_eq, hmac_sha256};
 
-pub const COOKIE: &str = "worktree_session";
+pub const COOKIE: &str = "lager_session";
 /// The whole site: the API and the raw files under each repository. Git
 /// requests carry the cookie too, but Git authentication ignores it.
 pub const COOKIE_PATH: &str = "/";
@@ -40,7 +40,7 @@ impl Sessions {
         hmac_sha256(
             &self.secret,
             &[
-                b"worktree-session-v1\0",
+                b"lager-session-v1\0",
                 user.as_bytes(),
                 b"\0",
                 expires.to_string().as_bytes(),
@@ -138,5 +138,5 @@ pub fn cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<Strin
 }
 
 fn now_secs() -> u64 {
-    worktree_core::model::now_ms() / 1000
+    lager_core::model::now_ms() / 1000
 }

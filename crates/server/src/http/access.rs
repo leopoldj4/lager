@@ -1,17 +1,17 @@
 //! Identity checks, repository names, and permissions.
 //!
 //! Users and their access levels come from the database
-//! ([`worktree_core::identity`]); repository names and settings come from
+//! ([`lager_core::identity`]); repository names and settings come from
 //! the repository catalog in storage. Both apply to the next request
 //! without a restart.
 
 use base64::Engine;
 
-use worktree_core::catalog::Catalog;
-pub use worktree_core::identity::{AuthError, Identity};
-use worktree_core::identity::{NamedUser, PgUsers};
-use worktree_core::repo::{Access, RepoSettings};
-use worktree_core::storage::StorageError;
+use lager_core::catalog::Catalog;
+pub use lager_core::identity::{AuthError, Identity};
+use lager_core::identity::{NamedUser, PgUsers};
+use lager_core::repo::{Access, RepoSettings};
+use lager_core::storage::StorageError;
 
 /// A push to a missing repository creates it when the user has at least
 /// this access to the name (docs/decisions/0005-create-on-push.md).
@@ -68,7 +68,7 @@ impl Directory {
         if *who == Identity::Anonymous {
             return false;
         }
-        let probe = RepoSettings::new(name, worktree_core::model::RepoId(uuid::Uuid::nil()));
+        let probe = RepoSettings::new(name, lager_core::model::RepoId(uuid::Uuid::nil()));
         self.access(who, &probe) >= CREATE_ON_PUSH
     }
 

@@ -8,9 +8,9 @@ use serde_json::{Value, json};
 use super::read::{Query, ReadError, RepoSummary, readable};
 use crate::http::AppInner;
 use crate::repository::RepoError;
-use worktree_core::catalog::CatalogError;
-use worktree_core::identity::Identity;
-use worktree_core::repo::{RepoSettings, validate_repo_name};
+use lager_core::catalog::CatalogError;
+use lager_core::identity::Identity;
+use lager_core::repo::{RepoSettings, validate_repo_name};
 
 pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadError> {
     let name = match &q {

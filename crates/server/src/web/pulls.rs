@@ -12,10 +12,10 @@ use super::read::{COMMIT_FORMAT, Git, MAX_DIFF_BYTES, Query, ReadError, parse_co
 use crate::git::MergeTree;
 use crate::http::AppInner;
 use crate::pulls::PullOpError;
-use worktree_core::identity::Identity;
-use worktree_core::model::Oid;
-use worktree_core::pulls::{PullError, PullState};
-use worktree_core::repo::{Access, RepoSettings};
+use lager_core::identity::Identity;
+use lager_core::model::Oid;
+use lager_core::pulls::{PullError, PullState};
+use lager_core::repo::{Access, RepoSettings};
 
 const MAX_PULLS: u32 = 100;
 /// Commits shown for one comparison.

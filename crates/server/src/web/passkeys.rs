@@ -9,11 +9,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
+use lager_core::identity::passkeys::PasskeyError;
+use lager_core::identity::{AuthError, Identity};
 use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
-use worktree_core::identity::passkeys::PasskeyError;
-use worktree_core::identity::{AuthError, Identity};
 
-const COOKIE: &str = "worktree_passkey";
+const COOKIE: &str = "lager_passkey";
 
 pub fn router() -> Router<AppState> {
     Router::new()

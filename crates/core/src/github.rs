@@ -62,13 +62,12 @@ impl GithubDb {
     }
 
     pub async fn account(&self, user: &str) -> Result<Option<Account>, GithubDbError> {
-        let row: Option<(String, String)> = sqlx::query_as(
-            "SELECT login, token FROM worktree_github_accounts WHERE user_name = $1",
-        )
-        .bind(user)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(unavailable)?;
+        let row: Option<(String, String)> =
+            sqlx::query_as("SELECT login, token FROM lager_github_accounts WHERE user_name = $1")
+                .bind(user)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(unavailable)?;
         Ok(row.map(|(login, token)| Account { login, token }))
     }
 
@@ -82,7 +81,7 @@ impl GithubDb {
         token: &str,
     ) -> Result<(), GithubDbError> {
         sqlx::query(
-            "INSERT INTO worktree_github_accounts (user_name, github_id, login, token)
+            "INSERT INTO lager_github_accounts (user_name, github_id, login, token)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (user_name) DO UPDATE
              SET github_id = $2, login = $3, token = $4, created_at = now()",
@@ -95,7 +94,7 @@ impl GithubDb {
         .await
         .map_err(unavailable)?;
         sqlx::query(
-            "UPDATE worktree_github_mirrors SET next_sync_at = now()
+            "UPDATE lager_github_mirrors SET next_sync_at = now()
              WHERE user_name = $1 AND error IS NOT NULL",
         )
         .bind(user)
@@ -107,7 +106,7 @@ impl GithubDb {
 
     /// Forgets the account. Its mirrors stay and stop syncing.
     pub async fn disconnect(&self, user: &str) -> Result<(), GithubDbError> {
-        sqlx::query("DELETE FROM worktree_github_accounts WHERE user_name = $1")
+        sqlx::query("DELETE FROM lager_github_accounts WHERE user_name = $1")
             .bind(user)
             .execute(&self.pool)
             .await
@@ -118,7 +117,7 @@ impl GithubDb {
     pub async fn mirrors(&self, user: &str) -> Result<Vec<Mirror>, GithubDbError> {
         let rows: Vec<(String, String, Option<i64>, Option<String>)> = sqlx::query_as(
             "SELECT name, github, (extract(epoch FROM synced_at) * 1000)::bigint, error
-             FROM worktree_github_mirrors WHERE user_name = $1 ORDER BY name",
+             FROM lager_github_mirrors WHERE user_name = $1 ORDER BY name",
         )
         .bind(user)
         .fetch_all(&self.pool)
@@ -145,7 +144,7 @@ impl GithubDb {
         github: &str,
     ) -> Result<(), GithubDbError> {
         sqlx::query(
-            "INSERT INTO worktree_github_mirrors (repository, name, user_name, github)
+            "INSERT INTO lager_github_mirrors (repository, name, user_name, github)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (repository) DO NOTHING",
         )
@@ -162,7 +161,7 @@ impl GithubDb {
     /// The user's mirror with this name, by repository.
     pub async fn find(&self, user: &str, name: &str) -> Result<Option<RepoId>, GithubDbError> {
         let id: Option<String> = sqlx::query_scalar(
-            "SELECT repository FROM worktree_github_mirrors WHERE user_name = $1 AND name = $2",
+            "SELECT repository FROM lager_github_mirrors WHERE user_name = $1 AND name = $2",
         )
         .bind(user)
         .bind(name)
@@ -173,7 +172,7 @@ impl GithubDb {
     }
 
     pub async fn remove(&self, repo: RepoId) -> Result<(), GithubDbError> {
-        sqlx::query("DELETE FROM worktree_github_mirrors WHERE repository = $1")
+        sqlx::query("DELETE FROM lager_github_mirrors WHERE repository = $1")
             .bind(repo.to_string())
             .execute(&self.pool)
             .await
@@ -183,7 +182,7 @@ impl GithubDb {
 
     /// Follows a rename of the mirror's repository.
     pub async fn rename(&self, repo: RepoId, name: &str) -> Result<(), GithubDbError> {
-        sqlx::query("UPDATE worktree_github_mirrors SET name = $2 WHERE repository = $1")
+        sqlx::query("UPDATE lager_github_mirrors SET name = $2 WHERE repository = $1")
             .bind(repo.to_string())
             .bind(name)
             .execute(&self.pool)
@@ -195,17 +194,17 @@ impl GithubDb {
     /// Takes the mirror that is due longest and leases it for `lease`.
     pub async fn claim(&self, lease: Duration) -> Result<Option<Due>, GithubDbError> {
         let row: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
-            "UPDATE worktree_github_mirrors m
+            "UPDATE lager_github_mirrors m
              SET next_sync_at = now() + make_interval(secs => $1)
              WHERE m.repository = (
-                 SELECT repository FROM worktree_github_mirrors
+                 SELECT repository FROM lager_github_mirrors
                  WHERE next_sync_at <= now()
                  ORDER BY next_sync_at
                  LIMIT 1
                  FOR UPDATE SKIP LOCKED
              )
              RETURNING m.repository, m.name, m.user_name, m.github,
-                 (SELECT token FROM worktree_github_accounts a WHERE a.user_name = m.user_name)",
+                 (SELECT token FROM lager_github_accounts a WHERE a.user_name = m.user_name)",
         )
         .bind(lease.as_secs_f64())
         .fetch_optional(&self.pool)
@@ -234,7 +233,7 @@ impl GithubDb {
         next: Duration,
     ) -> Result<(), GithubDbError> {
         sqlx::query(
-            "UPDATE worktree_github_mirrors
+            "UPDATE lager_github_mirrors
              SET next_sync_at = now() + make_interval(secs => $2),
                  synced_at = CASE WHEN $3::text IS NULL THEN now() ELSE synced_at END,
                  error = $3

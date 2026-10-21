@@ -21,18 +21,18 @@ use tokio::sync::{Notify, Semaphore, watch};
 use crate::git::hook::{HookCommand, HookResponse};
 use crate::http::access::Directory;
 use crate::repository::{AccessCheck, Origin, PendingPush, PushAccess, Registry, RepoError};
-use worktree_core::catalog::CatalogError;
-use worktree_core::config::GithubConfig;
-use worktree_core::github::{Due, GithubDb, GithubDbError, Mirror};
-use worktree_core::identity::Identity;
-use worktree_core::limits;
-use worktree_core::model::{Oid, Operation, RefName, RepoState, RequestId};
-use worktree_core::repo::{Access, RepoSettings, validate_repo_name};
+use lager_core::catalog::CatalogError;
+use lager_core::config::GithubConfig;
+use lager_core::github::{Due, GithubDb, GithubDbError, Mirror};
+use lager_core::identity::Identity;
+use lager_core::limits;
+use lager_core::model::{Oid, Operation, RefName, RepoState, RequestId};
+use lager_core::repo::{Access, RepoSettings, validate_repo_name};
 
 /// The user of log entries of mirror syncs. No user name contains `:`.
 const MIRROR_USER: &str = ":github";
 const API: &str = "https://api.github.com";
-const USER_AGENT: &str = concat!("worktree/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("lager/", env!("CARGO_PKG_VERSION"));
 /// Repositories listed for picking: ten pages of 100.
 const MAX_LIST_PAGES: u32 = 10;
 
@@ -194,7 +194,7 @@ impl Github {
             .await?)
     }
 
-    fn token_of(account: Option<worktree_core::github::Account>) -> Result<String, GithubError> {
+    fn token_of(account: Option<lager_core::github::Account>) -> Result<String, GithubError> {
         account.map(|a| a.token).ok_or(GithubError::NotConnected)
     }
 
@@ -263,7 +263,7 @@ impl Github {
         };
         let name = format!("{user}/{}", r.name);
         validate_repo_name(&name).map_err(|e| GithubError::Invalid(e.to_string()))?;
-        let mut settings = RepoSettings::new(&name, worktree_core::model::RepoId::new());
+        let mut settings = RepoSettings::new(&name, lager_core::model::RepoId::new());
         settings.default_branch = r.default_branch.clone();
         settings.mirror = Some(r.full_name.clone());
         let catalog = self.directory.catalog();

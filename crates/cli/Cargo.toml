@@ -1,16 +1,16 @@
 [package]
-name = "worktree-cli"
+name = "lager-cli"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "worktree"
+name = "lager"
 path = "src/main.rs"
 
 [dependencies]
-worktree-core.workspace = true
+lager-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true

@@ -10,14 +10,14 @@ use std::time::Instant;
 use super::{CacheInstance, Controller, Known, Origin, PendingPush, PushAccess, RepoError};
 use crate::git::hook::{HookCommand, HookResponse, HookResult};
 use crate::metrics::StepTimer;
-use worktree_core::cas::{Resolution, jitter, resolve_unknown_cas};
-use worktree_core::limits;
-use worktree_core::model::{
+use lager_core::cas::{Resolution, jitter, resolve_unknown_cas};
+use lager_core::limits;
+use lager_core::model::{
     EntryId, FORMAT_VERSION, Head, LOG_FORMAT_VERSION, LogEntry, ObjectFormat, Oid, Operation,
     PackRef, Receipt, RefName, RefState, RefUpdate, RepoState, RequestId, now_ms, request_checksum,
 };
-use worktree_core::repo::{Access, ref_rule};
-use worktree_core::storage::{CasOutcome, Storage};
+use lager_core::repo::{Access, ref_rule};
+use lager_core::storage::{CasOutcome, Storage};
 
 /// One push request from the hook.
 struct Request {
@@ -25,7 +25,7 @@ struct Request {
     checksum: String,
     updates: Vec<RefUpdate>,
     /// No CAS is sent after this time: uploads of an expired operation may
-    /// already be removed (see `worktree_core::cleanup::cleanup`).
+    /// already be removed (see `lager_core::cleanup::cleanup`).
     deadline: Instant,
 }
 
@@ -396,12 +396,12 @@ impl Controller {
             tracing::warn!(repo = %self.repo, request = %req.id, error = %e, "receipt not stored; the history still holds the entry");
         }
         let mut messages = vec![format!(
-            "worktree: accepted as generation {} (request {})",
+            "lager: accepted as generation {} (request {})",
             entry.generation, req.id
         )];
         let mut generation = entry.generation;
         if let Some(branch) = adopt {
-            match worktree_core::admin::set_default_branch(
+            match lager_core::admin::set_default_branch(
                 &svc.storage,
                 self.repo,
                 branch.clone(),
@@ -412,7 +412,7 @@ impl Controller {
                 Ok(h) => {
                     generation = h.generation;
                     let short = branch.as_str().trim_start_matches("refs/heads/");
-                    messages.push(format!("worktree: default branch is now {short}"));
+                    messages.push(format!("lager: default branch is now {short}"));
                     if let Some(changed) = &op.default_branch_changed {
                         changed(self.repo, branch).await;
                     }

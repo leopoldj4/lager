@@ -72,7 +72,7 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
             <SidebarMenuButton asChild className="font-semibold">
               <Link to="/" onClick={close}>
                 <GitBranch />
-                worktree
+                lager
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -150,7 +150,7 @@ export function MobileHeader({ onSearch }: { onSearch: () => void }) {
       <SidebarTrigger />
       <Link to="/" className="flex items-center gap-2 font-semibold">
         <GitBranch className="size-4" />
-        worktree
+        lager
       </Link>
       <Button
         variant="ghost"

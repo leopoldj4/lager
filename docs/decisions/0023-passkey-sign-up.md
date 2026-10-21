@@ -5,7 +5,7 @@ Status: accepted; implemented in `crates/core/src/identity/passkeys.rs` and
 
 ## Context
 
-Only an administrator could create users, with `worktree user create`. People
+Only an administrator could create users, with `lager user create`. People
 should be able to create their own account on the website. Passkeys
 (decision 17) already sign in without a user name or password, so a new
 account needs neither a password nor an administrator.
@@ -27,14 +27,14 @@ a passkey, and again at the finish.
 **Ceremony.** Sign-up is an anonymous ceremony: it counts toward the bound of
 1024 and replaces the browser's previous one, like a login. The account's
 passkey user handle is chosen at the start, so the authenticator stores the
-handle the account will have. Nothing is written to `worktree_users` until
+handle the account will have. Nothing is written to `lager_users` until
 the passkey is verified. The finish holds the anonymous-ceremony lock while it
 checks the name and inserts the user and the passkey in one transaction.
 
 **No password.** The stored hash is `!no-password$` and 32 random bytes. No
 password hash parses it, so password and Git Basic sign-in fail; the random
 rest gives each account its own session stamp. An administrator can set a
-password with `worktree user`, which ends its sessions as usual. Git uses
+password with `lager user`, which ends its sessions as usual. Git uses
 access tokens or SSH keys created in the settings.
 
 **Last passkey.** An account without a password cannot remove its last

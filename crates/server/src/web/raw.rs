@@ -18,7 +18,7 @@ const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 /// The repository and `<rev>/<path>` of a raw address, still encoded.
 pub fn parse(path: &str) -> Option<(&str, &str)> {
     let (name, rest) = path.strip_prefix('/')?.split_once("/-/raw/")?;
-    worktree_core::repo::validate_repo_name(name).ok()?;
+    lager_core::repo::validate_repo_name(name).ok()?;
     Some((name, rest))
 }
 

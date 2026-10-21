@@ -264,7 +264,7 @@ impl Pulls {
         }
         let mut tx = conn.begin().await.map_err(unavailable)?;
         let open: Option<i64> = sqlx::query_scalar(
-            "SELECT number FROM worktree_pulls
+            "SELECT number FROM lager_pulls
              WHERE repository = $1 AND source = $2 AND target = $3 AND state = 'open'",
         )
         .bind(&repo)
@@ -277,8 +277,8 @@ impl Pulls {
             return Err(PullError::Exists(n as u64));
         }
         let number: i64 = sqlx::query_scalar(
-            "INSERT INTO worktree_pull_numbers (repository, last) VALUES ($1, 1)
-             ON CONFLICT (repository) DO UPDATE SET last = worktree_pull_numbers.last + 1
+            "INSERT INTO lager_pull_numbers (repository, last) VALUES ($1, 1)
+             ON CONFLICT (repository) DO UPDATE SET last = lager_pull_numbers.last + 1
              RETURNING last",
         )
         .bind(&repo)
@@ -286,7 +286,7 @@ impl Pulls {
         .await
         .map_err(unavailable)?;
         let inserted = sqlx::query(
-            "INSERT INTO worktree_pulls
+            "INSERT INTO lager_pulls
                  (repository, number, title, body, author, source, target, state,
                   head_oid, target_oid, merge_base, request)
              VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $10, $11)",
@@ -343,7 +343,7 @@ impl Pulls {
         let rows = sqlx::query(concat!(
             "SELECT ",
             pull_columns!(),
-            " FROM worktree_pulls
+            " FROM lager_pulls
              WHERE repository = $1 AND (state = 'open') = $2
              ORDER BY number DESC OFFSET $3 LIMIT $4"
         ))
@@ -355,7 +355,7 @@ impl Pulls {
         .await
         .map_err(unavailable)?;
         let counts: Vec<(bool, i64)> = sqlx::query_as(
-            "SELECT state = 'open', count(*) FROM worktree_pulls
+            "SELECT state = 'open', count(*) FROM lager_pulls
              WHERE repository = $1 GROUP BY 1",
         )
         .bind(&repo)
@@ -378,7 +378,7 @@ impl Pulls {
         let rows = sqlx::query(concat!(
             "SELECT ",
             pull_columns!(),
-            " FROM worktree_pulls
+            " FROM lager_pulls
              WHERE repository = $1 AND state != 'merged' ORDER BY number"
         ))
         .bind(repo.to_string())
@@ -393,7 +393,7 @@ impl Pulls {
         let rows: Vec<EventRow> = sqlx::query_as(
             "SELECT id, kind, author, body, old_oid, oid,
                     (extract(epoch FROM created_at) * 1000)::bigint
-             FROM worktree_pull_events
+             FROM lager_pull_events
              WHERE repository = $1 AND number = $2 ORDER BY id",
         )
         .bind(repo.to_string())
@@ -433,7 +433,7 @@ impl Pulls {
         let mut conn = self.pool.acquire().await.map_err(unavailable)?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
         let bumped = sqlx::query(
-            "UPDATE worktree_pulls SET version = version + 1, updated_at = now()
+            "UPDATE lager_pulls SET version = version + 1, updated_at = now()
              WHERE repository = $1 AND number = $2",
         )
         .bind(&repo)
@@ -445,7 +445,7 @@ impl Pulls {
             return Err(PullError::NotFound);
         }
         let added = sqlx::query(
-            "INSERT INTO worktree_pull_events (repository, number, kind, author, body, request)
+            "INSERT INTO lager_pull_events (repository, number, kind, author, body, request)
              VALUES ($1, $2, 'comment', $3, $4, $5)
              ON CONFLICT (request) DO NOTHING",
         )
@@ -487,7 +487,7 @@ impl Pulls {
             ("open", "closed", EventKind::Closed)
         };
         let changed = sqlx::query(
-            "UPDATE worktree_pulls
+            "UPDATE lager_pulls
              SET state = $3, version = version + 1, updated_at = now(),
                  closed_at = CASE WHEN $3 = 'open' THEN NULL ELSE now() END
              WHERE repository = $1 AND number = $2 AND state = $4",
@@ -538,7 +538,7 @@ impl Pulls {
         let mut conn = self.pool.acquire().await.map_err(unavailable)?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
         let changed = sqlx::query(
-            "UPDATE worktree_pulls
+            "UPDATE lager_pulls
              SET head_oid = $6, target_oid = $7, merge_base = $8,
                  version = version + 1, updated_at = now()
              WHERE repository = $1 AND number = $2 AND state = 'open'
@@ -593,7 +593,7 @@ impl Pulls {
         let mut conn = self.pool.acquire().await.map_err(unavailable)?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
         let old: Option<String> = sqlx::query_scalar(
-            "SELECT head_oid FROM worktree_pulls
+            "SELECT head_oid FROM lager_pulls
              WHERE repository = $1 AND number = $2
                AND (state = 'open' OR ($3 AND (state = 'closed' OR merge_request IS NULL))) FOR UPDATE",
         )
@@ -617,7 +617,7 @@ impl Pulls {
             .await?;
         }
         sqlx::query(
-            "UPDATE worktree_pulls
+            "UPDATE lager_pulls
              SET state = 'merged', head_oid = $3, target_oid = $4, merge_oid = $4,
                  merge_base = $5, merged_by = $6, merge_request = $7,
                  version = version + 1, updated_at = now(), closed_at = now()
@@ -657,7 +657,7 @@ async fn by_request(
     let row = sqlx::query(concat!(
         "SELECT ",
         pull_columns!(),
-        " FROM worktree_pulls WHERE repository = $1 AND request = $2"
+        " FROM lager_pulls WHERE repository = $1 AND request = $2"
     ))
     .bind(repo)
     .bind(request)
@@ -671,7 +671,7 @@ async fn find(conn: &mut PgConnection, repo: &str, number: i64) -> Result<Option
     let row = sqlx::query(concat!(
         "SELECT ",
         pull_columns!(),
-        " FROM worktree_pulls WHERE repository = $1 AND number = $2"
+        " FROM lager_pulls WHERE repository = $1 AND number = $2"
     ))
     .bind(repo)
     .bind(number)
@@ -695,7 +695,7 @@ async fn event(
     oid: Option<&str>,
 ) -> Result<(), PullError> {
     sqlx::query(
-        "INSERT INTO worktree_pull_events (repository, number, kind, author, old_oid, oid)
+        "INSERT INTO lager_pull_events (repository, number, kind, author, old_oid, oid)
          VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(repo)

@@ -17,10 +17,10 @@ use serde_json::{Value, json};
 use super::read::{Query, ReadError};
 use crate::github::GithubError;
 use crate::http::{AppInner, AppState};
-use worktree_core::identity::Identity;
-use worktree_core::password::constant_time_eq;
+use lager_core::identity::Identity;
+use lager_core::password::constant_time_eq;
 
-const COOKIE: &str = "worktree_github_state";
+const COOKIE: &str = "lager_github_state";
 const COOKIE_PATH: &str = "/-/api/github";
 const SETTINGS: &str = "/-/settings/github";
 
