@@ -1,9 +1,8 @@
-# Services for local mode (scripts/local.sh): SeaweedFS as the
-# S3-compatible service, PostgreSQL for users, and NATS for change events,
-# on the loopback address only. Data stays in named volumes between runs;
-# `docker compose -p lager-local down -v` removes it.
-
-name: lager-local
+# Services for local mode (scripts/local.ts): SeaweedFS as the S3-compatible
+# service, PostgreSQL for users, and NATS for change events, on the loopback
+# address only. local.ts names the project after the checkout and reads the
+# ports that Docker picks. Data stays in named volumes between runs;
+# `scripts/local.ts down` removes it.
 
 services:
   storage:
@@ -21,7 +20,7 @@ services:
       - -admin.ui=false
       - -webdav=false
     ports:
-      - "127.0.0.1:${LAGER_S3_PORT:-8333}:8333"
+      - "127.0.0.1::8333"
     volumes:
       - storage-data:/data
       - ${LAGER_LOCAL_DIR:?}/s3.json:/etc/seaweedfs/s3.json:ro
@@ -33,7 +32,7 @@ services:
       POSTGRES_DB: lager
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
-      - "127.0.0.1:${LAGER_PG_PORT:-5433}:5432"
+      - "127.0.0.1::5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -44,7 +43,7 @@ services:
   nats:
     image: nats:2
     ports:
-      - "127.0.0.1:${LAGER_NATS_PORT:-4222}:4222"
+      - "127.0.0.1::4222"
 
 volumes:
   storage-data:

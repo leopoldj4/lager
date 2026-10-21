@@ -2,7 +2,7 @@
 
 Status: accepted; users are managed with `lager user` instead of the
 admin API since [decision 10](0010-no-admin-api.md). Date: October 9, 2026.
-Users in the configuration file are removed by [decision 15](0015-minimal-configuration.md); the database is the only user store.
+Users in the configuration file are removed by [decision 24](0024-configuration-in-the-environment.md); the database is the only user store.
 
 ## Context
 

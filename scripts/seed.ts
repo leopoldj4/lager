@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Seeds a server with demo users, repositories, and pull requests, for
-// trying out a new deployment or a local server (scripts/local.sh).
+// trying out a new deployment or a local server (scripts/local.ts).
 //
 //   bun scripts/seed.ts                                  # local server
 //   bun scripts/seed.ts --url https://git.example.com --cli "ssh root@dokploy docker exec -i <container> lager"
@@ -9,7 +9,8 @@
 // Users and repositories need the administration commands: by default the
 // local build with the configuration in .local/lager.env, and
 // `--cli "<command>"` names any other command. Git pushes and the pull
-// requests go to `--url` over HTTP(S), as the demo users.
+// requests go to `--url` over HTTP(S), as the demo users; by default to the
+// local server.
 //
 // Without `--reset`, repositories that exist already are left alone; the
 // users are created, or get the password and access levels again.
@@ -21,7 +22,7 @@ import { parseArgs } from "node:util"
 
 const { values: opts } = parseArgs({
   options: {
-    url: { type: "string", default: "http://127.0.0.1:8080" },
+    url: { type: "string" },
     cli: { type: "string" },
     user: { type: "string", default: "demo" },
     reviewer: { type: "string", default: "alex" },
@@ -38,7 +39,18 @@ if (opts.help) {
   process.exit(0)
 }
 
-const base = new URL(opts.url!.replace(/\/+$/, ""))
+// The KEY=value lines that scripts/local.ts writes.
+const localEnvFile = join(dirname(import.meta.path), "..", ".local/lager.env")
+const localEnv: Record<string, string> = existsSync(localEnvFile)
+  ? Object.fromEntries(
+      readFileSync(localEnvFile, "utf8")
+        .split("\n")
+        .filter((l) => l.includes("="))
+        .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)])
+    )
+  : {}
+const url = opts.url ?? `http://${localEnv.LAGER_LISTEN ?? "127.0.0.1:8080"}`
+const base = new URL(url.replace(/\/+$/, ""))
 const owner = opts.user!
 const reviewer = opts.reviewer!
 const password = opts.password!
@@ -77,19 +89,9 @@ function adminCommand(): { cmd: (args: string[]) => string[]; env?: Record<strin
     const prefix = opts.cli.split(/\s+/).filter(Boolean)
     return { cmd: (args) => [...prefix, ...args] }
   }
-  // The KEY=value lines that scripts/local.sh writes.
-  const local = join(repoRoot, ".local/lager.env")
   const target = process.env.CARGO_TARGET_DIR ?? join(repoRoot, "target")
   const bin = join(target, "debug/lager")
-  if (existsSync(local) && existsSync(bin)) {
-    const env = Object.fromEntries(
-      readFileSync(local, "utf8")
-        .split("\n")
-        .filter((l) => l.includes("="))
-        .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)])
-    )
-    return { cmd: (args) => [bin, ...args], env }
-  }
+  if (existsSync(localEnvFile) && existsSync(bin)) return { cmd: (args) => [bin, ...args], env: localEnv }
   return { cmd: (args) => ["lager", ...args] }
 }
 const adminCmd = adminCommand()

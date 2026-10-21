@@ -1,8 +1,7 @@
 //! Configuration from environment variables. It holds only what a server
 //! needs to start: its address, the storage service, the database, the
 //! change bus, the web session secret, the GitHub OAuth app, and the SSH
-//! host key (docs/decisions/0015-minimal-configuration.md,
-//! docs/decisions/0024-configuration-in-the-environment.md).
+//! host key (docs/decisions/0024-configuration-in-the-environment.md).
 //! Repositories live in the catalog in storage, users in the database, and
 //! limits are fixed in [`crate::limits`]. An empty variable counts as unset.
 //!

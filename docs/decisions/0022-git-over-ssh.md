@@ -32,7 +32,7 @@ one read view for the whole connection. `GIT_PROTOCOL` is taken from an
 passphrase. Every server of a deployment uses the same file: a load
 balancer sends a client to any server, and a changed host key stops
 clients. The key belongs with the other startup settings in the file
-(decision 15), not in the database.
+(decision 24), not in the database.
 
 **Keys.** PostgreSQL holds public keys in `lager_ssh_keys` (schema
 version 6): user, name, SHA-256 fingerprint as `ssh-keygen -l` shows it,

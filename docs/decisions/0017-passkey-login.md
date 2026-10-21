@@ -11,8 +11,8 @@ levels through the existing signed session cookie.
 `web.public_origin` explicitly names the browser-facing origin. The RP ID
 is its hostname. The origin must be HTTPS, with an exception for HTTP on
 localhost during development. It has no path or trailing slash. Omitting
-the setting disables ceremonies. This extends the minimal configuration in
-decision 15 because the internal listen address cannot identify the public
+the setting disables ceremonies. This extends the minimal configuration
+(decision 24) because the internal listen address cannot identify the public
 HTTPS origin behind a proxy.
 
 `webauthn-rs` verifies registration and authentication, including signatures,

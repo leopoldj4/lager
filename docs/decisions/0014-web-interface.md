@@ -2,7 +2,7 @@
 
 Status: accepted; implemented in `crates/server/src/web/` and `web/`.
 Date: October 12, 2026.
-`dir`, `session_days`, and `origins` are removed by [decision 15](0015-minimal-configuration.md); customer limits are removed.
+`dir`, `session_days`, and `origins` are removed by [decision 24](0024-configuration-in-the-environment.md); customer limits are removed.
 Pull request queries and changes, and their pages: [decision 19](0019-pull-requests.md).
 `/<name>` shows an overview and the files move to `/<name>/-/tree`: [decision 20](0020-repository-overview-and-app-frame.md).
 Objects and refs are read with gix instead of Git processes: [decision 21](0021-web-reads-with-gix.md).

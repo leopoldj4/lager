@@ -1,7 +1,7 @@
 # 3. Repository catalog, identity checks, and ref permissions
 
 Status: accepted. Date: September 27, 2026.
-Its configuration options (`catalog.kind`, `[[repos]]`, `[identity]`, `[[users]]`) are removed by [decision 15](0015-minimal-configuration.md).
+Its configuration options (`catalog.kind`, `[[repos]]`, `[identity]`, `[[users]]`) are removed by [decision 24](0024-configuration-in-the-environment.md).
 
 ## Context
 

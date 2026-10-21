@@ -1,23 +1,41 @@
-# 24. Configuration in the environment
+# 24. A minimal configuration in the environment
 
 Status: accepted; implemented in `crates/core/src/config.rs`. Date:
 October 21, 2026.
 
 ## Context
 
-The configuration was a TOML file (decision 15). On Dokploy, the file, the
-SSH host key, and the PostgreSQL password lived in `/etc/lager` on the
-host, outside Dokploy, and were bind-mounted into the containers. Several
-deployments on one host would need several such directories, and every
-change needed SSH to the host. The public host name was set three times:
-for Traefik, as `web.public_origin`, and in `ssh.public_url`.
+Every option is code to load, check, and document, and a choice that each
+deployment has to get right. Settings that could live in two places (a
+file and a store) need precedence rules and checks against conflicting
+combinations. Deployments run on Dokploy, which configures a service
+through its environment; files on the host need SSH and a directory per
+deployment.
 
 ## Decision
 
-- The server and `lager` read only `LAGER_*` environment variables; the
-  file, `-c`, and `LAGER_CONFIG` are removed. The README lists the
-  variables. An empty variable counts as unset, so a compose file can pass
-  optional ones through as `${NAME:-}`.
+The configuration holds only what a server needs to start: its address,
+the storage service, the database, the change bus, the web session secret,
+the GitHub OAuth app, the SSH host key, and the public host name. A new
+option needs a deployment that cannot work without choosing it.
+
+- **Only in the database:** users, their passwords and access levels,
+  personal access tokens, SSH keys, and passkeys.
+- **Only in the catalog in storage:** the repository name to UUID map, the
+  default branch, public reading, and ref rules, managed with `lager repo`.
+- **Fixed in code** (`crates/core/src/limits.rs`): all limits, drain and
+  shutdown times, the catalog cache time, snapshot thresholds, database
+  pool size, the NATS subject prefix and grace period, and session length.
+  A push to a missing name creates the repository with `write` access to
+  the name.
+- **Not in the server:** TLS (a load balancer terminates HTTPS) and request
+  forwarding between servers. The web interface is found in
+  `share/lager/web` beside the programs. The server that accepted a push
+  creates the next automatic snapshot; two that both do keep one through
+  CAS.
+- The server and `lager` read only `LAGER_*` environment variables, once at
+  start. The README lists them. An empty variable counts as unset, so a
+  compose file can pass optional ones through as `${NAME:-}`.
 - `LAGER_DOMAIN` names the public host once. The passkey origin is
   `https://<domain>` and the clone address `ssh://git@<domain>`; neither has
   its own variable. `localhost[:port]` gives `http://` for development; the
@@ -34,10 +52,13 @@ for Traefik, as `web.public_origin`, and in `ssh.public_url`.
 ## Consequences
 
 - Secrets are in Dokploy's database and backups and visible in its
-  dashboard. Dokploy controls Docker on the host, so files there were not
-  out of its reach either.
+  dashboard. Dokploy controls Docker on the host, so files there would not
+  be out of its reach either.
 - `lager` needs the same variables as the server: in a container,
   `docker compose exec` passes them; locally, `.local/lager.env` holds them.
 - An SSH port other than 22 cannot be shown in the clone address; a
   deployment that publishes another port shows a wrong address.
-- Existing `lager.toml` files are ignored; their values move to variables.
+- Every server needs PostgreSQL for signed-in requests and storage for
+  everything; the first user is created with `lager user create`.
+- Without forwarding, a repository's cache can be built on every server
+  that the load balancer sends its requests to.

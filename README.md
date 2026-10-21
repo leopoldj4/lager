@@ -12,14 +12,21 @@ changes of a repository.
 ## Local start
 
 One server built from this checkout, a local S3-compatible service
-(SeaweedFS), PostgreSQL for users, NATS for change events, and a
-development user. SeaweedFS, PostgreSQL, and NATS run in Docker; stored
+(SeaweedFS), PostgreSQL for users, NATS for change events, a development
+user, and the Vite server for the web interface, which reloads on changes. SeaweedFS, PostgreSQL, and NATS run in Docker; stored
 data is kept between runs in Docker volumes. The configuration
 (`.local/lager.env`), the SSH host key, and the cache live under `./.local`.
 
 ```bash
-scripts/local.sh
+scripts/local.ts        # build, start, and serve until Ctrl-C
+scripts/local.ts down   # remove this checkout's containers and data
 ```
+
+It prints the addresses once the server and Vite answer. Every checkout,
+such as a Git worktree, has its own containers, data, and ports, so several
+run side by side. The server takes 8080 and 2222, or the next free ports,
+and keeps them between runs while they are free; Vite takes 3000 or the
+next free port. With the defaults:
 
 ```bash
 git clone http://dev:dev-password@127.0.0.1:8080/dev/demo.git
@@ -29,17 +36,16 @@ git clone ssh://git@127.0.0.1:2222/dev/demo.git   # with your key, see below
 The script adds your `~/.ssh/id_ed25519.pub` (or ECDSA or RSA key) to `dev`
 for Git over SSH ([decision 22](docs/decisions/0022-git-over-ssh.md)).
 
-The web interface is at http://127.0.0.1:8080/ (sign in as `dev` / `dev-password`).
+The web interface is at http://127.0.0.1:3000/ (sign in as `dev` / `dev-password`).
 To run `lager` by hand, load the configuration first:
 `set -a; . .local/lager.env; set +a`.
 
 For GitHub mirrors, register a GitHub OAuth app with the callback URL
 `http://127.0.0.1:8080/-/api/github/callback` and start with
-`LAGER_GITHUB_CLIENT_ID=... LAGER_GITHUB_CLIENT_SECRET=... scripts/local.sh`.
+`LAGER_GITHUB_CLIENT_ID=... LAGER_GITHUB_CLIENT_SECRET=... scripts/local.ts`.
 
 It needs Rust (rustup reads `rust-toolchain.toml`), the OpenSSL headers
 (`libssl-dev`), Bun, Docker with Compose, and Git 2.45 or later.
-`docker compose -p lager-local down -v` removes the stored data.
 
 ### Demo data
 
@@ -146,8 +152,7 @@ and review it. Packs and records have separate retention periods
 ## Configuration
 
 Environment variables hold only what a server needs to start
-([decision 15](docs/decisions/0015-minimal-configuration.md),
-[decision 24](docs/decisions/0024-configuration-in-the-environment.md)).
+([decision 24](docs/decisions/0024-configuration-in-the-environment.md)).
 An empty variable counts as unset. Limits and timings are fixed in
 `crates/core/src/limits.rs`.
 
@@ -174,10 +179,9 @@ Every server is plain HTTP behind a load balancer that terminates HTTPS
 and spreads requests over the servers. Any server can answer any request;
 it fills its cache for the repository on first use. The server that
 accepts a push creates the next automatic snapshot (every 200 entries).
-The web interface is served from `share/lager/web` beside the programs
-(the container image includes it; `scripts/local.sh` links it into
-`target/`); without it, only the
-API under `/-/api/` answers.
+The web interface is served from `share/lager/web` beside the programs,
+where the container image installs it; without it, only the API under
+`/-/api/` answers.
 
 ## Operation
 
@@ -278,7 +282,8 @@ rustc-wrapper = "sccache"
 `sccache --show-stats` shows the hit rate.
 
 The web interface lives in `web/` (TanStack Start in SPA mode, shadcn/ui).
-With a server on 127.0.0.1:8080 (`scripts/local.sh`):
+`scripts/local.ts` runs its Vite server. On its own, Vite forwards the API
+to the server in `LAGER_URL` (default http://127.0.0.1:8080):
 
 ```bash
 cd web && bun install
