@@ -21,8 +21,9 @@ Actions.
   `web` and `websecure` in Dokploy's Traefik settings.
 - **Configuration.** Dokploy's environment for the service holds it, secrets
   included; `dokploy.compose.yaml` passes it to the containers. See below.
-- **Network.** The cloud firewall allows only TCP 22 (Git over SSH, served by
-  lager), 80, 443, and Tailscale's UDP 41641. The host's own SSH server is
+- **Network.** The cloud firewall allows only TCP 22 and 2222 (Git over SSH,
+  served by lager: production on 22, staging on 2222), 80, 443, and
+  Tailscale's UDP 41641. The host's own SSH server is
   disabled; administration uses Tailscale SSH (`ssh root@dokploy`).
 
 Each deployment recreates the lager container, so requests can briefly fail.
@@ -48,6 +49,7 @@ LAGER_SSH_HOST_KEY="-----BEGIN OPENSSH PRIVATE KEY-----
 ...
 -----END OPENSSH PRIVATE KEY-----"
 POSTGRES_PASSWORD=...         # openssl rand -hex 32; goes into a URL, so hex only
+LAGER_SSH_PORT=2222           # staging; production leaves it out and gets 22
 # Optional:
 # LAGER_SIGN_UP=true
 # LAGER_GITHUB_CLIENT_ID=...

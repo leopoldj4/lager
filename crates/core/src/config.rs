@@ -23,6 +23,7 @@
 //! | `LAGER_GITHUB_CLIENT_ID`, `LAGER_GITHUB_CLIENT_SECRET` | | Both or neither |
 //! | `LAGER_SSH_HOST_KEY` | | Turns on Git over SSH |
 //! | `LAGER_SSH_LISTEN` | `0.0.0.0:2222` | |
+//! | `LAGER_SSH_PORT` | `22` | The port clients connect to, for the clone address |
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -111,8 +112,8 @@ pub struct SshConfig {
     /// server: clients check that the host key never changes.
     pub host_key: String,
     /// The SSH address that clients clone from, shown in the web interface:
-    /// `ssh://git@<LAGER_DOMAIN>`, or for local development the listen
-    /// address on the loopback address.
+    /// `ssh://git@<LAGER_DOMAIN>`, with `:<LAGER_SSH_PORT>` unless it is 22,
+    /// or for local development the listen address on the loopback address.
     pub public_url: Option<String>,
 }
 
@@ -215,8 +216,15 @@ impl Config {
         let ssh = match get("LAGER_SSH_HOST_KEY") {
             Some(key) => {
                 let listen = addr("LAGER_SSH_LISTEN", "0.0.0.0:2222")?;
+                let port = match get("LAGER_SSH_PORT") {
+                    Some(p) => p
+                        .parse::<u16>()
+                        .map_err(|_| anyhow::anyhow!("LAGER_SSH_PORT: {p:?} is not a port"))?,
+                    None => 22,
+                };
                 let public_url = match &domain {
-                    Some(d) if !local => Some(format!("ssh://git@{d}")),
+                    Some(d) if !local && port == 22 => Some(format!("ssh://git@{d}")),
+                    Some(d) if !local => Some(format!("ssh://git@{d}:{port}")),
                     _ if listen.ip().is_loopback() => Some(format!("ssh://git@{listen}")),
                     _ => None,
                 };

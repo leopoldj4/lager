@@ -174,6 +174,7 @@ An empty variable counts as unset. Limits and timings are fixed in
 | `LAGER_GITHUB_CLIENT_ID`, `LAGER_GITHUB_CLIENT_SECRET` | none | A GitHub OAuth app for mirrors, with the callback URL `https://<domain>/-/api/github/callback`. |
 | `LAGER_SSH_HOST_KEY` | none | Turns on Git over SSH. An OpenSSH private key without a passphrase, in double quotes across its lines; the same on every server, and kept: clients refuse a changed host key. |
 | `LAGER_SSH_LISTEN` | `0.0.0.0:2222` | |
+| `LAGER_SSH_PORT` | `22` | The port clients connect to; the clone menu shows `ssh://git@<domain>:<port>` unless it is 22. |
 
 Every server is plain HTTP behind a load balancer that terminates HTTPS
 and spreads requests over the servers. Any server can answer any request;

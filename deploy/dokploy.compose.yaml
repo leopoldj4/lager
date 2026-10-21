@@ -22,9 +22,10 @@ services:
     # Room for the drain delay (5 s) and shutdown timeout (180 s): running
     # pushes finish.
     stop_grace_period: 3m10s
-    # Git over SSH. The host's own SSH server must use another port.
+    # Git over SSH on LAGER_SSH_PORT (default 22); one deployment per server
+    # can have 22. The host's own SSH server must use another port.
     ports:
-      - "22:2222"
+      - "${LAGER_SSH_PORT:-22}:2222"
     # The configuration; `docker compose exec lager lager ...` gets it too.
     environment:
       LAGER_DOMAIN: ${LAGER_DOMAIN:?set LAGER_DOMAIN}
@@ -42,6 +43,7 @@ services:
       LAGER_GITHUB_CLIENT_SECRET: ${LAGER_GITHUB_CLIENT_SECRET:-}
       # Keep it: clients refuse a changed host key.
       LAGER_SSH_HOST_KEY: ${LAGER_SSH_HOST_KEY:?set LAGER_SSH_HOST_KEY}
+      LAGER_SSH_PORT: ${LAGER_SSH_PORT:-}
     volumes:
       # Caches only; any of it can be removed. Use local disk.
       - lager-cache:/var/cache/lager

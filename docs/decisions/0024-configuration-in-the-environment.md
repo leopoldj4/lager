@@ -56,8 +56,9 @@ option needs a deployment that cannot work without choosing it.
   be out of its reach either.
 - `lager` needs the same variables as the server: in a container,
   `docker compose exec` passes them; locally, `.local/lager.env` holds them.
-- An SSH port other than 22 cannot be shown in the clone address; a
-  deployment that publishes another port shows a wrong address.
+- Only one deployment per server can have SSH on port 22; another one sets
+  `LAGER_SSH_PORT`, which the compose file publishes and the clone address
+  shows.
 - Every server needs PostgreSQL for signed-in requests and storage for
   everything; the first user is created with `lager user create`.
 - Without forwarding, a repository's cache can be built on every server

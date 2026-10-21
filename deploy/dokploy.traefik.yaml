@@ -2,30 +2,33 @@
 # them in with `extends`. Dokploy's "Randomize Compose" option must stay
 # off: it renames the service in `extends` but not here, which breaks the
 # reference. "Isolated Deployment" is fine.
+#
+# Traefik's names are global, so they carry APP_NAME, which Dokploy sets to
+# the service's unique app name; deployments on one server do not collide.
 
 services:
   lager:
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
-      - traefik.http.services.lager.loadbalancer.server.port=8080
-      - traefik.http.services.lager.loadbalancer.healthcheck.path=/_lager/health
-      - traefik.http.services.lager.loadbalancer.healthcheck.interval=5s
-      - traefik.http.routers.lager-http.rule=Host(`${LAGER_DOMAIN:?set LAGER_DOMAIN}`)
-      - traefik.http.routers.lager-http.entrypoints=web
-      - traefik.http.routers.lager-http.middlewares=redirect-to-https@file
-      - traefik.http.routers.lager.rule=Host(`${LAGER_DOMAIN}`)
-      - traefik.http.routers.lager.entrypoints=websecure
-      - traefik.http.routers.lager.tls.certresolver=letsencrypt
-      - traefik.http.routers.lager.service=lager
-      - traefik.http.routers.lager.middlewares=lager-compress
+      - traefik.http.services.${APP_NAME:?set APP_NAME}.loadbalancer.server.port=8080
+      - traefik.http.services.${APP_NAME}.loadbalancer.healthcheck.path=/_lager/health
+      - traefik.http.services.${APP_NAME}.loadbalancer.healthcheck.interval=5s
+      - traefik.http.routers.${APP_NAME}-http.rule=Host(`${LAGER_DOMAIN:?set LAGER_DOMAIN}`)
+      - traefik.http.routers.${APP_NAME}-http.entrypoints=web
+      - traefik.http.routers.${APP_NAME}-http.middlewares=redirect-to-https@file
+      - traefik.http.routers.${APP_NAME}.rule=Host(`${LAGER_DOMAIN}`)
+      - traefik.http.routers.${APP_NAME}.entrypoints=websecure
+      - traefik.http.routers.${APP_NAME}.tls.certresolver=letsencrypt
+      - traefik.http.routers.${APP_NAME}.service=${APP_NAME}
+      - traefik.http.routers.${APP_NAME}.middlewares=${APP_NAME}-compress
       # Compress only text-like types, so Git packs pass through unchanged.
-      - traefik.http.middlewares.lager-compress.compress.includedcontenttypes=text/html,text/css,text/plain,text/javascript,application/javascript,application/json,image/svg+xml
+      - traefik.http.middlewares.${APP_NAME}-compress.compress.includedcontenttypes=text/html,text/css,text/plain,text/javascript,application/javascript,application/json,image/svg+xml
       # Counters for monitoring only; scrape them inside the network.
-      - traefik.http.routers.lager-metrics.rule=Host(`${LAGER_DOMAIN}`) && PathPrefix(`/_lager/metrics`)
-      - traefik.http.routers.lager-metrics.entrypoints=websecure
-      - traefik.http.routers.lager-metrics.tls.certresolver=letsencrypt
-      - traefik.http.routers.lager-metrics.priority=1000
-      - traefik.http.routers.lager-metrics.service=lager
-      - traefik.http.routers.lager-metrics.middlewares=lager-internal-only
-      - traefik.http.middlewares.lager-internal-only.ipallowlist.sourcerange=127.0.0.1/32
+      - traefik.http.routers.${APP_NAME}-metrics.rule=Host(`${LAGER_DOMAIN}`) && PathPrefix(`/_lager/metrics`)
+      - traefik.http.routers.${APP_NAME}-metrics.entrypoints=websecure
+      - traefik.http.routers.${APP_NAME}-metrics.tls.certresolver=letsencrypt
+      - traefik.http.routers.${APP_NAME}-metrics.priority=1000
+      - traefik.http.routers.${APP_NAME}-metrics.service=${APP_NAME}
+      - traefik.http.routers.${APP_NAME}-metrics.middlewares=${APP_NAME}-internal-only
+      - traefik.http.middlewares.${APP_NAME}-internal-only.ipallowlist.sourcerange=127.0.0.1/32
