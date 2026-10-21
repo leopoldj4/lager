@@ -9,6 +9,7 @@ import { QueryClientProvider } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 
 import appCss from "../styles.css?url"
+import logo from "../assets/lager.svg?url"
 import { queryClient } from "@/lib/api"
 import { live } from "@/lib/live"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -32,7 +33,10 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "lager" },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [
+      { rel: "stylesheet", href: appCss },
+      { rel: "icon", type: "image/svg+xml", href: logo },
+    ],
   }),
   component: Root,
   notFoundComponent: NotFound,

@@ -4,7 +4,6 @@ import {
   BookLock,
   BookOpen,
   ChevronsUpDown,
-  GitBranch,
   House,
   LogIn,
   LogOut,
@@ -46,6 +45,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { Avatar } from "@/components/repo/avatar"
+import { LagerMark } from "@/components/lager-mark"
 import { Button } from "@/components/ui/button"
 import { OmnibarShortcut, useCurrentRepo } from "@/components/omnibar"
 
@@ -71,7 +71,7 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
           <SidebarMenuItem>
             <SidebarMenuButton asChild className="font-semibold">
               <Link to="/" onClick={close}>
-                <GitBranch />
+                <LagerMark />
                 lager
               </Link>
             </SidebarMenuButton>
@@ -149,7 +149,7 @@ export function MobileHeader({ onSearch }: { onSearch: () => void }) {
     <header className="sticky top-0 z-10 flex h-12 items-center gap-2 border-b bg-background px-3 md:hidden">
       <SidebarTrigger />
       <Link to="/" className="flex items-center gap-2 font-semibold">
-        <GitBranch className="size-4" />
+        <LagerMark className="size-4" />
         lager
       </Link>
       <Button
