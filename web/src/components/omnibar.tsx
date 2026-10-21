@@ -171,6 +171,7 @@ export function Omnibar({
                 <button
                   type="button"
                   tabIndex={-1}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => setScoped(false)}
                   className="group/scope flex h-6 shrink-0 items-center gap-1 rounded-md border bg-background pr-1 pl-2 text-xs font-medium text-foreground shadow-xs hover:bg-accent dark:bg-input/60 dark:hover:bg-input"
                   aria-label={`Search everywhere instead of ${scope}`}

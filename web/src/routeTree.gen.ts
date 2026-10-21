@@ -11,11 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SplatRouteImport } from './routes/$'
-import { Route as Char91Char93PasskeysRouteImport } from './routes/[-].passkeys'
 import { Route as Char91Char93SettingsRouteImport } from './routes/[-].settings'
 import { Route as Char91Char93SignInRouteImport } from './routes/[-].sign-in'
 import { Route as Char91Char93SignUpRouteImport } from './routes/[-].sign-up'
-import { Route as Char91Char93TokensRouteImport } from './routes/[-].tokens'
 import { Route as Char91Char93SettingsIndexRouteImport } from './routes/[-].settings.index'
 import { Route as Char91Char93SettingsGithubRouteImport } from './routes/[-].settings.github'
 import { Route as Char91Char93SettingsPasskeysRouteImport } from './routes/[-].settings.passkeys'
@@ -32,11 +30,6 @@ const SplatRoute = SplatRouteImport.update({
   path: '/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Char91Char93PasskeysRoute = Char91Char93PasskeysRouteImport.update({
-  id: '/-/passkeys',
-  path: '/-/passkeys',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const Char91Char93SettingsRoute = Char91Char93SettingsRouteImport.update({
   id: '/-/settings',
   path: '/-/settings',
@@ -50,11 +43,6 @@ const Char91Char93SignInRoute = Char91Char93SignInRouteImport.update({
 const Char91Char93SignUpRoute = Char91Char93SignUpRouteImport.update({
   id: '/-/sign-up',
   path: '/-/sign-up',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const Char91Char93TokensRoute = Char91Char93TokensRouteImport.update({
-  id: '/-/tokens',
-  path: '/-/tokens',
   getParentRoute: () => rootRouteImport,
 } as any)
 const Char91Char93SettingsIndexRoute =
@@ -91,11 +79,9 @@ const Char91Char93SettingsTokensRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
-  '/-/passkeys': typeof Char91Char93PasskeysRoute
   '/-/settings': typeof Char91Char93SettingsRouteWithChildren
   '/-/sign-in': typeof Char91Char93SignInRoute
   '/-/sign-up': typeof Char91Char93SignUpRoute
-  '/-/tokens': typeof Char91Char93TokensRoute
   '/-/settings/github': typeof Char91Char93SettingsGithubRoute
   '/-/settings/passkeys': typeof Char91Char93SettingsPasskeysRoute
   '/-/settings/ssh-keys': typeof Char91Char93SettingsSshKeysRoute
@@ -105,10 +91,8 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
-  '/-/passkeys': typeof Char91Char93PasskeysRoute
   '/-/sign-in': typeof Char91Char93SignInRoute
   '/-/sign-up': typeof Char91Char93SignUpRoute
-  '/-/tokens': typeof Char91Char93TokensRoute
   '/-/settings/github': typeof Char91Char93SettingsGithubRoute
   '/-/settings/passkeys': typeof Char91Char93SettingsPasskeysRoute
   '/-/settings/ssh-keys': typeof Char91Char93SettingsSshKeysRoute
@@ -119,11 +103,9 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
-  '/-/passkeys': typeof Char91Char93PasskeysRoute
   '/-/settings': typeof Char91Char93SettingsRouteWithChildren
   '/-/sign-in': typeof Char91Char93SignInRoute
   '/-/sign-up': typeof Char91Char93SignUpRoute
-  '/-/tokens': typeof Char91Char93TokensRoute
   '/-/settings/github': typeof Char91Char93SettingsGithubRoute
   '/-/settings/passkeys': typeof Char91Char93SettingsPasskeysRoute
   '/-/settings/ssh-keys': typeof Char91Char93SettingsSshKeysRoute
@@ -135,11 +117,9 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/$'
-    | '/-/passkeys'
     | '/-/settings'
     | '/-/sign-in'
     | '/-/sign-up'
-    | '/-/tokens'
     | '/-/settings/github'
     | '/-/settings/passkeys'
     | '/-/settings/ssh-keys'
@@ -149,10 +129,8 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/$'
-    | '/-/passkeys'
     | '/-/sign-in'
     | '/-/sign-up'
-    | '/-/tokens'
     | '/-/settings/github'
     | '/-/settings/passkeys'
     | '/-/settings/ssh-keys'
@@ -162,11 +140,9 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/$'
-    | '/-/passkeys'
     | '/-/settings'
     | '/-/sign-in'
     | '/-/sign-up'
-    | '/-/tokens'
     | '/-/settings/github'
     | '/-/settings/passkeys'
     | '/-/settings/ssh-keys'
@@ -177,11 +153,9 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SplatRoute: typeof SplatRoute
-  Char91Char93PasskeysRoute: typeof Char91Char93PasskeysRoute
   Char91Char93SettingsRoute: typeof Char91Char93SettingsRouteWithChildren
   Char91Char93SignInRoute: typeof Char91Char93SignInRoute
   Char91Char93SignUpRoute: typeof Char91Char93SignUpRoute
-  Char91Char93TokensRoute: typeof Char91Char93TokensRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -198,13 +172,6 @@ declare module '@tanstack/react-router' {
       path: '/$'
       fullPath: '/$'
       preLoaderRoute: typeof SplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/-/passkeys': {
-      id: '/-/passkeys'
-      path: '/-/passkeys'
-      fullPath: '/-/passkeys'
-      preLoaderRoute: typeof Char91Char93PasskeysRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/-/settings': {
@@ -226,13 +193,6 @@ declare module '@tanstack/react-router' {
       path: '/-/sign-up'
       fullPath: '/-/sign-up'
       preLoaderRoute: typeof Char91Char93SignUpRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/-/tokens': {
-      id: '/-/tokens'
-      path: '/-/tokens'
-      fullPath: '/-/tokens'
-      preLoaderRoute: typeof Char91Char93TokensRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/-/settings/': {
@@ -295,11 +255,9 @@ const Char91Char93SettingsRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SplatRoute: SplatRoute,
-  Char91Char93PasskeysRoute: Char91Char93PasskeysRoute,
   Char91Char93SettingsRoute: Char91Char93SettingsRouteWithChildren,
   Char91Char93SignInRoute: Char91Char93SignInRoute,
   Char91Char93SignUpRoute: Char91Char93SignUpRoute,
-  Char91Char93TokensRoute: Char91Char93TokensRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
