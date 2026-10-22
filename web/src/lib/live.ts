@@ -10,6 +10,8 @@ const VERSION = 1
 // The server sends a heartbeat every 25 seconds.
 const SILENCE_MS = 60_000
 const MAX_BACKOFF_MS = 30_000
+// Match the per-connection limit in crates/server/src/web/live.rs.
+const MAX_REQUESTS_IN_FLIGHT = 8
 const CLOSE_SIGNED_OUT = 4401
 
 export type Status = "connecting" | "open" | "offline"
@@ -50,6 +52,7 @@ export class Live {
   private ws: WebSocket | null = null
   private nextId = 1
   private pending = new Map<number, Pending>()
+  private inFlight = new Set<number>()
   private watchers = new Map<string, Set<Watcher>>()
   /** Highest generation seen per repository. */
   private generations = new Map<string, number>()
@@ -97,6 +100,7 @@ export class Live {
 
   private connect() {
     this.timer = null
+    this.inFlight.clear()
     this.set({ status: "connecting" })
     const ws = new WebSocket(this.url)
     this.ws = ws
@@ -138,6 +142,18 @@ export class Live {
       this.ws.send(JSON.stringify(msg))
   }
 
+  /** Queue bursts, including requests replayed after a disconnect. */
+  private flush() {
+    if (this.state.status !== "open" || this.ws?.readyState !== WebSocket.OPEN)
+      return
+    for (const [id, p] of this.pending) {
+      if (this.inFlight.size >= MAX_REQUESTS_IN_FLIGHT) break
+      if (this.inFlight.has(id)) continue
+      this.inFlight.add(id)
+      this.send({ ...p.msg, id })
+    }
+  }
+
   private receive(m: any) {
     switch (m.type) {
       case "welcome":
@@ -149,7 +165,7 @@ export class Live {
         })
         for (const repo of this.watchers.keys())
           this.send({ type: "sub", repo })
-        for (const [id, p] of this.pending) this.send({ ...p.msg, id })
+        this.flush()
         // Events between the connections are unknown.
         for (const set of this.watchers.values())
           set.forEach((w) => w.onResync())
@@ -158,6 +174,8 @@ export class Live {
         const p = this.pending.get(m.id)
         if (!p) return
         this.pending.delete(m.id)
+        this.inFlight.delete(m.id)
+        this.flush()
         p.resolve(m.data)
         break
       }
@@ -165,6 +183,8 @@ export class Live {
         const p = m.id != null ? this.pending.get(m.id) : undefined
         if (p) {
           this.pending.delete(m.id)
+          this.inFlight.delete(m.id)
+          this.flush()
           p.reject(new LiveError(m.code, m.message))
         }
         break
@@ -216,7 +236,7 @@ export class Live {
         resolve: resolve as (v: unknown) => void,
         reject,
       })
-      if (this.state.ready) this.send({ ...msg, id })
+      this.flush()
     }).then((data) => {
       const d = data as { generation?: number }
       if (typeof query.repo === "string" && typeof d.generation === "number")
