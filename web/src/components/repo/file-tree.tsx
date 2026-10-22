@@ -168,14 +168,14 @@ function Node({
   return (
     <li ref={ref}>
       <div
-        className={cn(row, active && "bg-muted font-medium")}
+        className={cn(row, "relative", active && "bg-muted font-medium")}
         style={indent(depth)}
       >
         {isDir ? (
           <button
             type="button"
             onClick={() => tree.toggle(path)}
-            className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+            className="relative z-10 flex h-full w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
             aria-label={open ? `Close ${entry.name}` : `Open ${entry.name}`}
             aria-expanded={open}
           >
@@ -199,7 +199,7 @@ function Node({
             if (isDir && active) tree.toggle(path)
             tree.onNavigate?.()
           }}
-          className="flex min-w-0 flex-1 items-center gap-1.5"
+          className="flex h-full min-w-0 flex-1 items-center gap-1.5 after:absolute after:inset-0 after:rounded-md"
           aria-current={active ? "page" : undefined}
         >
           <Icon
