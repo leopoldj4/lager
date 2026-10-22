@@ -27,9 +27,6 @@ export const Route = createFileRoute("/-/settings/github")({
   component: Github,
 })
 
-/** Repositories shown in the picker at once. */
-const SHOWN = 50
-
 function Github() {
   const { github_error: error } = Route.useSearch()
   const status = useGithub()
@@ -192,7 +189,7 @@ function Picker({ synced }: { synced: Map<string, string> }) {
         </p>
       ) : (
         <ul className="max-h-96 divide-y overflow-y-auto rounded-md border">
-          {shown.slice(0, SHOWN).map((r) => {
+          {shown.map((r) => {
             const name = synced.get(r.full_name)
             return (
               <li
@@ -240,11 +237,6 @@ function Picker({ synced }: { synced: Map<string, string> }) {
               </li>
             )
           })}
-          {shown.length > SHOWN && (
-            <li className="px-3 py-2 text-xs text-muted-foreground">
-              {shown.length - SHOWN} more; type to narrow the list.
-            </li>
-          )}
         </ul>
       )}
     </section>
