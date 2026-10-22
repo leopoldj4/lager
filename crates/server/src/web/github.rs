@@ -5,19 +5,25 @@
 //! random state in a short-lived cookie; GitHub sends them back to
 //! `GET /-/api/github/callback`, which checks the state, keeps the token,
 //! and returns to `/-/settings/github`. Both are page loads, not API calls.
+//!
+//! `POST /-/api/github/hook/<repository UUID>` takes a mirror's webhook
+//! deliveries (docs/decisions/0027-live-github-mirrors.md).
 
 use axum::Router;
-use axum::extract::{Query as UrlQuery, State};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Path, Query as UrlQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Value, json};
 
 use super::read::{Query, ReadError};
-use crate::github::GithubError;
+use crate::github::{Delivery, GithubError};
 use crate::http::{AppInner, AppState};
 use lager_core::identity::Identity;
+use lager_core::limits;
+use lager_core::model::RepoId;
 use lager_core::password::constant_time_eq;
 
 const COOKIE: &str = "lager_github_state";
@@ -28,6 +34,46 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/-/api/github/connect", get(connect))
         .route("/-/api/github/callback", get(callback))
+        .route(
+            "/-/api/github/hook/{repo}",
+            post(hook).layer(DefaultBodyLimit::max(limits::GITHUB_HOOK_MAX_BYTES)),
+        )
+}
+
+/// A webhook delivery from GitHub: pokes the mirror if the signature
+/// matches.
+async fn hook(
+    State(s): State<AppState>,
+    Path(repo): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let (Some(github), Ok(id)) = (&s.github, repo.parse::<uuid::Uuid>()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+    };
+    let event = header("x-github-event");
+    match github
+        .receive(RepoId(id), event, header("x-hub-signature-256"), &body)
+        .await
+    {
+        Ok(Delivery::Accepted) => (StatusCode::ACCEPTED, "sync requested\n").into_response(),
+        Ok(Delivery::Pong) => (StatusCode::OK, "pong\n").into_response(),
+        Ok(Delivery::Unknown) => (StatusCode::NOT_FOUND, "no such mirror\n").into_response(),
+        Ok(Delivery::BadSignature) => {
+            tracing::info!(%repo, event, "webhook delivery with a wrong signature");
+            (StatusCode::UNAUTHORIZED, "wrong signature\n").into_response()
+        }
+        Err(e) => {
+            tracing::warn!(%repo, error = %e, "webhook delivery not handled");
+            (StatusCode::SERVICE_UNAVAILABLE, "retry later\n").into_response()
+        }
+    }
 }
 
 fn redirect(to: &str, cookie: Option<String>) -> Response {

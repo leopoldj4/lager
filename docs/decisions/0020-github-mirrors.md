@@ -70,7 +70,8 @@ object limits of the push procedure.
 ## Consequences
 
 - Changes reach the mirror within about a minute, by polling; GitHub
-  webhooks would need a public address and are not used.
+  webhooks would need a public address and are not used. Decision 27
+  makes watched mirrors faster and adds webhooks where they work.
 - Each mirror costs one `ls-remote` per minute per deployment, and a fetch
   only when something changed.
 - Only branches and tags are mirrored; GitHub's pull requests, issues, and

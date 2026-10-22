@@ -143,6 +143,9 @@ struct Sub {
     name: String,
     /// Events at or below this generation are not sent.
     generation: u64,
+    /// Keeps a GitHub mirror syncing every few seconds while watched
+    /// (docs/decisions/0027-live-github-mirrors.md).
+    _mirror: Option<crate::github::WatchGuard>,
 }
 
 struct Connection {
@@ -383,11 +386,16 @@ impl Connection {
             }
         };
         self.subs.retain(|_, s| s.name != name);
+        let mirror = match (&repo.mirror, &self.s.github) {
+            (Some(_), Some(g)) => Some(g.watch(repo.id)),
+            _ => None,
+        };
         self.subs.insert(
             repo.id,
             Sub {
                 name: name.clone(),
                 generation,
+                _mirror: mirror,
             },
         );
         self.send(ServerMsg::Subbed {

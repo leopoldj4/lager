@@ -180,6 +180,7 @@ pub async fn start_with_listener(
             registry.clone(),
             directory.clone(),
             pulls.clone(),
+            cfg.web.as_ref().and_then(|w| w.public_origin.clone()),
         )?)),
         None => None,
     };

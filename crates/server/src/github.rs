@@ -11,12 +11,18 @@
 //! exactly, deletions and force pushes included, and so does the default
 //! branch. GitHub's pull requests come along: their refs with the
 //! branches, and their conversations through the API ([`pulls`],
-//! docs/decisions/0026-github-pull-requests.md).
+//! docs/decisions/0026-github-pull-requests.md). A mirror that a page
+//! shows syncs every few seconds, and one whose user administers the GitHub
+//! repository gets a webhook that asks for a sync at once ([`hooks`],
+//! docs/decisions/0027-live-github-mirrors.md).
 
+mod hooks;
 mod pulls;
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+pub use hooks::Delivery;
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex as StdMutex};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -31,7 +37,7 @@ use lager_core::config::GithubConfig;
 use lager_core::github::{Due, GithubDb, GithubDbError, Mirror};
 use lager_core::identity::Identity;
 use lager_core::limits;
-use lager_core::model::{Oid, Operation, RefName, RepoState, RequestId};
+use lager_core::model::{Oid, Operation, RefName, RepoId, RepoState, RequestId};
 use lager_core::repo::{Access, RepoSettings, validate_repo_name};
 
 /// The user of log entries of mirror syncs. No user name contains `:`.
@@ -105,8 +111,30 @@ pub struct Github {
     registry: Arc<Registry>,
     directory: Arc<Directory>,
     pulls: Arc<PullService>,
-    /// Wakes [`Github::run`] when a mirror is added.
+    /// `https://…` of this site, for webhooks; none without it.
+    public_origin: Option<String>,
+    /// Mirrors that pages on this server show, with how many.
+    watching: StdMutex<HashMap<RepoId, usize>>,
+    /// Wakes [`Github::run`] when a mirror is added or poked.
     wake: Notify,
+}
+
+/// Keeps a mirror watched while a page shows it; see [`Github::watch`].
+pub struct WatchGuard {
+    github: Arc<Github>,
+    repo: RepoId,
+}
+
+impl Drop for WatchGuard {
+    fn drop(&mut self) {
+        let mut w = self.github.watching.lock().unwrap();
+        if let Some(n) = w.get_mut(&self.repo) {
+            *n -= 1;
+            if *n == 0 {
+                w.remove(&self.repo);
+            }
+        }
+    }
 }
 
 impl Github {
@@ -116,6 +144,7 @@ impl Github {
         registry: Arc<Registry>,
         directory: Arc<Directory>,
         pulls: Arc<PullService>,
+        public_origin: Option<String>,
     ) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
@@ -128,6 +157,10 @@ impl Github {
             registry,
             directory,
             pulls,
+            public_origin: public_origin
+                .filter(|o| o.starts_with("https://"))
+                .map(|o| o.trim_end_matches('/').to_string()),
+            watching: StdMutex::new(HashMap::new()),
             wake: Notify::new(),
         })
     }
@@ -323,7 +356,7 @@ impl Github {
             Ok(_) | Err(CatalogError::NotFound(_)) => {}
             Err(e) => return Err(GithubError::Unavailable(e.to_string())),
         }
-        self.db.remove(id).await?;
+        self.forget(id).await?;
         tracing::info!(repo = %name, user, "mirror stopped");
         Ok(())
     }
@@ -335,23 +368,74 @@ impl Github {
         Ok(())
     }
 
+    /// Forgets a mirror that is deleted or no longer syncs, and removes its
+    /// webhook from GitHub if it can.
+    pub async fn forget(&self, repo: RepoId) -> Result<(), GithubDbError> {
+        if let Some(hook) = self.db.hook(repo).await? {
+            self.delete_hook(&hook).await;
+        }
+        self.db.remove(repo).await
+    }
+
     // Syncing.
+
+    /// Keeps the mirror `repo` syncing every few seconds while the guard
+    /// lives. The first page to watch it asks for a sync at once.
+    pub fn watch(self: &Arc<Self>, repo: RepoId) -> WatchGuard {
+        let first = {
+            let mut w = self.watching.lock().unwrap();
+            let n = w.entry(repo).or_default();
+            *n += 1;
+            *n == 1
+        };
+        if first {
+            let me = self.clone();
+            tokio::spawn(async move {
+                let ok = async {
+                    me.db.watch(&[repo], limits::GITHUB_WATCH_TTL).await?;
+                    me.db.poke(repo, limits::GITHUB_SYNC_INTERVAL).await
+                };
+                match ok.await {
+                    Ok(true) => me.wake.notify_one(),
+                    Ok(false) => {}
+                    Err(e) => tracing::debug!(%repo, error = %e, "mirror watch not recorded"),
+                }
+            });
+        }
+        WatchGuard {
+            github: self.clone(),
+            repo,
+        }
+    }
 
     /// Syncs mirrors that are due until the stop signal.
     pub async fn run(self: Arc<Self>, mut stop: watch::Receiver<bool>) {
         let slots = Arc::new(Semaphore::new(limits::GITHUB_CONCURRENT_SYNCS));
         let mut tick = tokio::time::interval(limits::GITHUB_POLL_INTERVAL);
+        let mut renew = tokio::time::interval(limits::GITHUB_WATCH_TTL / 3);
         loop {
             tokio::select! {
                 _ = tick.tick() => {}
                 _ = self.wake.notified() => {}
+                _ = renew.tick() => {
+                    let repos: Vec<RepoId> =
+                        self.watching.lock().unwrap().keys().copied().collect();
+                    if let Err(e) = self.db.watch(&repos, limits::GITHUB_WATCH_TTL).await {
+                        tracing::debug!(error = %e, "mirror watches not renewed");
+                    }
+                    continue;
+                }
                 _ = crate::server::stopped(&mut stop) => break,
             }
             loop {
                 let Ok(slot) = slots.clone().try_acquire_owned() else {
                     break;
                 };
-                let due = match self.db.claim(limits::GITHUB_SYNC_LEASE).await {
+                let due = match self
+                    .db
+                    .claim(limits::GITHUB_SYNC_LEASE, limits::GITHUB_HOOK_RETRY)
+                    .await
+                {
                     Ok(Some(d)) => d,
                     Ok(None) => break,
                     Err(e) => {
@@ -387,7 +471,12 @@ impl Github {
         };
         if let Err(e) = self
             .db
-            .finish(due.repo, error, limits::GITHUB_SYNC_INTERVAL)
+            .finish(
+                due.repo,
+                error,
+                limits::GITHUB_SYNC_INTERVAL,
+                limits::GITHUB_WATCHED_SYNC_INTERVAL,
+            )
             .await
         {
             tracing::warn!(repo = %due.name, error = %e, "mirror sync not recorded");
@@ -410,7 +499,7 @@ impl Github {
         if current.is_none() {
             // Deleted, or no longer a mirror.
             tracing::info!(repo = %due.name, "mirror gone; not syncing it any more");
-            self.db.remove(due.repo).await.map_err(|e| e.to_string())?;
+            self.forget(due.repo).await.map_err(|e| e.to_string())?;
             return Ok(Synced::Removed);
         }
         let token = due
@@ -506,6 +595,9 @@ impl Github {
                 .set_default_branch(&due.name, short, MIRROR_USER)
                 .await
                 .map_err(|e| format!("default branch not changed: {e}"))?;
+        }
+        if due.hook_due {
+            self.add_hook(due, token).await;
         }
         self.sync_pulls(due, token)
             .await

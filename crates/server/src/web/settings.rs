@@ -65,7 +65,7 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
             let id = catalog.delete(&name, user).await.map_err(catalog_error)?;
             if repo.mirror.is_some()
                 && let Some(github) = &s.github
-                && let Err(e) = github.db.remove(id).await
+                && let Err(e) = github.forget(id).await
             {
                 // The next sync finds the repository deleted and removes it.
                 tracing::warn!(repo = %name, error = %e, "mirror not removed");

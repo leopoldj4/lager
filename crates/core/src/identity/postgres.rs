@@ -213,6 +213,17 @@ ALTER TABLE lager_github_mirrors ADD COLUMN comments_since text;
 ALTER TABLE lager_github_mirrors ADD COLUMN comments_page integer NOT NULL DEFAULT 1;
 ALTER TABLE lager_github_mirrors ADD COLUMN comments_etag text;
 "#,
+    // Live mirrors (docs/decisions/0027-live-github-mirrors.md): until when a
+    // page watches the mirror, when a sync last started and when GitHub or a
+    // page last asked for one, and the mirror's webhook on GitHub.
+    r#"
+ALTER TABLE lager_github_mirrors ADD COLUMN watched_until timestamptz;
+ALTER TABLE lager_github_mirrors ADD COLUMN claimed_at timestamptz;
+ALTER TABLE lager_github_mirrors ADD COLUMN poked_at timestamptz;
+ALTER TABLE lager_github_mirrors ADD COLUMN hook_id bigint;
+ALTER TABLE lager_github_mirrors ADD COLUMN hook_secret text;
+ALTER TABLE lager_github_mirrors ADD COLUMN hook_checked_at timestamptz;
+"#,
 ];
 
 /// SSH keys a user can have at the same time.

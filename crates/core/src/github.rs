@@ -6,6 +6,10 @@
 //! A server that starts a sync moves `next_sync_at` ahead by a lease in the
 //! same statement that picks the row, so two servers rarely sync the same
 //! mirror; if they do, the head CAS orders their pushes.
+//!
+//! A mirror that a page shows is due every few seconds, and a webhook
+//! delivery or a new watch pokes it: due at once, or again right after the
+//! sync that runs (docs/decisions/0027-live-github-mirrors.md).
 
 use std::time::Duration;
 
@@ -47,6 +51,18 @@ pub struct Due {
     pub name: String,
     pub user: String,
     pub github: String,
+    pub token: Option<String>,
+    /// The mirror's webhook on GitHub.
+    pub hook_id: Option<i64>,
+    /// No webhook, and the last attempt to add one is old enough to try
+    /// again.
+    pub hook_due: bool,
+}
+
+/// A mirror's webhook on GitHub, with what removing it needs.
+pub struct Hook {
+    pub github: String,
+    pub id: i64,
     pub token: Option<String>,
 }
 
@@ -208,10 +224,23 @@ impl GithubDb {
     }
 
     /// Takes the mirror that is due longest and leases it for `lease`.
-    pub async fn claim(&self, lease: Duration) -> Result<Option<Due>, GithubDbError> {
-        let row: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
+    pub async fn claim(
+        &self,
+        lease: Duration,
+        hook_retry: Duration,
+    ) -> Result<Option<Due>, GithubDbError> {
+        type Row = (
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<i64>,
+            bool,
+        );
+        let row: Option<Row> = sqlx::query_as(
             "UPDATE lager_github_mirrors m
-             SET next_sync_at = now() + make_interval(secs => $1)
+             SET next_sync_at = now() + make_interval(secs => $1), claimed_at = now()
              WHERE m.repository = (
                  SELECT repository FROM lager_github_mirrors
                  WHERE next_sync_at <= now()
@@ -220,13 +249,17 @@ impl GithubDb {
                  FOR UPDATE SKIP LOCKED
              )
              RETURNING m.repository, m.name, m.user_name, m.github,
-                 (SELECT token FROM lager_github_accounts a WHERE a.user_name = m.user_name)",
+                 (SELECT token FROM lager_github_accounts a WHERE a.user_name = m.user_name),
+                 m.hook_id,
+                 m.hook_id IS NULL AND (m.hook_checked_at IS NULL
+                     OR m.hook_checked_at < now() - make_interval(secs => $2))",
         )
         .bind(lease.as_secs_f64())
+        .bind(hook_retry.as_secs_f64())
         .fetch_optional(&self.pool)
         .await
         .map_err(unavailable)?;
-        let Some((repo, name, user, github, token)) = row else {
+        let Some((repo, name, user, github, token, hook_id, hook_due)) = row else {
             return Ok(None);
         };
         let repo = repo
@@ -238,7 +271,94 @@ impl GithubDb {
             user,
             github,
             token,
+            hook_id,
+            hook_due,
         }))
+    }
+
+    /// Asks for a sync now: at once, or right after the one that runs. A
+    /// due time beyond `interval` is a running sync's lease. `false`: no
+    /// such mirror.
+    pub async fn poke(&self, repo: RepoId, interval: Duration) -> Result<bool, GithubDbError> {
+        let r = sqlx::query(
+            "UPDATE lager_github_mirrors
+             SET poked_at = now(),
+                 next_sync_at = CASE
+                     WHEN next_sync_at <= now() + make_interval(secs => $2)
+                     THEN least(next_sync_at, now()) ELSE next_sync_at END
+             WHERE repository = $1",
+        )
+        .bind(repo.to_string())
+        .bind(interval.as_secs_f64())
+        .execute(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Marks mirrors as shown by a page for `ttl`. Other repositories are
+    /// left alone.
+    pub async fn watch(&self, repos: &[RepoId], ttl: Duration) -> Result<(), GithubDbError> {
+        if repos.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<String> = repos.iter().map(|r| r.to_string()).collect();
+        sqlx::query(
+            "UPDATE lager_github_mirrors SET watched_until = now() + make_interval(secs => $2)
+             WHERE repository = ANY($1)",
+        )
+        .bind(&ids)
+        .bind(ttl.as_secs_f64())
+        .execute(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// The secret of the mirror's webhook.
+    pub async fn hook_secret(&self, repo: RepoId) -> Result<Option<String>, GithubDbError> {
+        let secret: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT hook_secret FROM lager_github_mirrors WHERE repository = $1",
+        )
+        .bind(repo.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(secret.flatten())
+    }
+
+    /// Records the mirror's webhook, or an attempt that GitHub refused.
+    pub async fn set_hook(
+        &self,
+        repo: RepoId,
+        hook: Option<(i64, &str)>,
+    ) -> Result<(), GithubDbError> {
+        sqlx::query(
+            "UPDATE lager_github_mirrors
+             SET hook_id = $2, hook_secret = $3, hook_checked_at = now()
+             WHERE repository = $1",
+        )
+        .bind(repo.to_string())
+        .bind(hook.map(|h| h.0))
+        .bind(hook.map(|h| h.1))
+        .execute(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// The mirror's webhook, if it has one.
+    pub async fn hook(&self, repo: RepoId) -> Result<Option<Hook>, GithubDbError> {
+        let row: Option<(String, Option<i64>, Option<String>)> = sqlx::query_as(
+            "SELECT m.github, m.hook_id,
+                 (SELECT token FROM lager_github_accounts a WHERE a.user_name = m.user_name)
+             FROM lager_github_mirrors m WHERE m.repository = $1",
+        )
+        .bind(repo.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(row.and_then(|(github, id, token)| id.map(|id| Hook { github, id, token })))
     }
 
     pub async fn cursors(&self, repo: RepoId) -> Result<Option<PullCursors>, GithubDbError> {
@@ -293,16 +413,22 @@ impl GithubDb {
         Ok(())
     }
 
-    /// Records the result of a sync; the next one is due after `next`.
+    /// Records the result of a sync. The next one is due at once if the
+    /// mirror was poked during this one, after `watched` while a page
+    /// watches it, else after `next`.
     pub async fn finish(
         &self,
         repo: RepoId,
         error: Option<&str>,
         next: Duration,
+        watched: Duration,
     ) -> Result<(), GithubDbError> {
         sqlx::query(
             "UPDATE lager_github_mirrors
-             SET next_sync_at = now() + make_interval(secs => $2),
+             SET next_sync_at = now() + CASE
+                     WHEN poked_at >= claimed_at THEN interval '0'
+                     WHEN watched_until > now() THEN make_interval(secs => $4)
+                     ELSE make_interval(secs => $2) END,
                  synced_at = CASE WHEN $3::text IS NULL THEN now() ELSE synced_at END,
                  error = $3
              WHERE repository = $1",
@@ -310,6 +436,7 @@ impl GithubDb {
         .bind(repo.to_string())
         .bind(next.as_secs_f64())
         .bind(error)
+        .bind(watched.as_secs_f64())
         .execute(&self.pool)
         .await
         .map_err(unavailable)?;

@@ -2677,6 +2677,7 @@ dependencies = [
  "clap",
  "futures",
  "gix",
+ "hex",
  "hyper-util",
  "lager-core",
  "libc",

@@ -73,7 +73,17 @@ pub const GITHUB_SYNC_INTERVAL: Duration = Duration::from_secs(60);
 /// Other servers skip a mirror for this long while one syncs it.
 pub const GITHUB_SYNC_LEASE: Duration = Duration::from_secs(1800);
 /// How often each server looks for mirrors that are due.
-pub const GITHUB_POLL_INTERVAL: Duration = Duration::from_secs(10);
+pub const GITHUB_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// A mirror that a page shows is checked this often
+/// (docs/decisions/0027-live-github-mirrors.md).
+pub const GITHUB_WATCHED_SYNC_INTERVAL: Duration = Duration::from_secs(5);
+/// A page's watch lasts this long; its server renews it every third of it.
+pub const GITHUB_WATCH_TTL: Duration = Duration::from_secs(90);
+/// After GitHub refused a webhook (no admin access), it is tried again after
+/// this long.
+pub const GITHUB_HOOK_RETRY: Duration = Duration::from_secs(24 * 3600);
+/// Largest webhook delivery, GitHub's limit.
+pub const GITHUB_HOOK_MAX_BYTES: usize = 25 * 1024 * 1024;
 /// Mirrors that one server syncs at the same time.
 pub const GITHUB_CONCURRENT_SYNCS: usize = 4;
 /// Time limit for fetching one mirror from GitHub.
