@@ -14,6 +14,8 @@ export default defineConfig({
   build: { assetsDir: "-/assets" },
   resolve: { tsconfigPaths: true },
   server: {
+    // scripts/local.ts offers the development server on the tailnet.
+    allowedHosts: [".ts.net"],
     proxy: {
       "/-/api": { target: server, ws: true, changeOrigin: false },
       "^/.+/-/raw/": { target: server, changeOrigin: false },

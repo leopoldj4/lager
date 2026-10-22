@@ -12,8 +12,15 @@
 // cache live in .local/; the server keeps its ports between runs while they
 // are free, and Vite takes 3000 or the next free port. Remove .local/cache at any time: the server recovers from
 // storage.
+//
+// With Tailscale installed, `tailscale serve` also offers the web interface
+// and the server over HTTPS, and Git over SSH, on this machine's tailnet name
+// under the same port numbers, until the script stops.
+//
+// The script prints only the address and errors: the build's and Docker's
+// output when they fail, the server's warnings, and Vite's errors.
 
-import { $ } from "bun"
+import { $, type ShellPromise } from "bun"
 import { createHash, randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
@@ -40,8 +47,8 @@ if (process.argv[2]) {
 mkdirSync(join(root, "cache"), { recursive: true })
 const previous = readEnv()
 
-await $`bun install --frozen-lockfile`.cwd(join(repo, "web")).quiet()
-await $`cargo build --manifest-path ${join(repo, "Cargo.toml")} --bin lager --bin lager-server`
+await quiet($`bun install --frozen-lockfile`.cwd(join(repo, "web")))
+await quiet($`cargo build --manifest-path ${join(repo, "Cargo.toml")} --bin lager --bin lager-server`)
 const target = process.env.CARGO_TARGET_DIR ?? join(repo, "target")
 // Vite serves the web interface; the server answers only its API, not an
 // old build beside the programs.
@@ -65,7 +72,7 @@ writeFileSync(
 if (!existsSync(hostKey)) await $`ssh-keygen -q -t ed25519 -N '' -C lager-local -f ${hostKey}`
 
 // Docker picks the services' ports; they may change between runs.
-await $`${compose} up -d --wait`.env(composeEnv)
+await quiet($`${compose} up -d --wait`.env(composeEnv))
 const port = async (service: string, inner: number) =>
   (await $`${compose} port ${service} ${inner}`.env(composeEnv).text()).trim()
 
@@ -89,7 +96,12 @@ const env: Record<string, string> = {
 writeFileSync(envFile, Object.entries(env).map(([k, v]) => `${k}=${v}\n`).join(""))
 // GitHub mirrors: LAGER_GITHUB_CLIENT_ID and LAGER_GITHUB_CLIENT_SECRET pass
 // through from the environment.
-const serverEnv = { ...process.env, ...env, LAGER_SSH_HOST_KEY: readFileSync(hostKey, "utf8") }
+const serverEnv = {
+  RUST_LOG: "warn",
+  ...process.env,
+  ...env,
+  LAGER_SSH_HOST_KEY: readFileSync(hostKey, "utf8"),
+}
 const admin = (args: string[]) => $`${lager} ${args}`.env(serverEnv).quiet()
 
 // The storage service answers a little after its container starts.
@@ -111,16 +123,20 @@ if (pub) await admin(["ssh-key", "add", "dev", pub]).nothrow()
 const vitePort = (await freePort(undefined, 3000)).split(":")[1]
 const processes = [
   Bun.spawn([lagerServer], { env: serverEnv, stdio: ["ignore", "inherit", "inherit"] }),
-  Bun.spawn([join(repo, "web/node_modules/.bin/vite"), "dev", "--host", "127.0.0.1", "--port", vitePort, "--strictPort"], {
+  Bun.spawn([join(repo, "web/node_modules/.bin/vite"), "dev", "--host", "127.0.0.1", "--port", vitePort, "--strictPort", "--logLevel", "error"], {
     cwd: join(repo, "web"),
     env: { ...process.env, LAGER_URL: `http://${listen}` },
     stdio: ["ignore", "inherit", "inherit"],
   }),
 ]
+// `tailscale serve` arguments that publish a local port on the tailnet, and
+// the same arguments without the target remove it again.
+const served: string[][] = []
 let stopping = false
 const stop = async (code: number) => {
   if (stopping) return
   stopping = true
+  for (const s of served) await $`tailscale serve ${s} off`.quiet().nothrow()
   for (const p of processes) p.kill()
   await Promise.all(processes.map((p) => p.exited))
   await $`${compose} stop`.env(composeEnv).quiet().nothrow()
@@ -139,13 +155,35 @@ for (const url of [`http://${listen}/_lager/health`, `http://127.0.0.1:${vitePor
     await Bun.sleep(250)
   }
 }
-console.log(`
-lager is ready (stop with Ctrl-C; remove the data with scripts/local.ts down)
-  web interface: http://127.0.0.1:${vitePort}/  (sign in as dev / dev-password; reloads on changes)
-  clone:         git clone http://dev:dev-password@${listen}/dev/demo.git
-                 git clone ssh://git@${sshListen}/dev/demo.git${pub ? "" : "  (add a key: no ~/.ssh/id_*.pub)"}
-  lager:         set -a; . .local/lager.env; set +a; target/debug/lager ...
-`)
+const tailnet = await tailnetName()
+const httpPort = listen.split(":")[1]
+const sshPort = sshListen.split(":")[1]
+if (tailnet) {
+  for (const [arg, target] of [
+    [`--https=${vitePort}`, `http://127.0.0.1:${vitePort}`],
+    [`--https=${httpPort}`, `http://${listen}`],
+    [`--tcp=${sshPort}`, `tcp://${sshListen}`],
+  ]) {
+    served.push([arg])
+    const r = await $`tailscale serve --bg ${arg} ${target}`.quiet().nothrow()
+    if (r.exitCode !== 0) {
+      console.error(`tailscale serve ${arg} ${target} failed:\n${r.stderr}`)
+      await stop(1)
+    }
+  }
+}
+// Without Tailscale, the local address.
+console.log(`lager is ready: ${tailnet ? `https://${tailnet}` : "http://127.0.0.1"}:${vitePort}/`)
+
+/** This machine's name on the tailnet; none without a running Tailscale. */
+async function tailnetName(): Promise<string | undefined> {
+  if (!Bun.which("tailscale")) return undefined
+  const r = await $`tailscale status --json`.quiet().nothrow()
+  if (r.exitCode !== 0) return undefined
+  const status = r.json()
+  if (status.BackendState !== "Running") return undefined
+  return status.Self?.DNSName?.replace(/\.$/, "") || undefined
+}
 
 /** The previous configuration, if any. */
 function readEnv(): Record<string, string> {
@@ -174,6 +212,12 @@ function isFree(port: number): Promise<boolean> {
     s.once("error", () => resolve(false))
     s.listen(port, "127.0.0.1", () => s.close(() => resolve(true)))
   })
+}
+
+/** Runs a command and shows its output only if it fails. */
+async function quiet(command: ShellPromise) {
+  const r = await command.quiet().nothrow()
+  if (r.exitCode !== 0) fail(`${r.stdout}${r.stderr}`.trim())
 }
 
 function fail(message: string): never {
