@@ -9,7 +9,11 @@
 //! fetches the missing objects into the cache, and changes the refs with the
 //! push procedure as a push by the server. Branches and tags follow GitHub
 //! exactly, deletions and force pushes included, and so does the default
-//! branch.
+//! branch. GitHub's pull requests come along: their refs with the
+//! branches, and their conversations through the API ([`pulls`],
+//! docs/decisions/0026-github-pull-requests.md).
+
+mod pulls;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -20,6 +24,7 @@ use tokio::sync::{Notify, Semaphore, watch};
 
 use crate::git::hook::{HookCommand, HookResponse};
 use crate::http::access::Directory;
+use crate::pulls::PullService;
 use crate::repository::{AccessCheck, Origin, PendingPush, PushAccess, Registry, RepoError};
 use lager_core::catalog::CatalogError;
 use lager_core::config::GithubConfig;
@@ -99,6 +104,7 @@ pub struct Github {
     pub db: GithubDb,
     registry: Arc<Registry>,
     directory: Arc<Directory>,
+    pulls: Arc<PullService>,
     /// Wakes [`Github::run`] when a mirror is added.
     wake: Notify,
 }
@@ -109,6 +115,7 @@ impl Github {
         db: GithubDb,
         registry: Arc<Registry>,
         directory: Arc<Directory>,
+        pulls: Arc<PullService>,
     ) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
@@ -120,6 +127,7 @@ impl Github {
             db,
             registry,
             directory,
+            pulls,
             wake: Notify::new(),
         })
     }
@@ -428,10 +436,19 @@ impl Github {
             }
         }
         for (name, old) in &local.refs {
-            if (name.is_branch() || name.is_tag()) && !wanted.contains_key(name) {
+            if (name.is_branch() || name.is_tag() || is_pull_head(name))
+                && !wanted.contains_key(name)
+            {
                 commands.push((name.clone(), Some(old.clone()), None));
             }
         }
+        // The newest pull requests first; a first sync of thousands moves
+        // the rest in the next syncs.
+        let (mut pull_refs, mut commands): (Vec<_>, Vec<_>) =
+            commands.into_iter().partition(|(n, _, _)| is_pull_head(n));
+        pull_refs.sort_by_key(|(n, _, _)| std::cmp::Reverse(pull_number(n)));
+        pull_refs.truncate(limits::GITHUB_PULL_REFS_PER_SYNC);
+        commands.extend(pull_refs);
 
         if !commands.is_empty() {
             let fetch: Vec<&RefName> = commands
@@ -490,6 +507,9 @@ impl Github {
                 .await
                 .map_err(|e| format!("default branch not changed: {e}"))?;
         }
+        self.sync_pulls(due, token)
+            .await
+            .map_err(|e| format!("pull requests not synced: {e}"))?;
         Ok(Synced::Done(commands.len()))
     }
 
@@ -556,6 +576,7 @@ impl Github {
             "HEAD",
             "refs/heads/*",
             "refs/tags/*",
+            "refs/pull/*/head",
         ]);
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(120),
@@ -582,7 +603,7 @@ impl Github {
             let Ok(r) = RefName::parse(name) else {
                 continue;
             };
-            if r.is_branch() || r.is_tag() {
+            if r.is_branch() || r.is_tag() || is_pull_head(&r) {
                 remote.refs.insert(r, left.to_string());
             }
         }
@@ -633,8 +654,21 @@ enum Synced {
 #[derive(Default)]
 struct Remote {
     head: Option<RefName>,
-    /// Branches and tags with their object IDs.
+    /// Branches, tags, and heads of pull requests with their object IDs.
     refs: BTreeMap<RefName, String>,
+}
+
+/// `refs/pull/<n>/head`, which GitHub keeps for every pull request.
+fn is_pull_head(r: &RefName) -> bool {
+    pull_number(r).is_some()
+}
+
+fn pull_number(r: &RefName) -> Option<u64> {
+    r.as_str()
+        .strip_prefix("refs/pull/")?
+        .strip_suffix("/head")?
+        .parse()
+        .ok()
 }
 
 fn url(github: &str) -> String {

@@ -142,7 +142,9 @@ async fn pull(
         .get(repo.id, number)
         .await?
         .ok_or_else(|| ReadError::not_found("pull request"))?;
-    if p.state != PullState::Merged {
+    // GitHub's pull requests follow GitHub, not the branches here.
+    let github = p.github_url.is_some();
+    if p.state != PullState::Merged && !github {
         s.pulls.clone().request_sync(repo.id);
     }
     let events = s.pulls.db.events(repo.id, number).await?;
@@ -157,6 +159,17 @@ async fn pull(
     let mut mergeable = Value::Null;
     let mut conflicts: Vec<String> = vec![];
     let (head, base) = match p.state {
+        // The head is GitHub's ref, which forks have too; nothing merges
+        // here.
+        PullState::Open if github => {
+            let head = kept.clone().unwrap_or_else(|| p.head_oid.clone());
+            let base = match &target {
+                Some(t) => g.merge_base(t, &head).await?,
+                None => None,
+            }
+            .unwrap_or_else(|| p.merge_base.clone());
+            (head, base)
+        }
         PullState::Open => {
             let head = source
                 .clone()
@@ -193,6 +206,7 @@ async fn pull(
             }
             (head, base)
         }
+        PullState::Closed if github => (p.head_oid.clone(), p.merge_base.clone()),
         PullState::Closed => (
             kept.unwrap_or_else(|| p.head_oid.clone()),
             p.merge_base.clone(),
@@ -213,9 +227,9 @@ async fn pull(
         "target_oid": target,
         "mergeable": mergeable,
         "conflicts": conflicts,
-        "can_comment": user.is_some(),
-        "can_merge": user.is_some() && level >= Access::Write,
-        "can_close": user.is_some_and(|u| u == p.author || level >= Access::Write),
+        "can_comment": user.is_some() && !github,
+        "can_merge": user.is_some() && level >= Access::Write && !github,
+        "can_close": !github && user.is_some_and(|u| u == p.author || level >= Access::Write),
         "generation": view.generation,
     }))
 }

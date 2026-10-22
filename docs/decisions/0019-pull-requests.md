@@ -101,4 +101,5 @@ Pages: `/<repo>/-/pulls`, `/-/pulls/closed`, `/-/pull/<n>` with
 - Each push to a branch of an open pull request adds one log entry.
 - A sync reads the open pull requests of the repository after each of the
   server's pushes, and the repository tabs read their counts.
-- Titles, descriptions, and comments are plain text.
+- Titles are plain text; descriptions and comments were plain text until
+  decision 26 made them Markdown.

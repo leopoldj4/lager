@@ -188,6 +188,31 @@ CREATE TABLE lager_ssh_keys (
 );
 CREATE INDEX lager_ssh_keys_user ON lager_ssh_keys (user_name);
 "#,
+    // Pull requests of GitHub mirrors (docs/decisions/0026-github-pull-requests.md).
+    // A pull request from GitHub has its page there; its authors are
+    // GitHub logins, and GitHub decides which ones are open.
+    r#"
+ALTER TABLE lager_pulls ADD COLUMN github_url text;
+DROP INDEX lager_pulls_open_branches;
+CREATE UNIQUE INDEX lager_pulls_open_branches
+    ON lager_pulls (repository, source, target) WHERE state = 'open' AND github_url IS NULL;
+-- GitHub's comment ID, unique per repository: two users may mirror the
+-- same GitHub repository.
+ALTER TABLE lager_pull_events ADD COLUMN github_id bigint;
+ALTER TABLE lager_pull_events ADD COLUMN edited_at timestamptz;
+CREATE UNIQUE INDEX lager_pull_events_github
+    ON lager_pull_events (repository, github_id) WHERE github_id IS NOT NULL;
+CREATE INDEX lager_pull_events_time ON lager_pull_events (repository, number, created_at, id);
+-- Where the import stands: GitHub's `updated_at` of the newest pull
+-- request and comment seen, the next page of the first import of pull
+-- requests (NULL once it is done), and the ETags of the last answers.
+ALTER TABLE lager_github_mirrors ADD COLUMN pulls_since text;
+ALTER TABLE lager_github_mirrors ADD COLUMN pulls_etag text;
+ALTER TABLE lager_github_mirrors ADD COLUMN pulls_import_page integer DEFAULT 1;
+ALTER TABLE lager_github_mirrors ADD COLUMN comments_since text;
+ALTER TABLE lager_github_mirrors ADD COLUMN comments_page integer NOT NULL DEFAULT 1;
+ALTER TABLE lager_github_mirrors ADD COLUMN comments_etag text;
+"#,
 ];
 
 /// SSH keys a user can have at the same time.

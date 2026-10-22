@@ -74,7 +74,7 @@ object limits of the push procedure.
 - Each mirror costs one `ls-remote` per minute per deployment, and a fetch
   only when something changed.
 - Only branches and tags are mirrored; GitHub's pull requests, issues, and
-  `refs/pull/` are not.
+  `refs/pull/` are not. Decision 26 adds the pull requests and their refs.
 - A server that stops during a sync leaves the mirror leased for up to 30
   minutes. Two servers that sync the same mirror are ordered by the head
   CAS; the loser records an error and the next sync passes.

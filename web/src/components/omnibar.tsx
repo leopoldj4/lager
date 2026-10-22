@@ -336,8 +336,7 @@ function Actions({
 
 function RepoGroups({ repo, go, run }: { repo: string; go: Go; run: Run }) {
   const refs = useRefs(repo).data
-  // Mirrors have no pull requests.
-  const hasPulls = !!refs && !refs.mirror
+  const hasPulls = !!refs
   const pulls = usePulls(repo, false, hasPulls).data?.pages.flatMap(
     (p) => p.pulls
   )

@@ -60,7 +60,6 @@ export function RepoPage({ loc }: { loc: Location }) {
             ? ""
             : split.rev
         }
-        mirror={!!refs.data?.mirror}
         owner={owner}
         counts={refs.data && { pulls: pulls.data?.open }}
       />
@@ -151,14 +150,11 @@ function MirrorNote({ github }: { github: string }) {
 function Tabs({
   loc,
   rev,
-  mirror,
   owner,
   counts,
 }: {
   loc: Location
   rev: string
-  /** Mirrors have no pull requests. */
-  mirror: boolean
   /** Only the owner sees the settings. */
   owner: boolean
   counts?: { pulls?: number }
@@ -179,9 +175,7 @@ function Tabs({
     { view: "tree", label: "Code", icon: BookMarked },
     { view: "settings", label: "Settings", icon: Settings },
   ]
-  const tabs = all.filter(
-    (t) => (!mirror || t.view !== "pulls") && (owner || t.view !== "settings")
-  )
+  const tabs = all.filter((t) => owner || t.view !== "settings")
   // History and branches are reached from the overview and the code; they
   // count as part of the code.
   const active =

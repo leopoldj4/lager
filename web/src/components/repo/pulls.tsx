@@ -107,7 +107,7 @@ export function PullList({
             </Link>
           ))}
         </div>
-        {refs.branches.length > 1 && (
+        {!refs.mirror && refs.branches.length > 1 && (
           <Button asChild size="sm" className="ml-auto">
             <Link to="/$" params={{ _splat: newPullHref(repo, refs) }}>
               <Plus />
@@ -124,7 +124,9 @@ export function PullList({
         <p className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
           {closed
             ? "No closed pull requests."
-            : "No open pull requests. Push a branch and open one to propose its changes."}
+            : refs.mirror
+              ? `No open pull requests on github.com/${refs.mirror}.`
+              : "No open pull requests. Push a branch and open one to propose its changes."}
         </p>
       ) : (
         <ul className="divide-y rounded-lg border">

@@ -179,6 +179,7 @@ pub async fn start_with_listener(
             lager_core::github::GithubDb::new(directory.users().pool().clone()),
             registry.clone(),
             directory.clone(),
+            pulls.clone(),
         )?)),
         None => None,
     };

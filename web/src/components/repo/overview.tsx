@@ -27,16 +27,18 @@ const SHOWN = 5
  */
 export function Overview({ repo, refs }: { repo: string; refs: Refs }) {
   const user = useLive()?.user
-  const pulls = usePulls(repo, false, !refs.mirror)
+  const pulls = usePulls(repo, false)
   const open = pulls.data?.pages.flatMap((p) => p.pulls)
-  const mine = (user && open?.filter((p) => p.author === user)) || []
+  // Authors of pull requests from GitHub are GitHub logins.
+  const mine =
+    (user && open?.filter((p) => !p.github_url && p.author === user)) || []
   const others = open?.filter((p) => !mine.includes(p))
   const total = pulls.data?.pages[0]?.counts.open
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
       <div className="grid min-w-0 grid-cols-1 content-start gap-6">
-        {!refs.mirror && mine.length > 0 && (
+        {mine.length > 0 && (
           <Section title="Your pull requests" count={mine.length}>
             <ul className="divide-y rounded-lg border">
               {mine.map((p) => (
@@ -45,7 +47,7 @@ export function Overview({ repo, refs }: { repo: string; refs: Refs }) {
             </ul>
           </Section>
         )}
-        {!refs.mirror && !(mine.length > 0 && others?.length === 0) && (
+        {!(mine.length > 0 && others?.length === 0) && (
           <Section
             title={mine.length > 0 ? "Other pull requests" : "Pull requests"}
             count={total === undefined ? undefined : total - mine.length}
@@ -115,7 +117,7 @@ function NoPulls({ repo, refs }: { repo: string; refs: Refs }) {
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed px-4 py-6 text-sm text-muted-foreground">
       No open pull requests.
-      {refs.branches.length > 1 && (
+      {!refs.mirror && refs.branches.length > 1 && (
         <Button asChild size="sm" variant="outline" className="ml-auto">
           <Link to="/$" params={{ _splat: newPullHref(repo, refs) }}>
             <Plus />

@@ -8,6 +8,11 @@
 //! Changes that follow the repository (new commits, a merge) are
 //! conditional on the recorded commits, so servers that notice the same push
 //! record it once.
+//!
+//! Pull requests of GitHub mirrors are copies of GitHub's
+//! (docs/decisions/0026-github-pull-requests.md): [`Pulls::import_github`]
+//! and [`Pulls::import_github_comment`] write them, and nothing here
+//! changes them.
 
 use serde::Serialize;
 use sqlx::postgres::{PgPool, PgRow};
@@ -17,8 +22,8 @@ use crate::model::RepoId;
 
 /// Longest title, in characters.
 pub const MAX_TITLE_CHARS: usize = 256;
-/// Longest description or comment, in characters.
-pub const MAX_BODY_CHARS: usize = 32 * 1024;
+/// Longest description or comment, in characters: GitHub's limit.
+pub const MAX_BODY_CHARS: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -65,6 +70,9 @@ pub struct Pull {
     pub created_ms: u64,
     pub updated_ms: u64,
     pub closed_ms: Option<u64>,
+    /// The pull request's page on GitHub, for one copied from there. Its
+    /// authors are GitHub logins, and it cannot be changed here.
+    pub github_url: Option<String>,
     #[serde(skip)]
     pub merge_request: Option<String>,
 }
@@ -113,6 +121,8 @@ pub struct PullEvent {
     pub old_oid: Option<String>,
     pub oid: Option<String>,
     pub created_ms: u64,
+    /// When a comment was last edited.
+    pub edited_ms: Option<u64>,
 }
 
 pub struct NewPull {
@@ -144,6 +154,40 @@ impl Pull {
             merge_base: self.merge_base.clone(),
         }
     }
+}
+
+/// A pull request as GitHub has it, for [`Pulls::import_github`].
+pub struct GithubPull {
+    pub number: u64,
+    /// Its page on GitHub.
+    pub url: String,
+    pub title: String,
+    pub body: String,
+    pub author: String,
+    /// The branch, or `owner:branch` for a fork.
+    pub source: String,
+    pub target: String,
+    pub state: PullState,
+    pub head_oid: String,
+    /// GitHub's base commit; the merge commit once merged.
+    pub target_oid: String,
+    pub merge_base: String,
+    pub merge_oid: Option<String>,
+    pub merged_by: Option<String>,
+    /// GitHub's times, in RFC 3339.
+    pub created_at: String,
+    pub updated_at: String,
+    pub closed_at: Option<String>,
+}
+
+/// A comment on GitHub, for [`Pulls::import_github_comment`].
+pub struct GithubComment {
+    pub number: u64,
+    pub id: i64,
+    pub author: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// Open and closed (with merged) pull requests of a repository.
@@ -181,7 +225,7 @@ macro_rules! pull_columns {
          merge_base, merge_oid, merged_by, merge_request, version,
          (extract(epoch FROM created_at) * 1000)::bigint,
          (extract(epoch FROM updated_at) * 1000)::bigint,
-         (extract(epoch FROM closed_at) * 1000)::bigint"
+         (extract(epoch FROM closed_at) * 1000)::bigint, github_url"
     };
 }
 
@@ -210,6 +254,7 @@ fn pull(row: PgRow) -> Result<Pull, PullError> {
             .try_get::<Option<i64>, _>(16)
             .map_err(get)?
             .map(|v| v as u64),
+        github_url: row.try_get(17).map_err(get)?,
     })
 }
 
@@ -221,6 +266,7 @@ type EventRow = (
     Option<String>,
     Option<String>,
     i64,
+    Option<i64>,
 );
 
 /// Checks a title and a description or comment.
@@ -373,13 +419,15 @@ impl Pulls {
         Ok((rows.into_iter().map(pull).collect::<Result<_, _>>()?, c))
     }
 
-    /// Unmerged pull requests, including closed ones with a pending merge receipt.
+    /// Unmerged pull requests, including closed ones with a pending merge
+    /// receipt. GitHub's are left out: GitHub keeps them.
     pub async fn unmerged(&self, repo: RepoId) -> Result<Vec<Pull>, PullError> {
         let rows = sqlx::query(concat!(
             "SELECT ",
             pull_columns!(),
             " FROM lager_pulls
-             WHERE repository = $1 AND state != 'merged' ORDER BY number"
+             WHERE repository = $1 AND state != 'merged' AND github_url IS NULL
+             ORDER BY number"
         ))
         .bind(repo.to_string())
         .fetch_all(&self.pool)
@@ -392,9 +440,10 @@ impl Pulls {
     pub async fn events(&self, repo: RepoId, number: u64) -> Result<Vec<PullEvent>, PullError> {
         let rows: Vec<EventRow> = sqlx::query_as(
             "SELECT id, kind, author, body, old_oid, oid,
-                    (extract(epoch FROM created_at) * 1000)::bigint
+                    (extract(epoch FROM created_at) * 1000)::bigint,
+                    (extract(epoch FROM edited_at) * 1000)::bigint
              FROM lager_pull_events
-             WHERE repository = $1 AND number = $2 ORDER BY id",
+             WHERE repository = $1 AND number = $2 ORDER BY created_at, id",
         )
         .bind(repo.to_string())
         .bind(number as i64)
@@ -402,7 +451,7 @@ impl Pulls {
         .await
         .map_err(unavailable)?;
         rows.into_iter()
-            .map(|(id, kind, author, body, old_oid, oid, at)| {
+            .map(|(id, kind, author, body, old_oid, oid, at, edited)| {
                 Ok(PullEvent {
                     id,
                     kind: EventKind::parse(&kind)?,
@@ -411,6 +460,7 @@ impl Pulls {
                     old_oid,
                     oid,
                     created_ms: at as u64,
+                    edited_ms: edited.map(|v| v as u64),
                 })
             })
             .collect()
@@ -647,6 +697,248 @@ impl Pulls {
         tx.commit().await.map_err(unavailable)?;
         Ok(Some(p))
     }
+
+    /// Writes a pull request copied from GitHub, and adds what changed since
+    /// the last copy to its timeline: pushes, closing, reopening, merging.
+    /// `None`: nothing changed.
+    pub async fn import_github(
+        &self,
+        repo: RepoId,
+        g: &GithubPull,
+    ) -> Result<Option<Pull>, PullError> {
+        let repo = repo.to_string();
+        let number = g.number as i64;
+        let body = truncate(&g.body, MAX_BODY_CHARS);
+        let title = truncate(g.title.trim(), MAX_TITLE_CHARS);
+        let state = match g.state {
+            PullState::Open => "open",
+            PullState::Closed => "closed",
+            PullState::Merged => "merged",
+        };
+        let mut conn = self.pool.acquire().await.map_err(unavailable)?;
+        let mut tx = conn.begin().await.map_err(unavailable)?;
+        let old = sqlx::query(concat!(
+            "SELECT ",
+            pull_columns!(),
+            " FROM lager_pulls WHERE repository = $1 AND number = $2 FOR UPDATE"
+        ))
+        .bind(&repo)
+        .bind(number)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?
+        .map(pull)
+        .transpose()?;
+        if old.as_ref().is_some_and(|p| p.github_url.is_none()) {
+            return Err(PullError::State(format!(
+                "pull request #{} exists here and is not from GitHub",
+                g.number
+            )));
+        }
+        let changed = sqlx::query(
+            "INSERT INTO lager_pulls AS p
+                 (repository, number, title, body, author, source, target, state,
+                  head_oid, target_oid, merge_base, merge_oid, merged_by, github_url,
+                  created_at, updated_at, closed_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                     $15::timestamptz, $16::timestamptz, $17::timestamptz)
+             ON CONFLICT (repository, number) DO UPDATE SET
+                 title = excluded.title, body = excluded.body, author = excluded.author,
+                 source = excluded.source, target = excluded.target, state = excluded.state,
+                 head_oid = excluded.head_oid, target_oid = excluded.target_oid,
+                 merge_base = excluded.merge_base, merge_oid = excluded.merge_oid,
+                 merged_by = coalesce(excluded.merged_by, p.merged_by),
+                 github_url = excluded.github_url, closed_at = excluded.closed_at,
+                 updated_at = greatest(p.updated_at, excluded.updated_at),
+                 version = p.version + 1
+             WHERE (p.title, p.body, p.author, p.source, p.target, p.state, p.head_oid,
+                    p.target_oid, p.merge_oid, p.github_url, p.closed_at)
+                   IS DISTINCT FROM
+                   (excluded.title, excluded.body, excluded.author, excluded.source,
+                    excluded.target, excluded.state, excluded.head_oid, excluded.target_oid,
+                    excluded.merge_oid, excluded.github_url, excluded.closed_at)
+                OR (excluded.merged_by IS NOT NULL AND p.merged_by IS NULL)",
+        )
+        .bind(&repo)
+        .bind(number)
+        .bind(&title)
+        .bind(&body)
+        .bind(&g.author)
+        .bind(&g.source)
+        .bind(&g.target)
+        .bind(state)
+        .bind(&g.head_oid)
+        .bind(&g.target_oid)
+        .bind(&g.merge_base)
+        .bind(&g.merge_oid)
+        .bind(&g.merged_by)
+        .bind(&g.url)
+        .bind(&g.created_at)
+        .bind(&g.updated_at)
+        .bind(&g.closed_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        if changed.rows_affected() == 0 {
+            return Ok(None);
+        }
+        sqlx::query(
+            "INSERT INTO lager_pull_numbers (repository, last) VALUES ($1, $2)
+             ON CONFLICT (repository) DO UPDATE
+             SET last = greatest(lager_pull_numbers.last, excluded.last)",
+        )
+        .bind(&repo)
+        .bind(number)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let closed_at = g.closed_at.as_deref().unwrap_or(&g.updated_at);
+        let mut events: Vec<NewEvent> = vec![];
+        match &old {
+            // The first copy shows how it ended, not how it got there.
+            None => match g.state {
+                PullState::Open => {}
+                PullState::Closed => events.push((EventKind::Closed, None, None, None, closed_at)),
+                PullState::Merged => events.push((
+                    EventKind::Merged,
+                    g.merged_by.as_deref(),
+                    None,
+                    g.merge_oid.as_deref(),
+                    closed_at,
+                )),
+            },
+            Some(old) => {
+                if old.head_oid != g.head_oid {
+                    events.push((
+                        EventKind::Push,
+                        None,
+                        Some(&old.head_oid),
+                        Some(&g.head_oid),
+                        &g.updated_at,
+                    ));
+                }
+                match (old.state, g.state) {
+                    (PullState::Open, PullState::Closed) => {
+                        events.push((EventKind::Closed, None, None, None, closed_at))
+                    }
+                    (PullState::Closed, PullState::Open) => {
+                        events.push((EventKind::Reopened, None, None, None, &g.updated_at))
+                    }
+                    (s, PullState::Merged) if s != PullState::Merged => events.push((
+                        EventKind::Merged,
+                        g.merged_by.as_deref(),
+                        None,
+                        g.merge_oid.as_deref(),
+                        closed_at,
+                    )),
+                    _ => {}
+                }
+            }
+        }
+        for (kind, author, old_oid, oid, at) in events {
+            sqlx::query(
+                "INSERT INTO lager_pull_events
+                     (repository, number, kind, author, old_oid, oid, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)",
+            )
+            .bind(&repo)
+            .bind(number)
+            .bind(kind.as_str())
+            .bind(author)
+            .bind(old_oid)
+            .bind(oid)
+            .bind(at)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        }
+        let p = one(&mut tx, &repo, number).await?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(Some(p))
+    }
+
+    /// Writes a comment copied from GitHub, or its edit. `None`: nothing
+    /// changed, or the pull request here is not GitHub's.
+    /// [`PullError::NotFound`]: its pull request is not here yet.
+    pub async fn import_github_comment(
+        &self,
+        repo: RepoId,
+        c: &GithubComment,
+    ) -> Result<Option<Pull>, PullError> {
+        let repo = repo.to_string();
+        let number = c.number as i64;
+        let body = truncate(&c.body, MAX_BODY_CHARS);
+        let mut conn = self.pool.acquire().await.map_err(unavailable)?;
+        let mut tx = conn.begin().await.map_err(unavailable)?;
+        let known: Option<bool> = sqlx::query_scalar(
+            "SELECT github_url IS NOT NULL FROM lager_pulls
+             WHERE repository = $1 AND number = $2 FOR UPDATE",
+        )
+        .bind(&repo)
+        .bind(number)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        match known {
+            None => return Err(PullError::NotFound),
+            // Not GitHub's: its comments stay on GitHub.
+            Some(false) => return Ok(None),
+            Some(true) => {}
+        }
+        let changed = sqlx::query(
+            "INSERT INTO lager_pull_events AS e
+                 (repository, number, kind, author, body, github_id, created_at, edited_at)
+             VALUES ($1, $2, 'comment', $3, $4, $5, $6::timestamptz,
+                     CASE WHEN $7::timestamptz > $6::timestamptz THEN $7::timestamptz END)
+             ON CONFLICT (repository, github_id) WHERE github_id IS NOT NULL DO UPDATE
+             SET body = excluded.body, author = excluded.author,
+                 edited_at = coalesce(excluded.edited_at, e.edited_at)
+             WHERE e.body IS DISTINCT FROM excluded.body
+                OR e.author IS DISTINCT FROM excluded.author",
+        )
+        .bind(&repo)
+        .bind(number)
+        .bind(&c.author)
+        .bind(&body)
+        .bind(c.id)
+        .bind(&c.created_at)
+        .bind(&c.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        if changed.rows_affected() == 0 {
+            return Ok(None);
+        }
+        sqlx::query(
+            "UPDATE lager_pulls SET version = version + 1,
+                 updated_at = greatest(updated_at, $3::timestamptz)
+             WHERE repository = $1 AND number = $2",
+        )
+        .bind(&repo)
+        .bind(number)
+        .bind(&c.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let p = one(&mut tx, &repo, number).await?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(Some(p))
+    }
+}
+
+/// An event of an imported pull request: its kind, author, old and new
+/// commit, and GitHub's time.
+type NewEvent<'a> = (
+    EventKind,
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
+    &'a str,
+);
+
+/// At most `max` characters of `s`.
+fn truncate(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
 }
 
 async fn by_request(

@@ -118,6 +118,11 @@ export interface Pull {
   created_ms: number
   updated_ms: number
   closed_ms: number | null
+  /**
+   * The page on GitHub of a pull request copied from there; its authors
+   * are GitHub logins, and it changes only there.
+   */
+  github_url: string | null
 }
 
 export interface PullEvent {
@@ -129,6 +134,8 @@ export interface PullEvent {
   old_oid: string | null
   oid: string | null
   created_ms: number
+  /** When a comment was last edited. */
+  edited_ms: number | null
 }
 
 export interface PullList {

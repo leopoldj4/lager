@@ -97,7 +97,7 @@ If the storage service is unavailable, fail new reads and writes. Do not use an 
 
 The storage service determines protection against permanent data loss. A local service on one disk does not provide redundant storage.
 
-Git LFS, partial clone, user hooks, and SHA-256 remain later extensions. Transactions across repositories remain a later extension. Pull requests within one repository are in [decision 19](docs/decisions/0019-pull-requests.md). Git over SSH is in [decision 22](docs/decisions/0022-git-over-ssh.md). Passkey sign-up is in [decision 23](docs/decisions/0023-passkey-sign-up.md). Read-only mirrors of GitHub repositories are in [decision 20](docs/decisions/0020-github-mirrors.md).
+Git LFS, partial clone, user hooks, and SHA-256 remain later extensions. Transactions across repositories remain a later extension. Pull requests within one repository are in [decision 19](docs/decisions/0019-pull-requests.md). Git over SSH is in [decision 22](docs/decisions/0022-git-over-ssh.md). Passkey sign-up is in [decision 23](docs/decisions/0023-passkey-sign-up.md). Read-only mirrors of GitHub repositories are in [decision 20](docs/decisions/0020-github-mirrors.md), and their pull requests in [decision 26](docs/decisions/0026-github-pull-requests.md).
 
 ## 5. Storage interface
 

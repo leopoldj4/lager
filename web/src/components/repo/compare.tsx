@@ -23,10 +23,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Textarea } from "@/components/ui/textarea"
 import { QueryError } from "@/components/query-error"
 import { Avatar } from "./avatar"
 import { ChangedFiles } from "./changes"
+import { MessageEditor } from "./message-editor"
 
 /**
  * Compares two branches and opens a pull request that merges `head` into
@@ -216,11 +216,13 @@ function CreateForm({
         required
         maxLength={256}
       />
-      <Textarea
-        aria-label="Description"
+      <MessageEditor
+        repo={repo}
+        rev={base}
+        label="Description"
         placeholder="Describe the changes"
         value={body}
-        onChange={(e) => setBody(e.target.value)}
+        onChange={setBody}
         className="min-h-28"
       />
       {create.error && (

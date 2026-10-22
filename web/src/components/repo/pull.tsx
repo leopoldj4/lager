@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
+  ExternalLink,
   FileDiff,
   GitCommitHorizontal,
   GitMerge,
@@ -19,6 +20,7 @@ import {
   useLive,
   usePull,
   usePullChange,
+  type Pull,
   type PullDetail,
   type PullEvent,
 } from "@/lib/api"
@@ -35,11 +37,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Textarea } from "@/components/ui/textarea"
 import { QueryError } from "@/components/query-error"
 import { Avatar } from "./avatar"
 import { ChangedFiles } from "./changes"
 import { CommitRows } from "./compare"
+import { MessageView } from "./markdown"
+import { MessageEditor } from "./message-editor"
 import { BranchName, PullStateBadge } from "./pulls"
 
 type Tab = "conversation" | "commits" | "files"
@@ -59,25 +62,44 @@ export function PullView({ repo, rest }: { repo: string; rest: string[] }) {
   if (!d) return <Skeleton className="h-96" />
   const { pull } = d
   const commits = cmp.data?.commits
+  const github = !!pull.github_url
+  // Who merged a pull request from GitHub is known only for merges seen
+  // after the first import.
+  const subject =
+    pull.state === "merged"
+      ? (pull.merged_by ?? (github ? null : "A push"))
+      : pull.author
 
   return (
     <div className="grid grid-cols-1 gap-6">
       <div className="grid grid-cols-1 gap-3">
-        <h2 className="text-2xl break-words">
-          {pull.title}{" "}
-          <span className="font-light text-muted-foreground">
-            #{pull.number}
-          </span>
-        </h2>
+        <div className="flex flex-wrap items-start gap-3">
+          <h2 className="min-w-0 flex-1 text-2xl break-words">
+            {pull.title}{" "}
+            <span className="font-light text-muted-foreground">
+              #{pull.number}
+            </span>
+          </h2>
+          {pull.github_url && (
+            <Button asChild variant="outline" size="sm">
+              <a href={pull.github_url} target="_blank" rel="noreferrer">
+                <ExternalLink />
+                View on GitHub
+              </a>
+            </Button>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <PullStateBadge state={pull.state} />
           <span>
-            <span className="font-medium text-foreground">
-              {pull.state === "merged"
-                ? (pull.merged_by ?? "A push")
-                : pull.author}
-            </span>{" "}
-            {pull.state === "merged" ? "merged" : "wants to merge"}{" "}
+            {subject === null ? (
+              "Merged"
+            ) : (
+              <>
+                <Who name={subject} pull={pull} server={subject === "A push"} />{" "}
+                {pull.state === "merged" ? "merged" : "wants to merge"}
+              </>
+            )}{" "}
             {commits && (
               <>
                 {commits.length}
@@ -185,33 +207,94 @@ function PullTabs({
   )
 }
 
+/** The GitHub repository of a pull request's page on GitHub. */
+function githubRepo(url: string | null) {
+  const m = url?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\//)
+  return m ? m[1] : null
+}
+
+/**
+ * A user, or for a pull request from GitHub a GitHub account. `server`:
+ * not a name ("A push").
+ */
+function Who({
+  name,
+  pull,
+  server,
+  className,
+}: {
+  name: string
+  pull: Pull
+  server?: boolean
+  className?: string
+}) {
+  const cls = cn("font-medium text-foreground", className)
+  if (pull.github_url && !server)
+    return (
+      <a
+        href={`https://github.com/${encodeURIComponent(name)}`}
+        target="_blank"
+        rel="noreferrer"
+        className={cn(cls, "hover:underline")}
+      >
+        {name}
+      </a>
+    )
+  return <span className={cls}>{name}</span>
+}
+
 function Conversation({ repo, d }: { repo: string; d: PullDetail }) {
   const { pull } = d
   return (
     <div className="grid grid-cols-1 gap-4">
       <CommentCard
+        repo={repo}
+        pull={pull}
         author={pull.author}
         time={pull.created_ms}
         body={pull.body}
         empty="No description."
       />
       {d.events.map((e) => (
-        <TimelineEvent key={e.id} repo={repo} e={e} />
+        <TimelineEvent key={e.id} repo={repo} pull={pull} e={e} />
       ))}
-      {pull.state === "open" && <MergeBox repo={repo} d={d} />}
-      <CommentForm repo={repo} d={d} />
+      {pull.state === "open" && !pull.github_url && (
+        <MergeBox repo={repo} d={d} />
+      )}
+      {pull.github_url ? (
+        <p className="rounded-lg border p-4 text-sm">
+          This pull request is on GitHub, and this copy follows it.{" "}
+          <a
+            href={pull.github_url}
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium underline"
+          >
+            Comment on GitHub
+          </a>
+          .
+        </p>
+      ) : (
+        <CommentForm repo={repo} d={d} />
+      )}
     </div>
   )
 }
 
 function CommentCard({
+  repo,
+  pull,
   author,
   time,
+  edited,
   body,
   empty,
 }: {
+  repo: string
+  pull: Pull
   author: string
   time: number
+  edited?: number | null
   body: string
   empty?: string
 }) {
@@ -220,13 +303,29 @@ function CommentCard({
       <Avatar name={author} className="mt-2 size-8 text-xs" />
       <div className="min-w-0 flex-1 rounded-lg border">
         <div className="border-b bg-muted/40 px-4 py-2 text-sm">
-          <span className="font-medium">{author}</span>{" "}
+          <Who name={author} pull={pull} />{" "}
           <span className="text-muted-foreground" title={fullDate(time / 1000)}>
             commented {ago(time / 1000)}
           </span>
+          {edited && (
+            <span
+              className="text-muted-foreground"
+              title={`Edited ${fullDate(edited / 1000)}`}
+            >
+              {" "}
+              · edited
+            </span>
+          )}
         </div>
-        <div className="p-4 text-sm break-words whitespace-pre-wrap">
-          {body.trim() || (
+        <div className="p-4 text-sm">
+          {body.trim() ? (
+            <MessageView
+              repo={repo}
+              rev={pull.target}
+              github={githubRepo(pull.github_url)}
+              text={body}
+            />
+          ) : (
             <span className="text-muted-foreground italic">{empty}</span>
           )}
         </div>
@@ -235,16 +334,36 @@ function CommentCard({
   )
 }
 
-function TimelineEvent({ repo, e }: { repo: string; e: PullEvent }) {
+function TimelineEvent({
+  repo,
+  pull,
+  e,
+}: {
+  repo: string
+  pull: Pull
+  e: PullEvent
+}) {
   if (e.kind === "comment") {
     return (
       <CommentCard
+        repo={repo}
+        pull={pull}
         author={e.author ?? "?"}
         time={e.created_ms}
+        edited={e.edited_ms}
         body={e.body ?? ""}
       />
     )
   }
+  // Events copied from GitHub do not say who closed or reopened.
+  const who = (verb: string) =>
+    e.author ? (
+      <>
+        <Who name={e.author} pull={pull} /> {verb} this
+      </>
+    ) : (
+      <>{verb[0].toUpperCase() + verb.slice(1)} on GitHub</>
+    )
   const commit = (oid: string | null) =>
     oid && (
       <Link
@@ -279,29 +398,24 @@ function TimelineEvent({ repo, e }: { repo: string; e: PullEvent }) {
     case "closed":
       return line(
         <GitPullRequestClosed className="size-3.5 text-red-600" />,
-        <>
-          <span className="font-medium text-foreground">{e.author}</span> closed
-          this
-        </>
+        who("closed")
       )
     case "reopened":
-      return line(
-        <RotateCcw className="size-3.5" />,
-        <>
-          <span className="font-medium text-foreground">{e.author}</span>{" "}
-          reopened this
-        </>
-      )
+      return line(<RotateCcw className="size-3.5" />, who("reopened"))
     case "merged":
       return line(
         <GitMerge className="size-3.5 text-violet-600" />,
         <>
           {e.author ? (
-            <span className="font-medium text-foreground">{e.author}</span>
+            <>
+              <Who name={e.author} pull={pull} /> merged this
+            </>
+          ) : pull.github_url ? (
+            "Merged on GitHub"
           ) : (
-            "A push"
+            "A push merged this"
           )}{" "}
-          merged this as {commit(e.oid)}
+          as {commit(e.oid)}
         </>
       )
   }
@@ -480,11 +594,13 @@ function CommentForm({ repo, d }: { repo: string; d: PullDetail }) {
     >
       <Avatar name={state.user} className="mt-2 size-8 text-xs" />
       <div className="grid min-w-0 flex-1 grid-cols-1 gap-2">
-        <Textarea
-          aria-label="Comment"
+        <MessageEditor
+          repo={repo}
+          rev={pull.target}
+          label="Comment"
           placeholder="Leave a comment"
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={setBody}
           className="min-h-24"
         />
         {change.error && (

@@ -78,3 +78,9 @@ pub const GITHUB_POLL_INTERVAL: Duration = Duration::from_secs(10);
 pub const GITHUB_CONCURRENT_SYNCS: usize = 4;
 /// Time limit for fetching one mirror from GitHub.
 pub const GITHUB_FETCH_TIMEOUT: Duration = Duration::from_secs(1500);
+/// GitHub API pages of 100 that one mirror sync reads for pull requests
+/// and comments; a first import continues in the next syncs.
+pub const GITHUB_API_PAGES_PER_SYNC: u32 = 10;
+/// Refs of pull requests that one mirror sync creates or moves; the first
+/// sync of a repository with many pull requests continues in the next.
+pub const GITHUB_PULL_REFS_PER_SYNC: usize = 1000;

@@ -50,6 +50,22 @@ pub struct Due {
     pub token: Option<String>,
 }
 
+/// Where the import of a mirror's pull requests and comments stands
+/// (docs/decisions/0026-github-pull-requests.md).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PullCursors {
+    /// GitHub's `updated_at` of the newest pull request seen.
+    pub pulls_since: Option<String>,
+    pub pulls_etag: Option<String>,
+    /// The next page of the first import, newest first; `None` once done.
+    pub import_page: Option<u32>,
+    /// GitHub's `updated_at` of the newest comment seen, and the page of
+    /// comments with that time to read next.
+    pub comments_since: Option<String>,
+    pub comments_page: u32,
+    pub comments_etag: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct GithubDb {
     pool: PgPool,
@@ -223,6 +239,58 @@ impl GithubDb {
             github,
             token,
         }))
+    }
+
+    pub async fn cursors(&self, repo: RepoId) -> Result<Option<PullCursors>, GithubDbError> {
+        type Row = (
+            Option<String>,
+            Option<String>,
+            Option<i32>,
+            Option<String>,
+            i32,
+            Option<String>,
+        );
+        let row: Option<Row> = sqlx::query_as(
+            "SELECT pulls_since, pulls_etag, pulls_import_page,
+                    comments_since, comments_page, comments_etag
+             FROM lager_github_mirrors WHERE repository = $1",
+        )
+        .bind(repo.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(row.map(
+            |(pulls_since, pulls_etag, page, comments_since, comments_page, comments_etag)| {
+                PullCursors {
+                    pulls_since,
+                    pulls_etag,
+                    import_page: page.map(|p| p.max(1) as u32),
+                    comments_since,
+                    comments_page: comments_page.max(1) as u32,
+                    comments_etag,
+                }
+            },
+        ))
+    }
+
+    pub async fn set_cursors(&self, repo: RepoId, c: &PullCursors) -> Result<(), GithubDbError> {
+        sqlx::query(
+            "UPDATE lager_github_mirrors
+             SET pulls_since = $2, pulls_etag = $3, pulls_import_page = $4,
+                 comments_since = $5, comments_page = $6, comments_etag = $7
+             WHERE repository = $1",
+        )
+        .bind(repo.to_string())
+        .bind(&c.pulls_since)
+        .bind(&c.pulls_etag)
+        .bind(c.import_page.map(|p| p as i32))
+        .bind(&c.comments_since)
+        .bind(c.comments_page as i32)
+        .bind(&c.comments_etag)
+        .execute(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(())
     }
 
     /// Records the result of a sync; the next one is due after `next`.

@@ -133,7 +133,7 @@ impl PullService {
         self.locks.lock().unwrap().entry(repo).or_default().clone()
     }
 
-    fn publish(&self, repo: RepoId, p: &Pull) {
+    pub(crate) fn publish(&self, repo: RepoId, p: &Pull) {
         self.registry
             .svc
             .bus
@@ -448,6 +448,12 @@ impl PullService {
         }
         let p = self
             .db
+            .get(repo.id, number)
+            .await?
+            .ok_or(PullOpError::NotFound)?;
+        on_github(&p)?;
+        let p = self
+            .db
             .comment(repo.id, number, user, body, request)
             .await?;
         self.publish(repo.id, &p);
@@ -473,6 +479,7 @@ impl PullService {
             .get(repo.id, number)
             .await?
             .ok_or(PullOpError::NotFound)?;
+        on_github(&p)?;
         if p.author != user && level < Access::Write {
             return Err(PullOpError::Forbidden(
                 "only the author and users with write access can do this".into(),
@@ -517,6 +524,7 @@ impl PullService {
                 .get(repo.id, number)
                 .await?
                 .ok_or(PullOpError::NotFound)?;
+            on_github(&p)?;
             let (cache, view, refs) = controller.prepare_change().await?;
             if let Some(oid) = refs.refs.get(&pull_receipt_ref(number)) {
                 let merged = self.recover_merge(repo.id, number, &view.dir, oid).await?;
@@ -693,6 +701,17 @@ impl PullService {
         Err(PullOpError::Busy(
             "the target branch keeps changing; merge again".into(),
         ))
+    }
+}
+
+/// Pull requests copied from GitHub change only there
+/// (docs/decisions/0026-github-pull-requests.md).
+fn on_github(p: &Pull) -> Result<(), PullOpError> {
+    match &p.github_url {
+        Some(url) => Err(PullOpError::Forbidden(format!(
+            "this pull request is on GitHub; change it at {url}"
+        ))),
+        None => Ok(()),
     }
 }
 
