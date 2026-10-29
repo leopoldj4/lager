@@ -34,9 +34,13 @@ export function parseDiff(patch: string): DiffFile[] {
 export const codeOptions = {
   themeType: "system",
   overflow: "scroll",
+  // Code lives in a shadow root, so the app's scrollbar width cannot reach it.
+  unsafeCSS: `[data-code] { scrollbar-width: thin; }`,
 } as const
 
 export const codeStyle = {
+  // The library defaults to always showing a horizontal scrollbar.
+  "--diffs-overflow-override": "auto",
   "--diffs-font-family": "var(--font-mono)",
   "--diffs-header-font-family": "var(--font-sans)",
   "--diffs-font-size": "13px",
