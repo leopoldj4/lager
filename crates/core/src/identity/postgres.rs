@@ -224,6 +224,44 @@ ALTER TABLE lager_github_mirrors ADD COLUMN hook_id bigint;
 ALTER TABLE lager_github_mirrors ADD COLUMN hook_secret text;
 ALTER TABLE lager_github_mirrors ADD COLUMN hook_checked_at timestamptz;
 "#,
+    // Activity on profiles (docs/decisions/0029-activity-graph.md): the
+    // email addresses of users, the commits on each repository's default
+    // branch by author email and day, and the user's daily counts from
+    // GitHub.
+    r#"
+CREATE TABLE lager_user_emails (
+    user_name text NOT NULL REFERENCES lager_users (name) ON DELETE CASCADE,
+    -- In lower case.
+    email text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_name, email)
+);
+CREATE INDEX lager_user_emails_email ON lager_user_emails (email);
+-- The default branch commit that the commits below were read up to.
+CREATE TABLE lager_activity_repos (
+    repository text PRIMARY KEY,
+    branch text NOT NULL,
+    tip text NOT NULL,
+    indexed_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE lager_activity_commits (
+    repository text NOT NULL,
+    oid text NOT NULL,
+    -- The author's email in lower case, and the day in the author's time
+    -- zone.
+    email text NOT NULL,
+    day date NOT NULL,
+    PRIMARY KEY (repository, oid)
+);
+CREATE INDEX lager_activity_commits_email ON lager_activity_commits (email, day);
+CREATE TABLE lager_github_contributions (
+    user_name text NOT NULL REFERENCES lager_github_accounts (user_name) ON DELETE CASCADE,
+    day date NOT NULL,
+    count integer NOT NULL,
+    PRIMARY KEY (user_name, day)
+);
+ALTER TABLE lager_github_accounts ADD COLUMN contributions_at timestamptz;
+"#,
 ];
 
 /// SSH keys a user can have at the same time.
@@ -244,6 +282,9 @@ type SshKeyRow = (SshKeyId, String, String, String, i64, Option<i64>);
 
 /// Key id, user, used more than a minute ago, repository, level.
 type SshKeyAccessRow = (SshKeyId, String, bool, Option<String>, Option<String>);
+
+/// Email addresses a user can have at the same time.
+const MAX_EMAILS: i64 = 20;
 
 /// Tokens a user can have at the same time.
 const MAX_TOKENS: i64 = 100;
@@ -796,6 +837,70 @@ impl PgUsers {
             return Err(UserError::SshKeyNotFound(id));
         }
         Ok(())
+    }
+
+    /// A user's email addresses, in lower case, sorted.
+    pub async fn emails(&self, user: &str) -> Result<Vec<String>, UserError> {
+        sqlx::query_scalar(
+            "SELECT email FROM lager_user_emails WHERE user_name = $1 ORDER BY email",
+        )
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(unavailable)
+    }
+
+    /// Adds an email address from [`normalize_email`](super::normalize_email).
+    /// Adding one twice changes nothing.
+    pub async fn add_email(&self, user: &str, email: &str) -> Result<(), UserError> {
+        let mut conn = self.conn().await?;
+        let mut tx = conn.begin().await.map_err(unavailable)?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM lager_user_emails WHERE user_name = $1")
+                .bind(user)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        if count >= MAX_EMAILS {
+            return Err(UserError::Invalid(format!(
+                "a user can have at most {MAX_EMAILS} email addresses; delete one first"
+            )));
+        }
+        let added = sqlx::query(
+            "INSERT INTO lager_user_emails (user_name, email)
+             SELECT name, $2 FROM lager_users WHERE name = $1
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(user)
+        .bind(email)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        if added.rows_affected() == 0 {
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM lager_users WHERE name = $1)")
+                    .bind(user)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(unavailable)?;
+            if !exists {
+                return Err(UserError::NotFound(user.into()));
+            }
+        }
+        tx.commit().await.map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// `false`: the user has no such address.
+    pub async fn delete_email(&self, user: &str, email: &str) -> Result<bool, UserError> {
+        let deleted =
+            sqlx::query("DELETE FROM lager_user_emails WHERE user_name = $1 AND email = $2")
+                .bind(user)
+                .bind(email)
+                .execute(&self.pool)
+                .await
+                .map_err(unavailable)?;
+        Ok(deleted.rows_affected() > 0)
     }
 }
 

@@ -36,6 +36,7 @@ use crate::git::hook::{HookCommand, HookResponse};
 use crate::http::access::Directory;
 use crate::pulls::PullService;
 use crate::repository::{AccessCheck, Origin, PendingPush, PushAccess, Registry, RepoError};
+use lager_core::activity::Day;
 use lager_core::catalog::CatalogError;
 use lager_core::config::GithubConfig;
 use lager_core::github::{Due, GithubDb, GithubDbError, Mirror};
@@ -245,6 +246,104 @@ impl Github {
 
     fn token_of(account: Option<lager_core::github::Account>) -> Result<String, GithubError> {
         account.map(|a| a.token).ok_or(GithubError::NotConnected)
+    }
+
+    // Activity on profiles (docs/decisions/0029-activity-graph.md).
+
+    /// The daily counts of the user's GitHub account, fetched again once
+    /// older than [`limits::GITHUB_CONTRIBUTIONS_TTL`]; the stored ones
+    /// while GitHub does not answer. `None`: not connected, or never
+    /// fetched.
+    pub async fn contributions(&self, user: &str) -> Result<Option<Vec<Day>>, GithubError> {
+        let Some((age, days)) = self.db.contributions(user).await? else {
+            return Ok(None);
+        };
+        if age.is_some_and(|a| a < limits::GITHUB_CONTRIBUTIONS_TTL) {
+            return Ok(Some(days));
+        }
+        let fetched = tokio::time::timeout(
+            limits::GITHUB_CONTRIBUTIONS_TIMEOUT,
+            self.fetch_contributions(user),
+        )
+        .await
+        .unwrap_or_else(|_| Err(GithubError::Unavailable("GitHub: timeout".into())));
+        match fetched {
+            Ok(fresh) => {
+                self.db.set_contributions(user, &fresh).await?;
+                Ok(Some(fresh.into_iter().filter(|d| d.count > 0).collect()))
+            }
+            Err(e) => {
+                tracing::warn!(user, error = %e, "GitHub contributions not fetched");
+                Ok(age.map(|_| days))
+            }
+        }
+    }
+
+    /// The contribution calendar of the last year, as GitHub's profile
+    /// shows it to the user: private contributions included.
+    async fn fetch_contributions(&self, user: &str) -> Result<Vec<Day>, GithubError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            data: Option<Data>,
+        }
+        #[derive(Deserialize)]
+        struct Data {
+            viewer: Viewer,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Viewer {
+            contributions_collection: Collection,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Collection {
+            contribution_calendar: Calendar,
+        }
+        #[derive(Deserialize)]
+        struct Calendar {
+            weeks: Vec<Week>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Week {
+            contribution_days: Vec<CalendarDay>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CalendarDay {
+            date: String,
+            contribution_count: u32,
+        }
+        const QUERY: &str = "query { viewer { contributionsCollection { contributionCalendar \
+             { weeks { contributionDays { date contributionCount } } } } } }";
+
+        let token = Self::token_of(self.db.account(user).await?)?;
+        let answer: Answer = self
+            .http
+            .post(format!("{API}/graphql"))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "query": QUERY }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let data = answer.data.ok_or_else(|| {
+            GithubError::Unavailable("GitHub answered no contribution calendar".into())
+        })?;
+        Ok(data
+            .viewer
+            .contributions_collection
+            .contribution_calendar
+            .weeks
+            .into_iter()
+            .flat_map(|w| w.contribution_days)
+            .map(|d| Day {
+                date: d.date,
+                count: d.contribution_count,
+            })
+            .collect())
     }
 
     // Queries and changes of the settings page.

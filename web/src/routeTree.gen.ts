@@ -15,6 +15,7 @@ import { Route as Char91Char93SettingsRouteImport } from './routes/[-].settings'
 import { Route as Char91Char93SignInRouteImport } from './routes/[-].sign-in'
 import { Route as Char91Char93SignUpRouteImport } from './routes/[-].sign-up'
 import { Route as Char91Char93SettingsIndexRouteImport } from './routes/[-].settings.index'
+import { Route as Char91Char93SettingsEmailsRouteImport } from './routes/[-].settings.emails'
 import { Route as Char91Char93SettingsGithubRouteImport } from './routes/[-].settings.github'
 import { Route as Char91Char93SettingsPasskeysRouteImport } from './routes/[-].settings.passkeys'
 import { Route as Char91Char93SettingsSshKeysRouteImport } from './routes/[-].settings.ssh-keys'
@@ -51,6 +52,12 @@ const Char91Char93SettingsIndexRoute =
     path: '/',
     getParentRoute: () => Char91Char93SettingsRoute,
   } as any)
+const Char91Char93SettingsEmailsRoute =
+  Char91Char93SettingsEmailsRouteImport.update({
+    id: '/emails',
+    path: '/emails',
+    getParentRoute: () => Char91Char93SettingsRoute,
+  } as any)
 const Char91Char93SettingsGithubRoute =
   Char91Char93SettingsGithubRouteImport.update({
     id: '/github',
@@ -82,6 +89,7 @@ export interface FileRoutesByFullPath {
   '/-/settings': typeof Char91Char93SettingsRouteWithChildren
   '/-/sign-in': typeof Char91Char93SignInRoute
   '/-/sign-up': typeof Char91Char93SignUpRoute
+  '/-/settings/emails': typeof Char91Char93SettingsEmailsRoute
   '/-/settings/github': typeof Char91Char93SettingsGithubRoute
   '/-/settings/passkeys': typeof Char91Char93SettingsPasskeysRoute
   '/-/settings/ssh-keys': typeof Char91Char93SettingsSshKeysRoute
@@ -93,6 +101,7 @@ export interface FileRoutesByTo {
   '/$': typeof SplatRoute
   '/-/sign-in': typeof Char91Char93SignInRoute
   '/-/sign-up': typeof Char91Char93SignUpRoute
+  '/-/settings/emails': typeof Char91Char93SettingsEmailsRoute
   '/-/settings/github': typeof Char91Char93SettingsGithubRoute
   '/-/settings/passkeys': typeof Char91Char93SettingsPasskeysRoute
   '/-/settings/ssh-keys': typeof Char91Char93SettingsSshKeysRoute
@@ -106,6 +115,7 @@ export interface FileRoutesById {
   '/-/settings': typeof Char91Char93SettingsRouteWithChildren
   '/-/sign-in': typeof Char91Char93SignInRoute
   '/-/sign-up': typeof Char91Char93SignUpRoute
+  '/-/settings/emails': typeof Char91Char93SettingsEmailsRoute
   '/-/settings/github': typeof Char91Char93SettingsGithubRoute
   '/-/settings/passkeys': typeof Char91Char93SettingsPasskeysRoute
   '/-/settings/ssh-keys': typeof Char91Char93SettingsSshKeysRoute
@@ -120,6 +130,7 @@ export interface FileRouteTypes {
     | '/-/settings'
     | '/-/sign-in'
     | '/-/sign-up'
+    | '/-/settings/emails'
     | '/-/settings/github'
     | '/-/settings/passkeys'
     | '/-/settings/ssh-keys'
@@ -131,6 +142,7 @@ export interface FileRouteTypes {
     | '/$'
     | '/-/sign-in'
     | '/-/sign-up'
+    | '/-/settings/emails'
     | '/-/settings/github'
     | '/-/settings/passkeys'
     | '/-/settings/ssh-keys'
@@ -143,6 +155,7 @@ export interface FileRouteTypes {
     | '/-/settings'
     | '/-/sign-in'
     | '/-/sign-up'
+    | '/-/settings/emails'
     | '/-/settings/github'
     | '/-/settings/passkeys'
     | '/-/settings/ssh-keys'
@@ -202,6 +215,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof Char91Char93SettingsIndexRouteImport
       parentRoute: typeof Char91Char93SettingsRoute
     }
+    '/-/settings/emails': {
+      id: '/-/settings/emails'
+      path: '/emails'
+      fullPath: '/-/settings/emails'
+      preLoaderRoute: typeof Char91Char93SettingsEmailsRouteImport
+      parentRoute: typeof Char91Char93SettingsRoute
+    }
     '/-/settings/github': {
       id: '/-/settings/github'
       path: '/github'
@@ -234,6 +254,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface Char91Char93SettingsRouteChildren {
+  Char91Char93SettingsEmailsRoute: typeof Char91Char93SettingsEmailsRoute
   Char91Char93SettingsGithubRoute: typeof Char91Char93SettingsGithubRoute
   Char91Char93SettingsPasskeysRoute: typeof Char91Char93SettingsPasskeysRoute
   Char91Char93SettingsSshKeysRoute: typeof Char91Char93SettingsSshKeysRoute
@@ -242,6 +263,7 @@ interface Char91Char93SettingsRouteChildren {
 }
 
 const Char91Char93SettingsRouteChildren: Char91Char93SettingsRouteChildren = {
+  Char91Char93SettingsEmailsRoute: Char91Char93SettingsEmailsRoute,
   Char91Char93SettingsGithubRoute: Char91Char93SettingsGithubRoute,
   Char91Char93SettingsPasskeysRoute: Char91Char93SettingsPasskeysRoute,
   Char91Char93SettingsSshKeysRoute: Char91Char93SettingsSshKeysRoute,

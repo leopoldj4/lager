@@ -202,6 +202,29 @@ export function useRepos() {
   })
 }
 
+export interface ActivityDay {
+  /** YYYY-MM-DD. */
+  date: string
+  lager: number
+  github: number
+}
+
+export interface Profile {
+  user: string
+  /** GitHub's counts are included; mirrors count only there. */
+  github: boolean
+  totals: { lager: number; github: number }
+  /** Days with activity in the last year, oldest first. */
+  days: ActivityDay[]
+}
+
+export function useProfile(user: string) {
+  return useQuery({
+    queryKey: ["profile", user],
+    queryFn: () => live.request<Profile>({ op: "profile", user }),
+  })
+}
+
 /** Creates an empty repository with the chosen visibility. */
 export function useCreateRepo() {
   const qc = useQueryClient()

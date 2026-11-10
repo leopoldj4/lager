@@ -35,6 +35,8 @@ pub struct AppInner {
     pub registry: Arc<Registry>,
     pub directory: Arc<Directory>,
     pub pulls: Arc<crate::pulls::PullService>,
+    /// Commits for the activity on profiles.
+    pub activity: Arc<crate::activity::Activity>,
     /// GitHub mirrors, with `[github]`.
     pub github: Option<Arc<crate::github::Github>>,
     pub processes: Arc<Semaphore>,

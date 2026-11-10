@@ -14,6 +14,10 @@ export const Route = createFileRoute("/-/settings")({ component: Settings })
 
 const GROUPS = [
   {
+    title: "Account",
+    sections: [{ to: "/-/settings/emails", title: "Emails" }],
+  },
+  {
     title: "Integrations",
     sections: [{ to: "/-/settings/github", title: "GitHub" }],
   },

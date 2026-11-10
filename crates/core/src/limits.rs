@@ -92,6 +92,11 @@ pub const GITHUB_FOLLOW_UP_SYNC: Duration = Duration::from_secs(4);
 pub const GITHUB_CONCURRENT_SYNCS: usize = 4;
 /// Time limit for fetching one mirror from GitHub.
 pub const GITHUB_FETCH_TIMEOUT: Duration = Duration::from_secs(1500);
+/// A profile fetches the daily counts of the user's GitHub account again
+/// once they are this old, and waits this long for GitHub
+/// (docs/decisions/0029-activity-graph.md).
+pub const GITHUB_CONTRIBUTIONS_TTL: Duration = Duration::from_secs(3600);
+pub const GITHUB_CONTRIBUTIONS_TIMEOUT: Duration = Duration::from_secs(10);
 /// GitHub API pages of 100 that one mirror sync reads for pull requests
 /// and comments; a first import continues in the next syncs.
 pub const GITHUB_API_PAGES_PER_SYNC: u32 = 10;

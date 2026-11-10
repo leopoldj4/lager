@@ -18,6 +18,7 @@ use std::time::Duration;
 use serde::Serialize;
 use sqlx::postgres::PgPool;
 
+use crate::activity::Day;
 use crate::model::RepoId;
 
 #[derive(Debug, thiserror::Error)]
@@ -118,7 +119,8 @@ impl GithubDb {
             "INSERT INTO lager_github_accounts (user_name, github_id, login, token)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (user_name) DO UPDATE
-             SET github_id = $2, login = $3, token = $4, created_at = now()",
+             SET github_id = $2, login = $3, token = $4, created_at = now(),
+                 contributions_at = NULL",
         )
         .bind(user)
         .bind(github_id)
@@ -127,6 +129,12 @@ impl GithubDb {
         .execute(&self.pool)
         .await
         .map_err(unavailable)?;
+        // Counts of an earlier account.
+        sqlx::query("DELETE FROM lager_github_contributions WHERE user_name = $1")
+            .bind(user)
+            .execute(&self.pool)
+            .await
+            .map_err(unavailable)?;
         sqlx::query(
             "UPDATE lager_github_mirrors SET next_sync_at = now()
              WHERE user_name = $1 AND error IS NOT NULL",
@@ -135,6 +143,83 @@ impl GithubDb {
         .execute(&self.pool)
         .await
         .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// The daily counts of the user's GitHub account, oldest first, if the
+    /// user is connected, and how long ago they were fetched; `None` for
+    /// counts never fetched (docs/decisions/0029-activity-graph.md).
+    pub async fn contributions(
+        &self,
+        user: &str,
+    ) -> Result<Option<(Option<Duration>, Vec<Day>)>, GithubDbError> {
+        let age: Option<Option<f64>> = sqlx::query_scalar(
+            "SELECT extract(epoch FROM now() - contributions_at)::float8
+             FROM lager_github_accounts WHERE user_name = $1",
+        )
+        .bind(user)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        let Some(age) = age else {
+            return Ok(None);
+        };
+        let rows: Vec<(String, i32)> = sqlx::query_as(
+            "SELECT day::text, count FROM lager_github_contributions
+             WHERE user_name = $1 AND day >= current_date - $2::int AND count > 0
+             ORDER BY day",
+        )
+        .bind(user)
+        .bind(crate::activity::DAYS as i32)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        let days = rows
+            .into_iter()
+            .map(|(date, count)| Day {
+                date,
+                count: count.max(0) as u32,
+            })
+            .collect();
+        Ok(Some((
+            age.map(|s| Duration::from_secs_f64(s.max(0.0))),
+            days,
+        )))
+    }
+
+    /// Replaces the daily counts of the user's GitHub account.
+    pub async fn set_contributions(&self, user: &str, days: &[Day]) -> Result<(), GithubDbError> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let updated = sqlx::query(
+            "UPDATE lager_github_accounts SET contributions_at = now() WHERE user_name = $1",
+        )
+        .bind(user)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        if updated.rows_affected() == 0 {
+            // Disconnected meanwhile.
+            return Ok(());
+        }
+        sqlx::query("DELETE FROM lager_github_contributions WHERE user_name = $1")
+            .bind(user)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        let dates: Vec<&str> = days.iter().map(|d| d.date.as_str()).collect();
+        let counts: Vec<i32> = days.iter().map(|d| d.count as i32).collect();
+        sqlx::query(
+            "INSERT INTO lager_github_contributions (user_name, day, count)
+             SELECT $1, d::date, c FROM unnest($2::text[], $3::int[]) AS t(d, c)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(user)
+        .bind(&dates)
+        .bind(&counts)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
         Ok(())
     }
 

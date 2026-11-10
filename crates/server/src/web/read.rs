@@ -38,6 +38,10 @@ const OBJECT_CACHE_BYTES: usize = 4 * 1024 * 1024;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
     Repos,
+    /// A user's activity of the last year; anyone may read it.
+    Profile {
+        user: String,
+    },
     /// Creates an empty repository; needs a session.
     RepoCreate {
         name: String,
@@ -237,6 +241,7 @@ pub async fn readable(s: &AppInner, who: &Identity, name: &str) -> Result<RepoSe
 pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadError> {
     let name = match &q {
         Query::Repos => return repos(s, who).await,
+        Query::Profile { user } => return super::profile::profile(s, user).await,
         Query::Github
         | Query::GithubRepos
         | Query::GithubMirror { .. }
@@ -278,6 +283,7 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
     let g = Git { s, view: &view };
     let mut out = match q {
         Query::Repos
+        | Query::Profile { .. }
         | Query::Github
         | Query::GithubRepos
         | Query::GithubMirror { .. }

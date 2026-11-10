@@ -173,6 +173,11 @@ pub async fn start_with_listener(
         registry.clone(),
         directory.clone(),
     ));
+    let activity = Arc::new(crate::activity::Activity::new(
+        lager_core::activity::ActivityDb::new(directory.users().pool().clone()),
+        registry.clone(),
+        directory.clone(),
+    ));
     let github = match &cfg.github {
         Some(g) => Some(Arc::new(crate::github::Github::new(
             g.clone(),
@@ -252,6 +257,10 @@ pub async fn start_with_listener(
     let (p, stop) = (pulls.clone(), stop_http.subscribe());
     background.push(tokio::spawn(async move { p.run(stop).await }));
 
+    // Commits of default branches for the activity on profiles.
+    let (a, stop) = (activity.clone(), stop_http.subscribe());
+    background.push(tokio::spawn(async move { a.run(stop).await }));
+
     // Mirrors of GitHub repositories that are due.
     if let Some(g) = github.clone() {
         let stop = stop_http.subscribe();
@@ -276,6 +285,7 @@ pub async fn start_with_listener(
         registry: registry.clone(),
         directory,
         pulls,
+        activity,
         github,
         processes: Arc::new(Semaphore::new(limits::MAX_GIT_PROCESSES)),
         socket_path: socket_path.clone(),
