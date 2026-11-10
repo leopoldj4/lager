@@ -1,8 +1,15 @@
-/** The lager mark: an oak barrel on tap. The same drawing as
+/** The lager mark: an oak barrel on tap, with a white outline that also
+ *  shows on dark backgrounds. The same drawing as
  *  src/assets/lager.svg, the favicon. */
 export function LagerMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 64 64" aria-hidden="true" className={className}>
+      <g fill="#fff" stroke="#fff" strokeWidth={4} strokeLinejoin="round">
+        <path d="M13 5h28c7.5 12 7.5 42 0 54H13c-7.5-12-7.5-42 0-54Z" />
+        <path d="M8.6 15h36.8l.7 4.5H7.9l.7-4.5ZM7.9 44.5h38.2l-.7 4.5H8.6l-.7-4.5Z" />
+        <path d="M46 31.5h9a3 3 0 0 1 3 3V44h-5.5v-6.5H46v-6Z" />
+        <rect x="50" y="24" width="3.5" height="8" rx="1.75" />
+      </g>
       <path d="M13 5h28c7.5 12 7.5 42 0 54H13c-7.5-12-7.5-42 0-54Z" fill="#B06A32" />
       <path
         d="M13 5h8.5c-2.2 12-2.2 42 0 54H13c-7.5-12-7.5-42 0-54ZM41 5h-8.5c2.2 12 2.2 42 0 54H41c7.5-12 7.5-42 0-54Z"
