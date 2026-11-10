@@ -182,8 +182,9 @@ impl Github {
             ("client_id", self.cfg.client_id.as_str()),
             // Private repositories need `repo`; OAuth apps have no
             // read-only scope for them. GitHub takes pushes that change
-            // workflow files only with `workflow`.
-            ("scope", "repo workflow"),
+            // workflow files only with `workflow`. `user:email` lists the
+            // verified email addresses for profiles.
+            ("scope", "repo workflow user:email"),
             ("state", state),
             ("allow_signup", "false"),
         ];
@@ -221,6 +222,9 @@ impl Github {
         };
         let me: GithubUser = self.api(&token, "/user").await?;
         self.db.connect(user, me.id, &me.login, &token).await?;
+        if let Err(e) = self.import_emails(user).await {
+            tracing::warn!(user, error = %e, "GitHub email addresses not imported");
+        }
         self.wake.notify_one();
         tracing::info!(user, github = %me.login, "GitHub account connected");
         Ok(me.login)
@@ -270,6 +274,10 @@ impl Github {
         match fetched {
             Ok(fresh) => {
                 self.db.set_contributions(user, &fresh).await?;
+                // Addresses change rarely; they follow at the same pace.
+                if let Err(e) = self.import_emails(user).await {
+                    tracing::warn!(user, error = %e, "GitHub email addresses not imported");
+                }
                 Ok(Some(fresh.into_iter().filter(|d| d.count > 0).collect()))
             }
             Err(e) => {
@@ -277,6 +285,49 @@ impl Github {
                 Ok(age.map(|_| days))
             }
         }
+    }
+
+    /// Replaces the user's email addresses from GitHub: the verified ones,
+    /// and the `noreply` ones that GitHub's own commits use. A token from
+    /// before `user:email` gets only the `noreply` ones; GitHub answers 403
+    /// or 404 for the list.
+    async fn import_emails(&self, user: &str) -> Result<(), GithubError> {
+        #[derive(Deserialize)]
+        struct Email {
+            email: String,
+            verified: bool,
+        }
+        let account = self
+            .db
+            .account(user)
+            .await?
+            .ok_or(GithubError::NotConnected)?;
+        let r = self
+            .http
+            .get(format!("{API}/user/emails?per_page=100"))
+            .bearer_auth(&account.token)
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("x-github-api-version", "2022-11-28")
+            .send()
+            .await?;
+        let listed: Vec<Email> = match r.status().as_u16() {
+            403 | 404 => vec![],
+            _ => r.error_for_status()?.json().await?,
+        };
+        let login = account.login.to_lowercase();
+        let mut emails: Vec<String> = listed
+            .into_iter()
+            .filter(|e| e.verified)
+            .filter_map(|e| lager_core::identity::normalize_email(&e.email).ok())
+            .chain([
+                format!("{}+{login}@users.noreply.github.com", account.id),
+                format!("{login}@users.noreply.github.com"),
+            ])
+            .collect();
+        emails.sort();
+        emails.dedup();
+        self.db.set_emails(user, &emails).await?;
+        Ok(())
     }
 
     /// The contribution calendar of the last year, as GitHub's profile

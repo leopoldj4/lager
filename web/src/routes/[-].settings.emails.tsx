@@ -3,12 +3,14 @@ import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Mail } from "lucide-react"
 
-import { useLive } from "@/lib/api"
+import { useGithub, useLive } from "@/lib/api"
 import { addEmail, listEmails, removeEmail } from "@/lib/emails"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Badge } from "@/components/ui/badge"
+import { GithubMark } from "@/components/github-mark"
 import { SettingsHeader } from "@/components/settings-header"
 
 export const Route = createFileRoute("/-/settings/emails")({
@@ -26,6 +28,15 @@ function Emails() {
     enabled: !!state?.user,
     retry: false,
   })
+  const github = useGithub()
+  // A connection from before `user:email` brings only GitHub's noreply
+  // addresses.
+  const reconnect =
+    !!github.data?.account &&
+    !!query.data &&
+    !query.data.emails.some(
+      (e) => e.github && !e.email.endsWith("@users.noreply.github.com")
+    )
 
   async function run(work: () => Promise<unknown>) {
     setBusy(true)
@@ -72,23 +83,42 @@ function Emails() {
           </p>
         ) : (
           <ul className="divide-y rounded-md border">
-            {query.data?.emails.map((email) => (
-              <li key={email} className="flex items-center gap-3 px-3 py-1.5">
+            {query.data?.emails.map(({ email, github }) => (
+              <li key={email} className="flex h-10 items-center gap-3 px-3">
                 <Mail className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 truncate text-sm">{email}</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="ml-auto shrink-0"
-                  disabled={busy}
-                  onClick={() => run(() => removeEmail(email))}
-                  aria-label={`Delete ${email}`}
-                >
-                  Delete
-                </Button>
+                {github ? (
+                  <Badge
+                    variant="outline"
+                    className="ml-auto shrink-0"
+                    title="Verified by GitHub"
+                  >
+                    <GithubMark />
+                    verified
+                  </Badge>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto shrink-0"
+                    disabled={busy}
+                    onClick={() => run(() => removeEmail(email))}
+                    aria-label={`Delete ${email}`}
+                  >
+                    Delete
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
+        )}
+        {reconnect && (
+          <p className="text-xs text-muted-foreground">
+            <a href="/-/api/github/connect" className="underline">
+              Reconnect GitHub
+            </a>{" "}
+            to add its verified emails.
+          </p>
         )}
       </section>
 

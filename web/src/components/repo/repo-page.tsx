@@ -117,17 +117,28 @@ export function RepoPage({ loc }: { loc: Location }) {
   )
 }
 
+/** The owner links to their profile, the rest to the repository. */
 function RepoName({ name }: { name: string }) {
-  const parts = name.split("/")
+  const [owner, ...rest] = name.split("/")
   return (
-    <Link to="/$" params={{ _splat: href(name) }} className="hover:underline">
-      {parts.slice(0, -1).map((p) => (
-        <span key={p} className="text-muted-foreground">
-          {p} /{" "}
-        </span>
-      ))}
-      <span className="font-semibold">{parts[parts.length - 1]}</span>
-    </Link>
+    <span>
+      <Link
+        to="/$"
+        params={{ _splat: owner }}
+        className="text-muted-foreground hover:text-foreground hover:underline"
+      >
+        {owner}
+      </Link>
+      <span className="text-muted-foreground"> / </span>
+      <Link to="/$" params={{ _splat: href(name) }} className="hover:underline">
+        {rest.slice(0, -1).map((p) => (
+          <span key={p} className="text-muted-foreground">
+            {p} /{" "}
+          </span>
+        ))}
+        <span className="font-semibold">{rest[rest.length - 1]}</span>
+      </Link>
+    </span>
   )
 }
 

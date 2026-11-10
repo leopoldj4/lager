@@ -1,7 +1,8 @@
 //! Email addresses of the signed-in user: commits with one of them as the
 //! author email count on the user's profile
-//! (docs/decisions/0029-activity-graph.md). Nothing checks that the user
-//! owns an address; a profile counts only repositories its user can read.
+//! (docs/decisions/0029-activity-graph.md). A connected GitHub account
+//! adds the addresses it verified; nothing checks the ones added here, and
+//! a profile counts only repositories its user can read.
 use super::json_error;
 use super::tokens::signed_in;
 use crate::http::AppState;
@@ -49,7 +50,12 @@ async fn list(State(s): State<AppState>, headers: HeaderMap) -> Result<Response,
     let emails = s.directory.users().emails(&user).await.map_err(failure)?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({ "emails": emails })),
+        Json(serde_json::json!({
+            "emails": emails
+                .iter()
+                .map(|(email, github)| serde_json::json!({ "email": email, "github": github }))
+                .collect::<Vec<_>>(),
+        })),
     )
         .into_response())
 }

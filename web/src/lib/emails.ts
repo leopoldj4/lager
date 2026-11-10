@@ -13,7 +13,13 @@ async function request(path: string, init?: RequestInit) {
   return response.json()
 }
 
-export function listEmails(): Promise<{ emails: string[] }> {
+export interface EmailInfo {
+  email: string
+  /** Verified by the connected GitHub account, and kept in step with it. */
+  github: boolean
+}
+
+export function listEmails(): Promise<{ emails: EmailInfo[] }> {
   return request("")
 }
 

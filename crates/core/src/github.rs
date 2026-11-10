@@ -34,6 +34,9 @@ fn unavailable(e: sqlx::Error) -> GithubDbError {
 #[derive(Clone, Debug, Serialize)]
 pub struct Account {
     pub login: String,
+    /// GitHub's user ID.
+    #[serde(skip)]
+    pub id: i64,
     #[serde(skip)]
     pub token: String,
 }
@@ -97,13 +100,14 @@ impl GithubDb {
     }
 
     pub async fn account(&self, user: &str) -> Result<Option<Account>, GithubDbError> {
-        let row: Option<(String, String)> =
-            sqlx::query_as("SELECT login, token FROM lager_github_accounts WHERE user_name = $1")
-                .bind(user)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(unavailable)?;
-        Ok(row.map(|(login, token)| Account { login, token }))
+        let row: Option<(String, i64, String)> = sqlx::query_as(
+            "SELECT login, github_id, token FROM lager_github_accounts WHERE user_name = $1",
+        )
+        .bind(user)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(row.map(|(login, id, token)| Account { login, id, token }))
     }
 
     /// Connects a GitHub account, replacing an earlier one. Mirrors that
@@ -223,13 +227,48 @@ impl GithubDb {
         Ok(())
     }
 
-    /// Forgets the account. Its mirrors stay and stop syncing.
+    /// Forgets the account and the email addresses it verified. Its
+    /// mirrors stay and stop syncing.
     pub async fn disconnect(&self, user: &str) -> Result<(), GithubDbError> {
         sqlx::query("DELETE FROM lager_github_accounts WHERE user_name = $1")
             .bind(user)
             .execute(&self.pool)
             .await
             .map_err(unavailable)?;
+        sqlx::query("DELETE FROM lager_user_emails WHERE user_name = $1 AND github")
+            .bind(user)
+            .execute(&self.pool)
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Replaces the user's email addresses that GitHub verified, in lower
+    /// case (docs/decisions/0029-activity-graph.md). An address the user
+    /// added by hand becomes GitHub's; one GitHub no longer lists goes.
+    pub async fn set_emails(&self, user: &str, emails: &[String]) -> Result<(), GithubDbError> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        sqlx::query(
+            "DELETE FROM lager_user_emails
+             WHERE user_name = $1 AND github AND NOT email = ANY($2)",
+        )
+        .bind(user)
+        .bind(emails)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        sqlx::query(
+            "INSERT INTO lager_user_emails (user_name, email, github)
+             SELECT $1, e, true FROM unnest($2::text[]) AS e
+             WHERE EXISTS (SELECT 1 FROM lager_users WHERE name = $1)
+             ON CONFLICT (user_name, email) DO UPDATE SET github = true",
+        )
+        .bind(user)
+        .bind(emails)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
         Ok(())
     }
 

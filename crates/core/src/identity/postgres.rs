@@ -233,6 +233,8 @@ CREATE TABLE lager_user_emails (
     user_name text NOT NULL REFERENCES lager_users (name) ON DELETE CASCADE,
     -- In lower case.
     email text NOT NULL,
+    -- Verified by the user's GitHub account, and kept in step with it.
+    github boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (user_name, email)
 );
@@ -839,10 +841,11 @@ impl PgUsers {
         Ok(())
     }
 
-    /// A user's email addresses, in lower case, sorted.
-    pub async fn emails(&self, user: &str) -> Result<Vec<String>, UserError> {
-        sqlx::query_scalar(
-            "SELECT email FROM lager_user_emails WHERE user_name = $1 ORDER BY email",
+    /// A user's email addresses, in lower case, sorted, and whether GitHub
+    /// verified each.
+    pub async fn emails(&self, user: &str) -> Result<Vec<(String, bool)>, UserError> {
+        sqlx::query_as(
+            "SELECT email, github FROM lager_user_emails WHERE user_name = $1 ORDER BY email",
         )
         .bind(user)
         .fetch_all(&self.pool)
@@ -855,12 +858,13 @@ impl PgUsers {
     pub async fn add_email(&self, user: &str, email: &str) -> Result<(), UserError> {
         let mut conn = self.conn().await?;
         let mut tx = conn.begin().await.map_err(unavailable)?;
-        let count: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM lager_user_emails WHERE user_name = $1")
-                .bind(user)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(unavailable)?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM lager_user_emails WHERE user_name = $1 AND NOT github",
+        )
+        .bind(user)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(unavailable)?;
         if count >= MAX_EMAILS {
             return Err(UserError::Invalid(format!(
                 "a user can have at most {MAX_EMAILS} email addresses; delete one first"
@@ -891,16 +895,32 @@ impl PgUsers {
         Ok(())
     }
 
-    /// `false`: the user has no such address.
+    /// `false`: the user has no such address. Addresses that GitHub
+    /// verified follow the GitHub account and stay.
     pub async fn delete_email(&self, user: &str, email: &str) -> Result<bool, UserError> {
-        let deleted =
-            sqlx::query("DELETE FROM lager_user_emails WHERE user_name = $1 AND email = $2")
-                .bind(user)
-                .bind(email)
-                .execute(&self.pool)
-                .await
-                .map_err(unavailable)?;
-        Ok(deleted.rows_affected() > 0)
+        let github: Option<bool> = sqlx::query_scalar(
+            "WITH d AS (
+                 DELETE FROM lager_user_emails
+                 WHERE user_name = $1 AND email = $2 AND NOT github
+                 RETURNING false AS github
+             )
+             SELECT github FROM d
+             UNION ALL
+             SELECT true FROM lager_user_emails WHERE user_name = $1 AND email = $2 AND github",
+        )
+        .bind(user)
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        match github {
+            None => Ok(false),
+            Some(false) => Ok(true),
+            Some(true) => Err(UserError::Invalid(
+                "GitHub verified this address; it goes when GitHub drops it or you disconnect GitHub"
+                    .into(),
+            )),
+        }
     }
 }
 

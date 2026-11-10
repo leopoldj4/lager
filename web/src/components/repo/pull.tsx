@@ -240,7 +240,16 @@ function Who({
         {name}
       </a>
     )
-  return <span className={cls}>{name}</span>
+  if (server || name === "?") return <span className={cls}>{name}</span>
+  return (
+    <Link
+      to="/$"
+      params={{ _splat: name }}
+      className={cn(cls, "hover:underline")}
+    >
+      {name}
+    </Link>
+  )
 }
 
 function Conversation({ repo, d }: { repo: string; d: PullDetail }) {

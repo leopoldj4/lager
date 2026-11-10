@@ -169,7 +169,18 @@ export function PullRow({ repo, pull: p }: { repo: string; pull: Pull }) {
             : p.state === "closed"
               ? `closed ${ago((p.closed_ms ?? p.updated_ms) / 1000)}`
               : `opened ${ago(p.created_ms / 1000)}`}{" "}
-          by {p.author}
+          by{" "}
+          {p.github_url ? (
+            p.author
+          ) : (
+            <Link
+              to="/$"
+              params={{ _splat: p.author }}
+              className="hover:text-foreground hover:underline"
+            >
+              {p.author}
+            </Link>
+          )}
         </p>
       </div>
       <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">
