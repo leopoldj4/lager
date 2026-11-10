@@ -40,7 +40,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
-  SidebarRail,
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar"
@@ -138,7 +137,6 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
         <LiveStatus />
         <UserMenu />
       </SidebarFooter>
-      <SidebarRail />
     </Sidebar>
   )
 }
