@@ -448,6 +448,7 @@ async fn prepare(
                 ),
                 origin: Origin::Client,
                 ref_guards: vec![],
+                forward: auth.forward.clone(),
             };
             let token = s.registry.register_push(op);
             cmd.arg("-c")

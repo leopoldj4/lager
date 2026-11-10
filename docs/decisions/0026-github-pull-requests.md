@@ -87,3 +87,4 @@ Texts can have up to 65,536 characters, GitHub's limit.
   after the refs have moved; the error shows on the mirror.
 - Servers before this decision do not know schema version 7 and refuse to
   start; upgrade every server.
+- Decision 28 sends changes made here to GitHub.

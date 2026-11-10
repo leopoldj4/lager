@@ -244,7 +244,10 @@ function Who({
 }
 
 function Conversation({ repo, d }: { repo: string; d: PullDetail }) {
+  const state = useLive()
   const { pull } = d
+  // A copy whose repository no longer follows GitHub changes only there.
+  const frozen = !!pull.github_url && !!state?.user && !d.can_comment
   return (
     <div className="grid grid-cols-1 gap-4">
       <CommentCard
@@ -258,14 +261,14 @@ function Conversation({ repo, d }: { repo: string; d: PullDetail }) {
       {d.events.map((e) => (
         <TimelineEvent key={e.id} repo={repo} pull={pull} e={e} />
       ))}
-      {pull.state === "open" && !pull.github_url && (
+      {pull.state === "open" && (!pull.github_url || d.mergeable) && (
         <MergeBox repo={repo} d={d} />
       )}
-      {pull.github_url ? (
+      {frozen ? (
         <p className="rounded-lg border p-4 text-sm">
-          This pull request is on GitHub, and this copy follows it.{" "}
+          This pull request is on GitHub.{" "}
           <a
-            href={pull.github_url}
+            href={pull.github_url!}
             target="_blank"
             rel="noreferrer"
             className="font-medium underline"

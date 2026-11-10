@@ -30,7 +30,7 @@ pub struct CatalogRecord {
     pub default_branch: String,
     pub anonymous_read: bool,
     pub ref_rules: Vec<RefRule>,
-    /// Set for a read-only mirror of a GitHub repository (`owner/name`).
+    /// Set for a mirror of a GitHub repository (`owner/name`).
     /// Servers before decision 20 ignore it and accept pushes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mirror: Option<String>,

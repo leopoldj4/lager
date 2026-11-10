@@ -117,7 +117,7 @@ function NoPulls({ repo, refs }: { repo: string; refs: Refs }) {
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed px-4 py-6 text-sm text-muted-foreground">
       No open pull requests.
-      {!refs.mirror && refs.branches.length > 1 && (
+      {refs.branches.length > 1 && (
         <Button asChild size="sm" variant="outline" className="ml-auto">
           <Link to="/$" params={{ _splat: newPullHref(repo, refs) }}>
             <Plus />
@@ -235,7 +235,6 @@ function RecentBranches({
                   <PullIcon state="open" className="size-3.5" />#{pull.number}
                 </Link>
               ) : (
-                !refs.mirror &&
                 user &&
                 open &&
                 b.oid !== head?.oid && (

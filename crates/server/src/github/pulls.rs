@@ -22,8 +22,8 @@ use serde::Deserialize;
 use super::{API, Github, GithubError};
 use lager_core::github::{Due, PullCursors};
 use lager_core::limits;
-use lager_core::model::Oid;
-use lager_core::pulls::{GithubComment, GithubPull, PullError, PullState};
+use lager_core::model::{Oid, RepoId};
+use lager_core::pulls::{GithubComment, GithubPull, Pull, PullError, PullState};
 
 const PER_PAGE: usize = 100;
 
@@ -49,8 +49,8 @@ struct ApiBranch {
 }
 
 #[derive(Deserialize)]
-struct ApiPull {
-    number: u64,
+pub(super) struct ApiPull {
+    pub(super) number: u64,
     html_url: String,
     title: String,
     body: Option<String>,
@@ -64,6 +64,9 @@ struct ApiPull {
     created_at: String,
     updated_at: String,
     closed_at: Option<String>,
+    /// Only in the answer for one pull request, not in lists.
+    #[serde(default)]
+    merged_by: Option<ApiUser>,
 }
 
 #[derive(Deserialize)]
@@ -72,7 +75,7 @@ struct ApiPullDetail {
 }
 
 #[derive(Deserialize)]
-struct ApiComment {
+pub(super) struct ApiComment {
     id: i64,
     /// `…/pull/<n>#issuecomment-…` on pull requests, `…/issues/<n>#…` on
     /// issues.
@@ -175,7 +178,7 @@ impl Github {
         seen.reverse();
         let newest = seen.last().map(|p| p.updated_at.clone());
         for p in seen {
-            self.import_pull(due, token, p, true).await?;
+            self.import_pull(due.repo, gh, token, p, true).await?;
         }
         if caught_up {
             if let Some(n) = newest
@@ -206,7 +209,7 @@ impl Github {
             };
             let full = items.len() == PER_PAGE;
             for p in items {
-                self.import_pull(due, token, p, false).await?;
+                self.import_pull(due.repo, gh, token, p, false).await?;
             }
             c.import_page = full.then_some(page + 1);
             if !full {
@@ -242,23 +245,10 @@ impl Github {
             let mut last = None;
             let mut waiting = false;
             for comment in items {
+                let updated_at = comment.updated_at.clone();
                 if let Some(number) = pull_of_comment(&comment.html_url) {
-                    let imported = GithubComment {
-                        number,
-                        id: comment.id,
-                        author: login(comment.user),
-                        body: comment.body.unwrap_or_default(),
-                        created_at: comment.created_at,
-                        updated_at: comment.updated_at.clone(),
-                    };
-                    match self
-                        .pulls
-                        .db
-                        .import_github_comment(due.repo, &imported)
-                        .await
-                    {
-                        Ok(Some(p)) => self.pulls.publish(due.repo, &p),
-                        Ok(None) => {}
+                    match self.import_comment(due.repo, number, comment).await {
+                        Ok(_) => {}
                         // A pull request newer than this sync's list: the
                         // next sync reads it first.
                         Err(PullError::NotFound) => {
@@ -269,7 +259,7 @@ impl Github {
                     }
                 }
                 // Comments on issues are skipped.
-                last = Some(comment.updated_at);
+                last = Some(updated_at);
             }
             let moved = last
                 .as_ref()
@@ -293,11 +283,36 @@ impl Github {
         Ok(())
     }
 
-    /// Writes one pull request. `live`: it changed since the last sync, so
-    /// a new merge is worth one request for who merged it.
-    async fn import_pull(
+    /// Writes one comment on the pull request `number`, and publishes the
+    /// change. `None`: nothing changed.
+    pub(super) async fn import_comment(
         &self,
-        due: &Due,
+        repo: RepoId,
+        number: u64,
+        comment: ApiComment,
+    ) -> Result<Option<Pull>, PullError> {
+        let imported = GithubComment {
+            number,
+            id: comment.id,
+            author: login(comment.user),
+            body: comment.body.unwrap_or_default(),
+            created_at: comment.created_at,
+            updated_at: comment.updated_at,
+        };
+        let changed = self.pulls.db.import_github_comment(repo, &imported).await?;
+        if let Some(p) = &changed {
+            self.pulls.publish(repo, p);
+        }
+        Ok(changed)
+    }
+
+    /// Writes one pull request of the mirror `repo` of `github`. `live`: it
+    /// changed since the last sync, so a new merge is worth one request for
+    /// who merged it.
+    pub(super) async fn import_pull(
+        &self,
+        repo: RepoId,
+        github: &str,
         token: &str,
         p: ApiPull,
         live: bool,
@@ -308,16 +323,16 @@ impl Github {
             ("open", _) => PullState::Open,
             _ => PullState::Closed,
         };
-        let mut merged_by = None;
-        if merged && live {
+        let mut merged_by = p.merged_by.map(|u| u.login);
+        if merged && live && merged_by.is_none() {
             let old = self
                 .pulls
                 .db
-                .get(due.repo, p.number)
+                .get(repo, p.number)
                 .await
                 .map_err(|e| e.to_string())?;
             if old.is_some_and(|o| o.state != PullState::Merged) {
-                let path = format!("/repos/{}/pulls/{}", due.github, p.number);
+                let path = format!("/repos/{github}/pulls/{}", p.number);
                 merged_by = match self.api::<ApiPullDetail>(token, &path).await {
                     Ok(d) => d.merged_by.map(|u| u.login),
                     Err(e) => return Err(api_message(e)),
@@ -329,7 +344,7 @@ impl Github {
             .head
             .repo
             .as_ref()
-            .is_some_and(|r| r.full_name.eq_ignore_ascii_case(&due.github));
+            .is_some_and(|r| r.full_name.eq_ignore_ascii_case(github));
         let source = match p.head.label {
             Some(label) if !same_repo => label,
             // GitHub shows "unknown repository" for a deleted fork.
@@ -338,7 +353,7 @@ impl Github {
         };
         let merge_oid = p.merge_commit_sha.filter(|_| merged);
         let merge_base = self
-            .merge_base(due, &p.base.sha, &p.head.sha)
+            .merge_base(repo, &p.base.sha, &p.head.sha)
             .await
             .unwrap_or_else(|| p.base.sha.clone());
         let pull = GithubPull {
@@ -359,11 +374,11 @@ impl Github {
             updated_at: p.updated_at,
             closed_at: p.closed_at,
         };
-        match self.pulls.db.import_github(due.repo, &pull).await {
-            Ok(Some(changed)) => self.pulls.publish(due.repo, &changed),
+        match self.pulls.db.import_github(repo, &pull).await {
+            Ok(Some(changed)) => self.pulls.publish(repo, &changed),
             Ok(None) => {}
             Err(e @ PullError::State(_)) => {
-                tracing::warn!(repo = %due.name, pull = pull.number, error = %e, "pull request not imported");
+                tracing::warn!(%repo, github, pull = pull.number, error = %e, "pull request not imported");
             }
             Err(e) => return Err(e.to_string()),
         }
@@ -372,13 +387,8 @@ impl Github {
 
     /// The merge base of GitHub's base and head commits, if the cache has
     /// both. Without it, the comparison starts at the base commit.
-    async fn merge_base(&self, due: &Due, base: &str, head: &str) -> Option<String> {
-        let view = self
-            .registry
-            .controller(due.repo)
-            .prepare_read()
-            .await
-            .ok()?;
+    async fn merge_base(&self, repo: RepoId, base: &str, head: &str) -> Option<String> {
+        let view = self.registry.controller(repo).prepare_read().await.ok()?;
         let format = view.format();
         let (base, head) = (
             Oid::parse(format, base).ok()?,
@@ -436,7 +446,7 @@ fn pull_of_comment(html_url: &str) -> Option<u64> {
 }
 
 /// A message for a used-up rate limit, with the minutes until it resets.
-fn rate_limited(res: &reqwest::Response) -> Option<String> {
+pub(super) fn rate_limited(res: &reqwest::Response) -> Option<String> {
     let s = res.status();
     if s != StatusCode::FORBIDDEN && s != StatusCode::TOO_MANY_REQUESTS {
         return None;

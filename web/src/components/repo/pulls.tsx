@@ -107,7 +107,7 @@ export function PullList({
             </Link>
           ))}
         </div>
-        {!refs.mirror && refs.branches.length > 1 && (
+        {refs.branches.length > 1 && (
           <Button asChild size="sm" className="ml-auto">
             <Link to="/$" params={{ _splat: newPullHref(repo, refs) }}>
               <Plus />

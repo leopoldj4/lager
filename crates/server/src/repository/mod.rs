@@ -105,6 +105,9 @@ pub struct PushAccess {
     pub repo: RepoId,
     pub level: Access,
     pub ref_rules: Vec<RefRule>,
+    /// The repository mirrors another one, which takes the change first
+    /// ([`Forward`]); without a forward, the push is refused.
+    pub mirror: bool,
 }
 
 impl PushAccess {
@@ -113,8 +116,36 @@ impl PushAccess {
             repo: RepoId(uuid::Uuid::nil()),
             level: Access::None,
             ref_rules: vec![],
+            mirror: false,
         }
     }
+}
+
+/// Sends the ref changes of a push, whose objects the cache holds, to the
+/// mirrored repository before `deadline`. `Err`: the refused refs with
+/// their reasons; nothing changed there.
+pub type ForwardSend = Arc<
+    dyn Fn(
+            Arc<CacheInstance>,
+            Vec<lager_core::model::RefUpdate>,
+            std::time::Instant,
+        ) -> futures::future::BoxFuture<'static, Result<(), Vec<(String, String)>>>
+        + Send
+        + Sync,
+>;
+
+/// A push to a mirror goes to the mirrored repository first, and changes the
+/// refs here only once that one accepted it
+/// (docs/decisions/0028-two-way-github-mirrors.md).
+#[derive(Clone)]
+pub struct Forward {
+    /// The mirrored repository, for messages: `github.com/owner/name`.
+    pub target: String,
+    pub send: ForwardSend,
+    /// Asks for a sync of the mirror after a sent change: it brings what
+    /// else changed there with it, and the change itself if it was not
+    /// applied here.
+    pub resync: Arc<dyn Fn() -> futures::future::BoxFuture<'static, ()> + Send + Sync>,
 }
 
 /// Reads the current permission rules. `Err` when they cannot be read.
@@ -151,6 +182,8 @@ pub struct PendingPush {
     pub origin: Origin,
     /// Read dependencies checked against each CAS attempt without changing refs.
     pub ref_guards: Vec<(RefName, Option<Oid>)>,
+    /// For a push to a mirror: where the change goes first.
+    pub forward: Option<Forward>,
 }
 
 pub struct Registry {

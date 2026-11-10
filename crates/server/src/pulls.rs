@@ -274,6 +274,7 @@ impl PullService {
                     repo,
                     level: Access::Force,
                     ref_rules: vec![],
+                    mirror: false,
                 })
             })
         });
@@ -317,6 +318,7 @@ impl PullService {
             default_branch_changed: None,
             origin: Origin::Server(operation),
             ref_guards,
+            forward: None,
         };
         let commands = updates
             .iter()
