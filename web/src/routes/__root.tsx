@@ -66,7 +66,8 @@ function Root() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <SidebarProvider>
+        {/* Always open on desktop; phones still open it as a sheet. */}
+        <SidebarProvider open onOpenChange={() => {}}>
           <AppSidebar onSearch={openSearch} />
           <SidebarInset>
             <MobileHeader onSearch={openSearch} />

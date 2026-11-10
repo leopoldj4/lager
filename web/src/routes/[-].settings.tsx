@@ -41,7 +41,7 @@ function Settings() {
       </p>
     )
   return (
-    <div className="mx-auto w-full max-w-5xl">
+    <div className="w-full">
       <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
       <Separator className="my-6" />
       <div className="flex flex-col gap-8 lg:flex-row lg:gap-12">
