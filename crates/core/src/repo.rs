@@ -14,8 +14,9 @@ pub struct RepoSettings {
     pub default_branch: String,
     pub anonymous_read: bool,
     pub ref_rules: Vec<RefRule>,
-    /// The GitHub repository (`owner/name`) that this repository is a
-    /// read-only mirror of (docs/decisions/0020-github-mirrors.md).
+    /// The GitHub repository (`owner/name`) that this repository mirrors
+    /// (docs/decisions/0020-github-mirrors.md). Changes here go to GitHub
+    /// first (docs/decisions/0028-two-way-github-mirrors.md).
     pub mirror: Option<String>,
 }
 

@@ -112,11 +112,45 @@ impl Controller {
             updates,
             deadline: Instant::now() + limits::PUSH_DEADLINE,
         };
+        let mut forwarded = false;
+        let r = self.push_attempts(op, &req, &names, &mut forwarded).await;
+        let Some(f) = op.forward.as_ref().filter(|_| forwarded) else {
+            return r;
+        };
+        // The mirrored repository has the change. The sync brings what
+        // follows from it there, such as the refs of pull requests, and
+        // the change itself if it was not applied here.
+        (f.resync)().await;
+        let Some(why) = r.results.iter().find(|x| !x.ok) else {
+            return r;
+        };
+        let why = why.message.as_deref().unwrap_or("rejected");
+        tracing::warn!(repo = %self.repo, request = %req.id, reason = why, "forwarded push not applied");
+        self.svc.metrics.inc("pushes_forwarded_not_applied");
+        reject_all(
+            &names,
+            &format!(
+                "pushed to {}, but not applied here yet ({why}); it arrives with the next sync",
+                f.target
+            ),
+        )
+    }
+
+    async fn push_attempts(
+        &self,
+        op: &PendingPush,
+        req: &Request,
+        names: &[String],
+        forwarded: &mut bool,
+    ) -> HookResponse {
         let mut pack: AttemptPack = None;
         let mut attempt = 0u32;
         loop {
             attempt += 1;
-            match self.push_attempt(op, &req, &names, &mut pack).await {
+            match self
+                .push_attempt(op, req, names, &mut pack, forwarded)
+                .await
+            {
                 Ok(Attempt::Done(r)) => return r,
                 Ok(Attempt::Retry(why)) => {
                     self.svc.metrics.inc("push_retries");
@@ -124,21 +158,21 @@ impl Controller {
                 }
                 Err(RepoError::Unavailable(m)) => {
                     self.svc.metrics.inc("push_storage_unavailable");
-                    return reject_all(&names, &format!("storage unavailable: {m}"));
+                    return reject_all(names, &format!("storage unavailable: {m}"));
                 }
                 Err(RepoError::NotFound) => {
-                    return reject_all(&names, "repository not found");
+                    return reject_all(names, "repository not found");
                 }
-                Err(RepoError::Deleted) => return reject_all(&names, "repository deleted"),
-                Err(RepoError::NoSpace(m)) => return reject_all(&names, &m),
+                Err(RepoError::Deleted) => return reject_all(names, "repository deleted"),
+                Err(RepoError::NoSpace(m)) => return reject_all(names, &m),
                 Err(RepoError::Internal(m)) => {
                     tracing::error!(repo = %self.repo, request = %req.id, error = %m, "push failed");
-                    return reject_all(&names, &format!("internal error (request {})", req.id));
+                    return reject_all(names, &format!("internal error (request {})", req.id));
                 }
             }
             if attempt >= limits::PUSH_RETRY_LIMIT || Instant::now() >= req.deadline {
                 self.svc.metrics.inc("push_conflicts_exhausted");
-                return reject_all(&names, "concurrent changes; retry the push");
+                return reject_all(names, "concurrent changes; retry the push");
             }
             tokio::time::sleep(jitter(attempt)).await;
         }
@@ -150,6 +184,7 @@ impl Controller {
         req: &Request,
         names: &[String],
         pack: &mut AttemptPack,
+        forwarded: &mut bool,
     ) -> Result<Attempt, RepoError> {
         let svc = &self.svc;
         // Permission rules can change between attempts.
@@ -189,6 +224,23 @@ impl Controller {
             k
         };
         let dir = &op.cache.dir;
+
+        // The mirror's sync brought the forwarded change before this
+        // attempt: its entry is the change.
+        if *forwarded
+            && req
+                .updates
+                .iter()
+                .all(|u| base.refs.refs.get(&u.name) == u.new.as_ref())
+        {
+            return Ok(Attempt::Done(accept_all(
+                names,
+                vec![format!(
+                    "lager: accepted as generation {} (request {})",
+                    base.head.generation, req.id
+                )],
+            )));
+        }
 
         // Read dependencies and updates must be checked against the same head.
         if op
@@ -243,6 +295,25 @@ impl Controller {
                     "stored data removal in progress; retry the push later",
                 )));
             }
+        }
+
+        // A mirror changes only after the mirrored repository took the
+        // change, once per push: later attempts only repeat the CAS.
+        if access.mirror && !*forwarded {
+            let Some(f) = &op.forward else {
+                return Ok(Attempt::Done(reject_all(
+                    names,
+                    "read-only mirror; push to the mirrored repository",
+                )));
+            };
+            let _t = StepTimer::new(&svc.metrics, "push_forward");
+            if let Err(refused) =
+                (f.send)(op.cache.clone(), req.updates.clone(), req.deadline).await
+            {
+                svc.metrics.inc("push_forward_rejections");
+                return Ok(Attempt::Done(reject_some(names, &refused)));
+            }
+            *forwarded = true;
         }
 
         // Step 13: an entry for the generation after the observed head. Only
@@ -424,17 +495,7 @@ impl Controller {
         }
         self.pushed_here.store(true, Ordering::SeqCst);
         svc.bus.publish(self.repo, generation);
-        Ok(Attempt::Done(HookResponse {
-            results: names
-                .iter()
-                .map(|n| HookResult {
-                    name: n.clone(),
-                    ok: true,
-                    message: None,
-                })
-                .collect(),
-            messages,
-        }))
+        Ok(Attempt::Done(accept_all(names, messages)))
     }
 
     /// Checks objects, types, sizes, fast-forward rules, and ref permissions.
@@ -602,6 +663,20 @@ fn adopted_default_branch(base: &RefState, next: &RefState) -> Option<RefName> {
         .find_map(|p| branches.iter().find(|b| b.as_str() == *p))
         .or(branches.first())
         .map(|b| (*b).clone())
+}
+
+fn accept_all(names: &[String], messages: Vec<String>) -> HookResponse {
+    HookResponse {
+        results: names
+            .iter()
+            .map(|n| HookResult {
+                name: n.clone(),
+                ok: true,
+                message: None,
+            })
+            .collect(),
+        messages,
+    }
 }
 
 fn reject_all(names: &[String], reason: &str) -> HookResponse {

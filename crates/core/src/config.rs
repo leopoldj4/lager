@@ -95,7 +95,7 @@ pub struct WebConfig {
     pub sign_up: bool,
 }
 
-/// A GitHub OAuth app for read-only mirrors of GitHub repositories
+/// A GitHub OAuth app for mirrors of GitHub repositories
 /// (docs/decisions/0020-github-mirrors.md). Its callback URL is
 /// `<origin>/-/api/github/callback`. Without it, nobody can connect GitHub.
 #[derive(Clone, Debug)]

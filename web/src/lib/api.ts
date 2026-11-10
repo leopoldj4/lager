@@ -31,7 +31,7 @@ export interface RepoSummary {
   name: string
   default_branch: string
   anonymous_read: boolean
-  /** The GitHub repository of a read-only mirror. */
+  /** The GitHub repository of a mirror. */
   mirror: string | null
 }
 
@@ -44,7 +44,7 @@ export interface RefInfo {
 
 export interface Refs {
   generation: number
-  /** The GitHub repository of a read-only mirror. */
+  /** The GitHub repository of a mirror. */
   mirror: string | null
   /** Anyone may read it, also without signing in. */
   public: boolean
@@ -120,7 +120,7 @@ export interface Pull {
   closed_ms: number | null
   /**
    * The page on GitHub of a pull request copied from there; its authors
-   * are GitHub logins, and it changes only there.
+   * are GitHub logins, and changes to it go to GitHub.
    */
   github_url: string | null
 }
@@ -156,7 +156,7 @@ export interface PullDetail {
   head: string
   source_oid: string | null
   target_oid: string | null
-  /** null unless open. */
+  /** null unless open, and for a copy from GitHub that no longer syncs. */
   mergeable: Mergeable | null
   conflicts: string[]
   can_comment: boolean

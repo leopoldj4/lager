@@ -69,6 +69,43 @@ pub async fn run(
 ) -> Result<Value, ReadError> {
     let pulls = &s.pulls;
     let changed = |p| Ok(json!({ "pull": p }));
+    // The pull requests of a mirror are GitHub's, and change there
+    // (docs/decisions/0028-two-way-github-mirrors.md).
+    if let (Some(_), Some(github)) = (&repo.mirror, &s.github) {
+        match q {
+            Query::PullCreate {
+                source,
+                target,
+                title,
+                body,
+                ..
+            } => {
+                return changed(
+                    github
+                        .pull_create(repo, who, &source, &target, &title, &body)
+                        .await?,
+                );
+            }
+            Query::PullComment { number, body, .. } => {
+                return changed(github.pull_comment(repo, who, number, &body).await?);
+            }
+            Query::PullClose { number, .. } => {
+                return changed(github.pull_set_open(repo, who, number, false).await?);
+            }
+            Query::PullReopen { number, .. } => {
+                return changed(github.pull_set_open(repo, who, number, true).await?);
+            }
+            Query::PullMerge {
+                number,
+                head,
+                squash,
+                ..
+            } => {
+                return changed(github.pull_merge(repo, who, number, &head, squash).await?);
+            }
+            _ => {}
+        }
+    }
     match q {
         Query::Pulls {
             closed,
@@ -144,6 +181,9 @@ async fn pull(
         .ok_or_else(|| ReadError::not_found("pull request"))?;
     // GitHub's pull requests follow GitHub, not the branches here.
     let github = p.github_url.is_some();
+    // While the mirror syncs, changes here go to GitHub; after **Stop
+    // syncing**, the copy stays as it is.
+    let live = github && repo.mirror.is_some() && s.github.is_some();
     if p.state != PullState::Merged && !github {
         s.pulls.clone().request_sync(repo.id);
     }
@@ -159,8 +199,8 @@ async fn pull(
     let mut mergeable = Value::Null;
     let mut conflicts: Vec<String> = vec![];
     let (head, base) = match p.state {
-        // The head is GitHub's ref, which forks have too; nothing merges
-        // here.
+        // The head is GitHub's ref, which forks have too; GitHub merges
+        // it.
         PullState::Open if github => {
             let head = kept.clone().unwrap_or_else(|| p.head_oid.clone());
             let base = match &target {
@@ -168,6 +208,22 @@ async fn pull(
                 None => None,
             }
             .unwrap_or_else(|| p.merge_base.clone());
+            if live {
+                mergeable = json!(match &target {
+                    None => "target_missing",
+                    Some(_) if base == head => "up_to_date",
+                    // The sync has not brought the head yet.
+                    Some(_) if kept.is_none() => "clean",
+                    Some(t) => {
+                        conflicts = merge_check(s, &view, t, &head).await?;
+                        if conflicts.is_empty() {
+                            "clean"
+                        } else {
+                            "conflict"
+                        }
+                    }
+                });
+            }
             (head, base)
         }
         PullState::Open => {
@@ -218,6 +274,19 @@ async fn pull(
         Identity::Anonymous => None,
         Identity::User { name, .. } => Some(name.as_str()),
     };
+    // On GitHub, the author is a GitHub account.
+    let author = match (user, &s.github) {
+        (Some(u), Some(g)) if live && level < Access::Write => {
+            g.db.account(u)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|a| a.login == p.author)
+        }
+        (Some(u), _) => !github && u == p.author,
+        _ => false,
+    };
+    let open_here = !github || live;
     Ok(json!({
         "pull": p,
         "events": events,
@@ -227,9 +296,9 @@ async fn pull(
         "target_oid": target,
         "mergeable": mergeable,
         "conflicts": conflicts,
-        "can_comment": user.is_some() && !github,
-        "can_merge": user.is_some() && level >= Access::Write && !github,
-        "can_close": !github && user.is_some_and(|u| u == p.author || level >= Access::Write),
+        "can_comment": user.is_some() && open_here,
+        "can_merge": user.is_some() && level >= Access::Write && open_here,
+        "can_close": user.is_some() && open_here && (author || level >= Access::Write),
         "generation": view.generation,
     }))
 }

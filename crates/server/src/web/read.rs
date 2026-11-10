@@ -376,7 +376,7 @@ pub(super) struct RepoSummary {
     pub name: String,
     pub default_branch: String,
     pub anonymous_read: bool,
-    /// The GitHub repository of a read-only mirror.
+    /// The GitHub repository of a mirror.
     pub mirror: Option<String>,
 }
 

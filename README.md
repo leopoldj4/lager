@@ -226,9 +226,12 @@ where the container image installs it; without it, only the API under
 - GitHub mirrors (`LAGER_GITHUB_CLIENT_ID`): **Settings** in the user menu has
   **Connect with GitHub**. Then pick GitHub repositories; each becomes
   `<user>/<name>` here and follows GitHub's branches, tags, and default
-  branch within about a minute. Mirrors are read-only: pushes and pull
-  requests are refused. **Stop syncing** keeps the repository and makes it
-  writable. See [decision 20](docs/decisions/0020-github-mirrors.md).
+  branch within about a minute. GitHub stays the source: a push to a mirror
+  goes to GitHub first, as the pushing user's connected GitHub account, and
+  so do pull requests, comments, and merges. **Stop syncing** keeps the
+  repository and cuts it loose from GitHub. See
+  [decision 20](docs/decisions/0020-github-mirrors.md) and
+  [decision 28](docs/decisions/0028-two-way-github-mirrors.md).
 - Every response has an `x-lager-request-id` header. A push uses the same
   UUID as its request UUID in the log entry and in the client's
   `remote: lager: accepted ...` line. Logs never contain credentials or

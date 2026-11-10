@@ -1,8 +1,10 @@
-//! GitHub accounts and read-only mirrors in PostgreSQL
+//! GitHub accounts and mirrors in PostgreSQL
 //! (docs/decisions/0020-github-mirrors.md).
 //!
 //! A user connects one GitHub account; its OAuth token fetches the
-//! repositories that the user mirrors. Each mirror row says when it is due.
+//! repositories that the user mirrors, and sends the user's pushes and pull
+//! request changes to GitHub
+//! (docs/decisions/0028-two-way-github-mirrors.md). Each mirror row says when it is due.
 //! A server that starts a sync moves `next_sync_at` ahead by a lease in the
 //! same statement that picks the row, so two servers rarely sync the same
 //! mirror; if they do, the head CAS orders their pushes.

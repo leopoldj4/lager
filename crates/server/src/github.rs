@@ -1,10 +1,12 @@
-//! Read-only mirrors of GitHub repositories
-//! (docs/decisions/0020-github-mirrors.md).
+//! Mirrors of GitHub repositories (docs/decisions/0020-github-mirrors.md).
 //!
 //! A user connects a GitHub account with the OAuth app of `[github]` and
 //! picks repositories to mirror. Each mirror is a repository under the
-//! user's name whose catalog record names its GitHub source: no client,
-//! merge, or pull request changes it. Every server looks for mirrors that
+//! user's name whose catalog record names its GitHub source. GitHub stays
+//! the source: a push here goes to GitHub first ([`push`]), and so does a
+//! change to a pull request ([`changes`]), each as the user's own GitHub
+//! account (docs/decisions/0028-two-way-github-mirrors.md); only the sync
+//! brings GitHub's state here. Every server looks for mirrors that
 //! are due ([`Github::run`]); a sync reads GitHub's refs with `ls-remote`,
 //! fetches the missing objects into the cache, and changes the refs with the
 //! push procedure as a push by the server. Branches and tags follow GitHub
@@ -16,8 +18,10 @@
 //! repository gets a webhook that asks for a sync at once ([`hooks`],
 //! docs/decisions/0027-live-github-mirrors.md).
 
+mod changes;
 mod hooks;
 mod pulls;
+mod push;
 
 pub use hooks::Delivery;
 
@@ -44,6 +48,9 @@ use lager_core::repo::{Access, RepoSettings, validate_repo_name};
 const MIRROR_USER: &str = ":github";
 const API: &str = "https://api.github.com";
 const USER_AGENT: &str = concat!("lager/", env!("CARGO_PKG_VERSION"));
+/// A sync reads GitHub's refs again this often while pushes here move the
+/// refs under it.
+const SYNC_ATTEMPTS: u32 = 3;
 /// Repositories listed for picking: ten pages of 100.
 const MAX_LIST_PAGES: u32 = 10;
 
@@ -173,8 +180,9 @@ impl Github {
         let mut params = vec![
             ("client_id", self.cfg.client_id.as_str()),
             // Private repositories need `repo`; OAuth apps have no
-            // read-only scope for them.
-            ("scope", "repo"),
+            // read-only scope for them. GitHub takes pushes that change
+            // workflow files only with `workflow`.
+            ("scope", "repo workflow"),
             ("state", state),
             ("allow_signup", "false"),
         ];
@@ -506,11 +514,46 @@ impl Github {
             .token
             .as_deref()
             .ok_or("GitHub is not connected; connect it again in Settings")?;
-        let remote = self.ls_remote(token, &due.github).await?;
+        // A push here during the sync moves refs under it: GitHub is read
+        // again, since its answer must not be older than the refs here.
+        let mut attempts = 0;
+        let refs = loop {
+            attempts += 1;
+            match self.sync_refs(due, token).await? {
+                Ok(refs) => break refs,
+                Err(why) if attempts >= SYNC_ATTEMPTS => return Err(why),
+                Err(_) => {}
+            }
+        };
 
+        if let Some(short) = &refs.default_branch {
+            catalog
+                .set_default_branch(&due.name, short, MIRROR_USER)
+                .await
+                .map_err(|e| format!("default branch not changed: {e}"))?;
+        }
+        if due.hook_due {
+            self.add_hook(due, token).await;
+        }
+        self.sync_pulls(due, token)
+            .await
+            .map_err(|e| format!("pull requests not synced: {e}"))?;
+        Ok(Synced::Done(refs.changed))
+    }
+
+    /// Brings the refs here to GitHub's. The inner `Err`: the refs here
+    /// changed meanwhile, with the reason of the refused change.
+    async fn sync_refs(
+        &self,
+        due: &Due,
+        token: &str,
+    ) -> Result<Result<SyncedRefs, String>, String> {
+        // The refs here are read before GitHub's: a push here reaches
+        // GitHub first, so GitHub's answer is never older than them.
         let controller = self.registry.controller(due.repo);
         let (cache, view, local) = controller.prepare_change().await.map_err(repo_error)?;
         drop(view);
+        let remote = self.ls_remote(token, &due.github).await?;
         let format = cache.format;
         let mut wanted = BTreeMap::new();
         for (name, oid) in &remote.refs {
@@ -571,6 +614,7 @@ impl Github {
                 default_branch_changed: None,
                 origin: Origin::Server(Operation::Push),
                 ref_guards: vec![],
+                forward: None,
             };
             let hook_commands = commands
                 .iter()
@@ -581,28 +625,29 @@ impl Github {
                 })
                 .collect();
             if let Some(why) = failure(&controller.push(&op, hook_commands).await) {
-                return Err(why);
+                // A push here that GitHub took in between made the same
+                // change.
+                let (_, _, now) = controller.prepare_change().await.map_err(repo_error)?;
+                if commands
+                    .iter()
+                    .any(|(name, _, new)| now.refs.get(name) != new.as_ref())
+                {
+                    return Ok(Err(why));
+                }
             }
         }
 
         // GitHub's default branch, once it exists here.
-        if let Some(head) = &remote.head
-            && wanted.contains_key(head)
-            && local.head.as_ref() != Some(head)
-            && let Some(short) = head.as_str().strip_prefix("refs/heads/")
-        {
-            catalog
-                .set_default_branch(&due.name, short, MIRROR_USER)
-                .await
-                .map_err(|e| format!("default branch not changed: {e}"))?;
-        }
-        if due.hook_due {
-            self.add_hook(due, token).await;
-        }
-        self.sync_pulls(due, token)
-            .await
-            .map_err(|e| format!("pull requests not synced: {e}"))?;
-        Ok(Synced::Done(commands.len()))
+        let default_branch = remote
+            .head
+            .as_ref()
+            .filter(|head| wanted.contains_key(*head) && local.head.as_ref() != Some(*head))
+            .and_then(|head| head.as_str().strip_prefix("refs/heads/"))
+            .map(str::to_string);
+        Ok(Ok(SyncedRefs {
+            changed: commands.len(),
+            default_branch,
+        }))
     }
 
     /// The push may change the refs while the name still maps to this
@@ -620,6 +665,8 @@ impl Github {
                             repo: id,
                             level: Access::Force,
                             ref_rules: vec![],
+                            // The sync is what brings GitHub's state.
+                            mirror: false,
                         }
                     }
                     _ => PushAccess::none(),
@@ -736,6 +783,14 @@ impl Github {
     }
 }
 
+/// What a sync did to the refs.
+struct SyncedRefs {
+    /// The number of changed refs.
+    changed: usize,
+    /// GitHub's default branch, if it is another one than here.
+    default_branch: Option<String>,
+}
+
 enum Synced {
     /// The number of changed refs.
     Done(usize),
@@ -776,7 +831,11 @@ fn signed_in(who: &Identity) -> Result<&str, GithubError> {
 
 /// A short message for a failed Git command against GitHub.
 fn git_message(e: crate::git::GitError) -> String {
-    let text = e.to_string();
+    remote_message(&e.to_string())
+}
+
+/// A short message for what Git said about GitHub's refusal.
+fn remote_message(text: &str) -> String {
     if text.contains("Authentication failed")
         || text.contains("could not read Username")
         || text.contains("returned error: 401")

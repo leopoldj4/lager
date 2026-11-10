@@ -156,7 +156,12 @@ impl Github {
         }
     }
 
-    fn request(&self, method: reqwest::Method, token: &str, path: &str) -> reqwest::RequestBuilder {
+    pub(super) fn request(
+        &self,
+        method: reqwest::Method,
+        token: &str,
+        path: &str,
+    ) -> reqwest::RequestBuilder {
         self.http
             .request(method, format!("{API}{path}"))
             .bearer_auth(token)

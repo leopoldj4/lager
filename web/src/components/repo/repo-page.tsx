@@ -131,14 +131,14 @@ function RepoName({ name }: { name: string }) {
   )
 }
 
-/** A read-only mirror of a GitHub repository. */
+/** A mirror of a GitHub repository. */
 function MirrorNote({ github }: { github: string }) {
   return (
     <a
       href={`https://github.com/${github}`}
       target="_blank"
       rel="noreferrer"
-      title="Read-only: pushes go to GitHub, and this copy follows"
+      title="Pushes go to GitHub first, and this copy follows"
       className="flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground"
     >
       <GithubMark className="size-3.5" />

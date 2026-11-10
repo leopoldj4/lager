@@ -84,6 +84,10 @@ pub const GITHUB_WATCH_TTL: Duration = Duration::from_secs(90);
 pub const GITHUB_HOOK_RETRY: Duration = Duration::from_secs(24 * 3600);
 /// Largest webhook delivery, GitHub's limit.
 pub const GITHUB_HOOK_MAX_BYTES: usize = 25 * 1024 * 1024;
+/// After a push that went to GitHub, the mirror syncs at once and again
+/// after this long: GitHub follows a push with changes of its own
+/// (docs/decisions/0028-two-way-github-mirrors.md).
+pub const GITHUB_FOLLOW_UP_SYNC: Duration = Duration::from_secs(4);
 /// Mirrors that one server syncs at the same time.
 pub const GITHUB_CONCURRENT_SYNCS: usize = 4;
 /// Time limit for fetching one mirror from GitHub.

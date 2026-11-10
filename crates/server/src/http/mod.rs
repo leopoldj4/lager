@@ -265,6 +265,10 @@ pub(crate) fn repo_error(e: RepoError) -> Response {
 pub(crate) struct Authorized {
     pub repo: RepoSettings,
     pub identity: Identity,
+    /// For a push to a GitHub mirror: GitHub takes it first, with the
+    /// user's own GitHub account
+    /// (docs/decisions/0028-two-way-github-mirrors.md).
+    pub forward: Option<crate::repository::Forward>,
 }
 
 /// Checks identity and repository permission. Unknown repositories and
@@ -315,15 +319,6 @@ pub(crate) async fn authorize_identity(
         });
     };
     let level = s.directory.access(&identity, &repo);
-    if need > Access::Read
-        && level >= Access::Read
-        && let Some(source) = &repo.mirror
-    {
-        return Err(plain(
-            StatusCode::FORBIDDEN,
-            &format!("{name} is a read-only mirror of github.com/{source}; push to GitHub"),
-        ));
-    }
     if level < need {
         return Err(match (&identity, level) {
             (Identity::Anonymous, _) => unauthorized(),
@@ -331,7 +326,45 @@ pub(crate) async fn authorize_identity(
             _ => plain(StatusCode::FORBIDDEN, "permission denied"),
         });
     }
-    Ok(Authorized { repo, identity })
+    let forward = match &repo.mirror {
+        Some(source) if need > Access::Read => {
+            Some(mirror_forward(s, &identity, &repo, source).await?)
+        }
+        _ => None,
+    };
+    Ok(Authorized {
+        repo,
+        identity,
+        forward,
+    })
+}
+
+/// Where a push to a mirror goes first: GitHub, as the user's own GitHub
+/// account, so GitHub checks its permissions.
+async fn mirror_forward(
+    s: &AppInner,
+    identity: &Identity,
+    repo: &RepoSettings,
+    source: &str,
+) -> Result<crate::repository::Forward, Response> {
+    let name = &repo.name;
+    let Some(github) = &s.github else {
+        return Err(plain(
+            StatusCode::FORBIDDEN,
+            &format!("{name} is a read-only mirror of github.com/{source}; push to GitHub"),
+        ));
+    };
+    match github.db.account(identity.name()).await {
+        Ok(Some(account)) => Ok(github.forward(repo.id, source, &account.token)),
+        Ok(None) => Err(plain(
+            StatusCode::FORBIDDEN,
+            &format!(
+                "{name} mirrors github.com/{source}, and pushes go there first; \
+                 connect your GitHub account in Settings"
+            ),
+        )),
+        Err(e) => Err(unavailable("GitHub accounts", &e.to_string())),
+    }
 }
 
 /// Creates a missing repository for a push. Both requests of a push can get
@@ -583,6 +616,7 @@ async fn rpc(
                 ),
                 origin: Origin::Client,
                 ref_guards: vec![],
+                forward: auth.forward.clone(),
             };
             let token = s.registry.register_push(op);
             // Git also stops reading at the receive limit.
@@ -640,6 +674,7 @@ pub(crate) fn push_access(
             Ok(PushAccess {
                 repo: repo.id,
                 level: directory.access(&who, &repo),
+                mirror: repo.mirror.is_some(),
                 ref_rules: repo.ref_rules,
             })
         })
