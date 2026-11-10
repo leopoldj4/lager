@@ -895,6 +895,32 @@ impl PgUsers {
         Ok(())
     }
 
+    /// The users that commits by these author emails link to, as (email in
+    /// lower case, user) pairs: the one user whose GitHub account verified
+    /// the address, or else the only user who has it. An address that
+    /// several users claim and no single GitHub account verified links to
+    /// no one.
+    pub async fn owners(&self, emails: &[String]) -> Result<Vec<(String, String)>, UserError> {
+        if emails.is_empty() {
+            return Ok(Vec::new());
+        }
+        let emails: Vec<String> = emails.iter().map(|e| e.to_lowercase()).collect();
+        sqlx::query_as(
+            "SELECT email,
+                    CASE WHEN count(*) FILTER (WHERE github) = 1
+                         THEN min(user_name) FILTER (WHERE github)
+                         ELSE min(user_name) END
+             FROM lager_user_emails
+             WHERE email = ANY($1)
+             GROUP BY email
+             HAVING count(*) FILTER (WHERE github) = 1 OR count(*) = 1",
+        )
+        .bind(&emails)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(unavailable)
+    }
+
     /// `false`: the user has no such address. Addresses that GitHub
     /// verified follow the GitHub account and stay.
     pub async fn delete_email(&self, user: &str, email: &str) -> Result<bool, UserError> {

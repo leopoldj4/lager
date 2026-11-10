@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
 import { Avatar } from "./avatar"
+import { AuthorName } from "./author-name"
 import { newPullHref, PullIcon, PullRow } from "./pulls"
 import { findReadme, Readme } from "./tree"
 
@@ -153,9 +154,10 @@ function RecentCommits({ repo, rev }: { repo: string; rev: string }) {
               >
                 {c.subject}
               </Link>
-              <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
-                {c.author.name}
-              </span>
+              <AuthorName
+                author={c.author}
+                className="hidden shrink-0 text-xs text-muted-foreground sm:inline"
+              />
               <span
                 className="shrink-0 text-xs text-muted-foreground"
                 title={fullDate(c.committer.time)}

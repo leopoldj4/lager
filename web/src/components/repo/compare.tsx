@@ -25,6 +25,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
 import { Avatar } from "./avatar"
+import { AuthorName } from "./author-name"
 import { ChangedFiles } from "./changes"
 import { MessageEditor } from "./message-editor"
 
@@ -262,7 +263,7 @@ export function CommitRows({
             {c.subject}
           </Link>
           <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
-            {c.author.name}, {ago(c.committer.time)}
+            <AuthorName author={c.author} />, {ago(c.committer.time)}
           </span>
           <Link
             to="/$"

@@ -16,6 +16,8 @@ export interface Person {
   name: string
   email: string
   time: number
+  /** The user whose email this is, on commit authors. */
+  user?: string
 }
 
 export interface Commit {
