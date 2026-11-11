@@ -9,6 +9,11 @@ import { cn } from "@/lib/utils"
 import { Avatar } from "@/components/repo/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { GithubMark } from "@/components/github-mark"
 import { QueryError } from "@/components/query-error"
 import { NotFound } from "@/routes/__root"
@@ -197,21 +202,42 @@ function Graph({ days }: { days: ActivityDay[] }) {
               <div key={w} className="grid grid-rows-7 gap-[3px]">
                 {week.map(({ date, day, future }) => {
                   const total = day ? day.lager + day.github : 0
-                  const parts = day
-                    ? [
-                        day.lager && `${day.lager} on lager`,
-                        day.github && `${day.github} on GitHub`,
-                      ].filter(Boolean)
-                    : []
+                  if (future)
+                    return <div key={date.getTime()} className="size-[11px]" />
                   return (
-                    <div
-                      key={date.getTime()}
-                      className={cn(
-                        "size-[11px] rounded-[2px]",
-                        future ? "invisible" : LEVELS[level(total)]
-                      )}
-                      title={`${parts.length ? parts.join(", ") : "Nothing"} · ${dayName.format(date)}`}
-                    />
+                    <Tooltip key={date.getTime()}>
+                      <TooltipTrigger asChild>
+                        <div
+                          className={cn(
+                            "size-[11px] rounded-[2px] hover:ring-1 hover:ring-foreground/50",
+                            LEVELS[level(total)]
+                          )}
+                        />
+                      </TooltipTrigger>
+                      <TooltipContent
+                        sideOffset={4}
+                        className="flex-col items-start gap-0.5"
+                      >
+                        <span>
+                          <span className="font-medium">
+                            {total === 0
+                              ? "No contributions"
+                              : `${total.toLocaleString()} ${total === 1 ? "contribution" : "contributions"}`}
+                          </span>
+                          <span className="opacity-70">
+                            {" "}
+                            · {dayName.format(date)}
+                          </span>
+                        </span>
+                        {day && day.github > 0 && (
+                          <span className="flex items-center gap-1 font-mono text-[11px] opacity-70">
+                            lager {day.lager.toLocaleString()} ·
+                            <GithubMark className="size-3" />
+                            {day.github.toLocaleString()}
+                          </span>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
                   )
                 })}
               </div>
