@@ -199,7 +199,7 @@ function Tabs({
         ? "pulls"
         : loc.view
   return (
-    <nav className="-mt-2 flex [scrollbar-width:none] gap-1 overflow-x-auto border-b">
+    <nav className="-mt-2 flex [scrollbar-width:none] gap-1 overflow-x-auto overflow-y-hidden border-b">
       {tabs.map((t) => (
         <Link
           key={t.view}
