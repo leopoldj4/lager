@@ -4,16 +4,18 @@
 //! Everything lives under `/-/`, which no repository name can take:
 //! `/-/api/session` signs in and out, `/-/api/passkeys/` signs in and up
 //! with passkeys, `/-/api/tokens` manages access tokens,
-//! `/-/api/ssh-keys` manages SSH keys,
+//! `/-/api/ssh-keys` manages SSH keys, `/-/api/emails` email addresses,
 //! `/-/api/live` is the WebSocket, `/-/api/github/` connects GitHub,
 //! `/-/api/ssh` names the SSH address for clones, and
 //! `/-/assets/` holds the built files. `/<repo>/-/raw/<rev>/<path>` answers
 //! a file's bytes. Every other browser page that is no Git request gets the
 //! application shell, which routes in the browser.
 
+mod emails;
 mod github;
 pub mod live;
 mod passkeys;
+mod profile;
 pub mod pulls;
 pub mod raw;
 pub mod read;
@@ -151,6 +153,7 @@ pub fn router() -> Router<AppState> {
         .merge(github::router())
         .merge(tokens::router())
         .merge(ssh_keys::router())
+        .merge(emails::router())
         .route("/-/api/session", post(sign_in).delete(sign_out))
         .route("/-/api/live", get(live::upgrade))
         .route("/-/api/ssh", get(ssh))

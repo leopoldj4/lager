@@ -16,6 +16,8 @@ export interface Person {
   name: string
   email: string
   time: number
+  /** The user whose email this is, on commit authors. */
+  user?: string
 }
 
 export interface Commit {
@@ -199,6 +201,29 @@ export function useRepos() {
   return useQuery({
     queryKey: ["repos", user],
     queryFn: () => live.request<{ repos: RepoSummary[] }>({ op: "repos" }),
+  })
+}
+
+export interface ActivityDay {
+  /** YYYY-MM-DD. */
+  date: string
+  lager: number
+  github: number
+}
+
+export interface Profile {
+  user: string
+  /** GitHub's counts are included; mirrors count only there. */
+  github: boolean
+  totals: { lager: number; github: number }
+  /** Days with activity in the last year, oldest first. */
+  days: ActivityDay[]
+}
+
+export function useProfile(user: string) {
+  return useQuery({
+    queryKey: ["profile", user],
+    queryFn: () => live.request<Profile>({ op: "profile", user }),
   })
 }
 

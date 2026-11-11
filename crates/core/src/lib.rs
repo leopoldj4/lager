@@ -1,10 +1,11 @@
 //! The parts of lager that the server and the command line share:
 //! configuration, fixed limits, the stored data model, storage, the catalog,
-//! repository settings, identities, pull requests, GitHub mirrors,
+//! repository settings, identities, pull requests, GitHub mirrors, activity,
 //! and the storage-only operations of the administration commands.
 //!
 //! See IMPLEMENTATION_PLAN.md for the stages.
 
+pub mod activity;
 pub mod admin;
 pub mod backup;
 pub mod cas;

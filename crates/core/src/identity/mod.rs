@@ -258,6 +258,27 @@ pub fn validate_ssh_key_name(name: &str) -> Result<(), UserError> {
     Ok(())
 }
 
+/// A user's email address, which counts commits with that author email as
+/// theirs (docs/decisions/0029-activity-graph.md). Answers it in lower
+/// case, as it is stored and compared.
+pub fn normalize_email(email: &str) -> Result<String, UserError> {
+    let email = email.trim().to_lowercase();
+    let ok = email.len() <= 254
+        && email
+            .split_once('@')
+            .is_some_and(|(local, domain)| !local.is_empty() && !domain.is_empty())
+        && !email
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "<>".contains(c));
+    if ok {
+        Ok(email)
+    } else {
+        Err(UserError::Invalid(format!(
+            "invalid email address {email:?}"
+        )))
+    }
+}
+
 fn level(access: &BTreeMap<String, Access>, repo: &str) -> Access {
     access
         .get(repo)

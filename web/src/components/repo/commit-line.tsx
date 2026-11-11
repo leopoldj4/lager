@@ -4,6 +4,7 @@ import type { Commit } from "@/lib/api"
 import { ago, fullDate, short } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { Avatar } from "./avatar"
+import { AuthorName } from "./author-name"
 
 /** The last commit above a directory or file. */
 export function CommitLine({
@@ -17,7 +18,10 @@ export function CommitLine({
   return (
     <div className="flex items-center gap-3 rounded-t-lg border-b bg-muted/40 px-4 py-2.5 text-sm">
       <Avatar name={commit.author.name} />
-      <span className="hidden font-medium sm:inline">{commit.author.name}</span>
+      <AuthorName
+        author={commit.author}
+        className="hidden font-medium sm:inline"
+      />
       <Link
         to="/$"
         params={{ _splat: href(repo, "commit", commit.oid) }}

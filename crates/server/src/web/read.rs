@@ -38,6 +38,10 @@ const OBJECT_CACHE_BYTES: usize = 4 * 1024 * 1024;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
     Repos,
+    /// A user's activity of the last year; anyone may read it.
+    Profile {
+        user: String,
+    },
     /// Creates an empty repository; needs a session.
     RepoCreate {
         name: String,
@@ -235,8 +239,58 @@ pub async fn readable(s: &AppInner, who: &Identity, name: &str) -> Result<RepoSe
 }
 
 pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadError> {
+    let mut out = answer(s, who, q).await?;
+    link_authors(s, &mut out).await;
+    Ok(out)
+}
+
+/// Adds `user` to the authors of the commits in an answer whose email
+/// belongs to a user, so their names link to the profile. The lookup sees
+/// only the emails of commits that the reader may read already.
+async fn link_authors(s: &AppInner, out: &mut Value) {
+    let mut authors: Vec<&mut Value> = Vec::new();
+    for (key, v) in out.as_object_mut().into_iter().flatten() {
+        match (key.as_str(), v) {
+            ("commit" | "last_commit", c) => authors.extend(c.get_mut("author")),
+            ("commits", Value::Array(cs)) => {
+                authors.extend(cs.iter_mut().filter_map(|c| c.get_mut("author")))
+            }
+            _ => {}
+        }
+    }
+    let mut emails: Vec<String> = authors
+        .iter()
+        .filter_map(|a| a["email"].as_str())
+        .map(str::to_lowercase)
+        .collect();
+    emails.sort();
+    emails.dedup();
+    if emails.is_empty() {
+        return;
+    }
+    let owners: std::collections::HashMap<String, String> =
+        match s.directory.users().owners(&emails).await {
+            Ok(o) => o.into_iter().collect(),
+            Err(e) => {
+                // The names stay plain text.
+                tracing::warn!(error = ?e, "user store unavailable");
+                return;
+            }
+        };
+    for a in authors {
+        let user = a["email"]
+            .as_str()
+            .and_then(|e| owners.get(&e.to_lowercase()));
+        if let Some(user) = user {
+            a["user"] = json!(user);
+        }
+    }
+}
+
+async fn answer(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadError> {
     let name = match &q {
         Query::Repos => return repos(s, who).await,
+        Query::Profile { user } => return super::profile::profile(s, user).await,
         Query::Github
         | Query::GithubRepos
         | Query::GithubMirror { .. }
@@ -278,6 +332,7 @@ pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadEr
     let g = Git { s, view: &view };
     let mut out = match q {
         Query::Repos
+        | Query::Profile { .. }
         | Query::Github
         | Query::GithubRepos
         | Query::GithubMirror { .. }

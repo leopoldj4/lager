@@ -18,6 +18,7 @@ use std::time::Duration;
 use serde::Serialize;
 use sqlx::postgres::PgPool;
 
+use crate::activity::Day;
 use crate::model::RepoId;
 
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +34,9 @@ fn unavailable(e: sqlx::Error) -> GithubDbError {
 #[derive(Clone, Debug, Serialize)]
 pub struct Account {
     pub login: String,
+    /// GitHub's user ID.
+    #[serde(skip)]
+    pub id: i64,
     #[serde(skip)]
     pub token: String,
 }
@@ -96,13 +100,14 @@ impl GithubDb {
     }
 
     pub async fn account(&self, user: &str) -> Result<Option<Account>, GithubDbError> {
-        let row: Option<(String, String)> =
-            sqlx::query_as("SELECT login, token FROM lager_github_accounts WHERE user_name = $1")
-                .bind(user)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(unavailable)?;
-        Ok(row.map(|(login, token)| Account { login, token }))
+        let row: Option<(String, i64, String)> = sqlx::query_as(
+            "SELECT login, github_id, token FROM lager_github_accounts WHERE user_name = $1",
+        )
+        .bind(user)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(row.map(|(login, id, token)| Account { login, id, token }))
     }
 
     /// Connects a GitHub account, replacing an earlier one. Mirrors that
@@ -118,7 +123,8 @@ impl GithubDb {
             "INSERT INTO lager_github_accounts (user_name, github_id, login, token)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (user_name) DO UPDATE
-             SET github_id = $2, login = $3, token = $4, created_at = now()",
+             SET github_id = $2, login = $3, token = $4, created_at = now(),
+                 contributions_at = NULL",
         )
         .bind(user)
         .bind(github_id)
@@ -127,6 +133,12 @@ impl GithubDb {
         .execute(&self.pool)
         .await
         .map_err(unavailable)?;
+        // Counts of an earlier account.
+        sqlx::query("DELETE FROM lager_github_contributions WHERE user_name = $1")
+            .bind(user)
+            .execute(&self.pool)
+            .await
+            .map_err(unavailable)?;
         sqlx::query(
             "UPDATE lager_github_mirrors SET next_sync_at = now()
              WHERE user_name = $1 AND error IS NOT NULL",
@@ -138,13 +150,125 @@ impl GithubDb {
         Ok(())
     }
 
-    /// Forgets the account. Its mirrors stay and stop syncing.
+    /// The daily counts of the user's GitHub account, oldest first, if the
+    /// user is connected, and how long ago they were fetched; `None` for
+    /// counts never fetched (docs/decisions/0029-activity-graph.md).
+    pub async fn contributions(
+        &self,
+        user: &str,
+    ) -> Result<Option<(Option<Duration>, Vec<Day>)>, GithubDbError> {
+        let age: Option<Option<f64>> = sqlx::query_scalar(
+            "SELECT extract(epoch FROM now() - contributions_at)::float8
+             FROM lager_github_accounts WHERE user_name = $1",
+        )
+        .bind(user)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        let Some(age) = age else {
+            return Ok(None);
+        };
+        let rows: Vec<(String, i32)> = sqlx::query_as(
+            "SELECT day::text, count FROM lager_github_contributions
+             WHERE user_name = $1 AND day >= current_date - $2::int AND count > 0
+             ORDER BY day",
+        )
+        .bind(user)
+        .bind(crate::activity::DAYS as i32)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        let days = rows
+            .into_iter()
+            .map(|(date, count)| Day {
+                date,
+                count: count.max(0) as u32,
+            })
+            .collect();
+        Ok(Some((
+            age.map(|s| Duration::from_secs_f64(s.max(0.0))),
+            days,
+        )))
+    }
+
+    /// Replaces the daily counts of the user's GitHub account.
+    pub async fn set_contributions(&self, user: &str, days: &[Day]) -> Result<(), GithubDbError> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let updated = sqlx::query(
+            "UPDATE lager_github_accounts SET contributions_at = now() WHERE user_name = $1",
+        )
+        .bind(user)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        if updated.rows_affected() == 0 {
+            // Disconnected meanwhile.
+            return Ok(());
+        }
+        sqlx::query("DELETE FROM lager_github_contributions WHERE user_name = $1")
+            .bind(user)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        let dates: Vec<&str> = days.iter().map(|d| d.date.as_str()).collect();
+        let counts: Vec<i32> = days.iter().map(|d| d.count as i32).collect();
+        sqlx::query(
+            "INSERT INTO lager_github_contributions (user_name, day, count)
+             SELECT $1, d::date, c FROM unnest($2::text[], $3::int[]) AS t(d, c)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(user)
+        .bind(&dates)
+        .bind(&counts)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Forgets the account and the email addresses it verified. Its
+    /// mirrors stay and stop syncing.
     pub async fn disconnect(&self, user: &str) -> Result<(), GithubDbError> {
         sqlx::query("DELETE FROM lager_github_accounts WHERE user_name = $1")
             .bind(user)
             .execute(&self.pool)
             .await
             .map_err(unavailable)?;
+        sqlx::query("DELETE FROM lager_user_emails WHERE user_name = $1 AND github")
+            .bind(user)
+            .execute(&self.pool)
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Replaces the user's email addresses that GitHub verified, in lower
+    /// case (docs/decisions/0029-activity-graph.md). An address the user
+    /// added by hand becomes GitHub's; one GitHub no longer lists goes.
+    pub async fn set_emails(&self, user: &str, emails: &[String]) -> Result<(), GithubDbError> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        sqlx::query(
+            "DELETE FROM lager_user_emails
+             WHERE user_name = $1 AND github AND NOT email = ANY($2)",
+        )
+        .bind(user)
+        .bind(emails)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        sqlx::query(
+            "INSERT INTO lager_user_emails (user_name, email, github)
+             SELECT $1, e, true FROM unnest($2::text[]) AS e
+             WHERE EXISTS (SELECT 1 FROM lager_users WHERE name = $1)
+             ON CONFLICT (user_name, email) DO UPDATE SET github = true",
+        )
+        .bind(user)
+        .bind(emails)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
         Ok(())
     }
 

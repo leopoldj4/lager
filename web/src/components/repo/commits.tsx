@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
 import { Avatar } from "./avatar"
+import { AuthorName } from "./author-name"
 import { PathCrumbs } from "./path-crumbs"
 import { RevPicker } from "./rev-picker"
 
@@ -72,7 +73,7 @@ export function CommitList({
                         {c.subject}
                       </Link>
                       <p className="text-xs text-muted-foreground">
-                        {c.author.name} committed{" "}
+                        <AuthorName author={c.author} /> committed{" "}
                         <span title={fullDate(c.committer.time)}>
                           {ago(c.committer.time)}
                         </span>

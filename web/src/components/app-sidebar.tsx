@@ -7,6 +7,7 @@ import {
   House,
   LogIn,
   LogOut,
+  User,
   SearchIcon,
   Settings,
 } from "lucide-react"
@@ -294,6 +295,12 @@ function UserMenu() {
           <DropdownMenuContent side="top" align="start" className="w-56">
             <DropdownMenuLabel>Signed in as {state.user}</DropdownMenuLabel>
             <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link to="/$" params={{ _splat: state.user }} onClick={close}>
+                <User />
+                Profile
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={async () => {
                 close()

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/query-error"
 import { Avatar } from "./avatar"
+import { AuthorName } from "./author-name"
 import { ChangedFiles } from "./changes"
 import { CopyButton } from "./clone"
 
@@ -31,7 +32,7 @@ export function CommitView({ repo, rev }: { repo: string; rev: string }) {
         <div className="flex flex-wrap items-center gap-3 border-t bg-muted/40 px-4 py-2.5 text-sm">
           <Avatar name={commit.author.name} />
           <span>
-            <span className="font-medium">{commit.author.name}</span>{" "}
+            <AuthorName author={commit.author} className="font-medium" />{" "}
             <span className="text-muted-foreground">
               authored {fullDate(commit.author.time)}
             </span>
