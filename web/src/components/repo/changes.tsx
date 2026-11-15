@@ -3,7 +3,7 @@ import { FileDiff as PatchFileDiff } from "@pierre/diffs/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
-import { fetchBlob } from "@/lib/api"
+import { fetchBlob } from "@/lib/repos"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { codeOptions, codeStyle, parseDiff, type DiffFile } from "./diff"
 import { DiffTree } from "./diff-tree"

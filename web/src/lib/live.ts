@@ -6,6 +6,8 @@
 // again, and every watched repository is watched again; a reconnect can
 // miss events, so watchers hear `onResync`.
 
+import type { Ops } from "./wire"
+
 const VERSION = 1
 // The server sends a heartbeat every 25 seconds.
 const SILENCE_MS = 60_000
@@ -32,6 +34,16 @@ export class LiveError extends Error {
     super(message)
   }
 }
+
+/** A request: the name of an operation and its fields. */
+export type Request<K extends keyof Ops = keyof Ops> = {
+  [P in K]: { op: P } & Ops[P]["args"]
+}[K]
+
+/** A request about a repository that the caller names elsewhere. */
+export type Change<K extends keyof Ops> = {
+  [P in K]: { op: P } & Omit<Ops[P]["args"], "repo">
+}[K]
 
 export interface Watcher {
   /** A newer generation exists than the one the page shows. */
@@ -226,11 +238,11 @@ export class Live {
     return this.generations.get(repo)
   }
 
-  request<T>(query: { op: string; [k: string]: unknown }): Promise<T> {
+  request<K extends keyof Ops>(query: Request<K>): Promise<Ops[K]["answer"]> {
     this.start()
     const id = this.nextId++
     const msg = { type: "req", ...query }
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<Ops[K]["answer"]>((resolve, reject) => {
       this.pending.set(id, {
         msg,
         resolve: resolve as (v: unknown) => void,
@@ -238,9 +250,10 @@ export class Live {
       })
       this.flush()
     }).then((data) => {
-      const d = data as { generation?: number }
-      if (typeof query.repo === "string" && typeof d.generation === "number")
-        this.seen(query.repo, d.generation)
+      const { repo } = query as { repo?: string }
+      const { generation } = data as { generation?: number }
+      if (repo !== undefined && generation !== undefined)
+        this.seen(repo, generation)
       return data
     })
   }

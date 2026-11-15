@@ -1,7 +1,7 @@
 import { useNavigate } from "@tanstack/react-router"
 import { GitBranch, Tag } from "lucide-react"
 
-import type { Refs } from "@/lib/api"
+import type { Refs } from "@/lib/wire"
 import { href, type View } from "@/lib/paths"
 import { short } from "@/lib/format"
 import {

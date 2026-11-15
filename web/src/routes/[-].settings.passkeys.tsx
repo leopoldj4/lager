@@ -3,7 +3,7 @@ import { useEffect, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { KeyRound } from "lucide-react"
 
-import { useLive } from "@/lib/api"
+import { useLive } from "@/lib/query"
 import {
   addPasskey,
   listPasskeys,

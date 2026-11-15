@@ -1,7 +1,9 @@
 import { Link } from "@tanstack/react-router"
 import { Plus } from "lucide-react"
 
-import { useLive, useRefs, useWatch, type Refs } from "@/lib/api"
+import { useLive } from "@/lib/query"
+import { useRefs, useWatch } from "@/lib/repos"
+import type { Refs } from "@/lib/wire"
 import { short } from "@/lib/format"
 import { href, splitRev, type Location } from "@/lib/paths"
 import { Button } from "@/components/ui/button"

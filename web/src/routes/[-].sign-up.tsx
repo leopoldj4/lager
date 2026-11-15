@@ -2,7 +2,11 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 
-import { githubSignInHref, signUpOptions, signUpWithPassword } from "@/lib/api"
+import {
+  githubSignInHref,
+  signUpOptions,
+  signUpWithPassword,
+} from "@/lib/session"
 import {
   passkeyError,
   signUpWithPasskey,

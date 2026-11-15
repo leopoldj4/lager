@@ -10,24 +10,66 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-use super::read::ReadError;
+use super::ops::{Op, OpError};
 use crate::http::AppInner;
 use crate::repository::RepoError;
+use lager_core::identity::Identity;
 use lager_core::model::RepoState;
 use lager_core::repo::Access;
 
-pub async fn profile(s: &AppInner, user: &str) -> Result<Value, ReadError> {
+/// A day with activity.
+#[derive(Serialize, TS)]
+pub struct ActivityDay {
+    /// `YYYY-MM-DD`.
+    date: String,
+    lager: u32,
+    github: u32,
+}
+
+#[derive(Default, Serialize, TS)]
+pub struct ActivityTotals {
+    lager: u32,
+    github: u32,
+}
+
+#[derive(Serialize, TS)]
+pub struct Profile {
+    user: String,
+    /// GitHub's counts are included; mirrors count only there.
+    github: bool,
+    totals: ActivityTotals,
+    /// Days with activity in the last year, oldest first.
+    days: Vec<ActivityDay>,
+}
+
+/// A user's activity of the last year; anyone may read it.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileOp {
+    user: String,
+}
+
+impl Op for ProfileOp {
+    type Answer = Profile;
+
+    async fn run(self, s: &AppInner, _: &Identity) -> Result<Profile, OpError> {
+        profile(s, &self.user).await
+    }
+}
+
+async fn profile(s: &AppInner, user: &str) -> Result<Profile, OpError> {
     if lager_core::identity::validate_user_name(user).is_err() {
-        return Err(ReadError::not_found("user"));
+        return Err(OpError::not_found("user"));
     }
     let owner = match s.directory.lookup(user).await {
         Ok(Some(u)) => u.identity,
-        Ok(None) => return Err(ReadError::not_found("user")),
+        Ok(None) => return Err(OpError::not_found("user")),
         Err(e) => {
             tracing::warn!(error = ?e, "user store unavailable");
-            return Err(ReadError::new(
+            return Err(OpError::new(
                 "unavailable",
                 "users unavailable; retry later",
             ));
@@ -45,7 +87,7 @@ pub async fn profile(s: &AppInner, user: &str) -> Result<Value, ReadError> {
         .catalog()
         .list()
         .await
-        .map_err(|e| ReadError::from(RepoError::from(e)))?
+        .map_err(|e| OpError::from(RepoError::from(e)))?
         .into_iter()
         .filter(|r| r.state == RepoState::Active)
         .map(|r| r.settings())
@@ -55,24 +97,31 @@ pub async fn profile(s: &AppInner, user: &str) -> Result<Value, ReadError> {
         .collect();
     let here = s.activity.db.days(user, &repos).await.map_err(|e| {
         tracing::warn!(error = %e, "activity unavailable");
-        ReadError::new("unavailable", "activity unavailable; retry later")
+        OpError::new("unavailable", "activity unavailable; retry later")
     })?;
 
-    let mut days: BTreeMap<String, (u32, u32)> = BTreeMap::new();
+    let mut days: BTreeMap<&str, ActivityTotals> = BTreeMap::new();
     for d in &here {
-        days.entry(d.date.clone()).or_default().0 += d.count;
+        days.entry(&d.date).or_default().lager += d.count;
     }
     for d in github.iter().flatten() {
-        days.entry(d.date.clone()).or_default().1 += d.count;
+        days.entry(&d.date).or_default().github += d.count;
     }
-    let total = |f: fn(&(u32, u32)) -> u32| days.values().map(f).sum::<u32>();
-    Ok(json!({
-        "user": user,
-        "github": github.is_some(),
-        "totals": { "lager": total(|d| d.0), "github": total(|d| d.1) },
-        "days": days
-            .iter()
-            .map(|(date, (lager, github))| json!({ "date": date, "lager": lager, "github": github }))
-            .collect::<Vec<_>>(),
-    }))
+    let days: Vec<ActivityDay> = days
+        .into_iter()
+        .map(|(date, ActivityTotals { lager, github })| ActivityDay {
+            date: date.to_string(),
+            lager,
+            github,
+        })
+        .collect();
+    Ok(Profile {
+        user: user.to_string(),
+        github: github.is_some(),
+        totals: ActivityTotals {
+            lager: days.iter().map(|d| d.lager).sum(),
+            github: days.iter().map(|d| d.github).sum(),
+        },
+        days,
+    })
 }

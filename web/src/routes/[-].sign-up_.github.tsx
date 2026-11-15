@@ -6,7 +6,7 @@ import {
   githubSignInHref,
   githubSignUpLogin,
   signUpWithGithub,
-} from "@/lib/api"
+} from "@/lib/session"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {

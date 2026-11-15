@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router"
 import { File, FileSymlink, Folder, FolderGit2 } from "lucide-react"
 
-import { useBlob, useTree, type TreeEntry } from "@/lib/api"
+import { useBlob, useTree } from "@/lib/repos"
+import type { TreeEntry } from "@/lib/wire"
 import { bytes } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { Skeleton } from "@/components/ui/skeleton"

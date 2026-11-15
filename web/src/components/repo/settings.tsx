@@ -2,7 +2,8 @@ import { useNavigate } from "@tanstack/react-router"
 import { BookLock, BookOpen } from "lucide-react"
 import { useState, type FormEvent, type ReactNode } from "react"
 
-import { useRepoSettingsChange, type Refs } from "@/lib/api"
+import { useRepoSettingsChange } from "@/lib/repos"
+import type { Refs } from "@/lib/wire"
 import { href } from "@/lib/paths"
 import { cn } from "@/lib/utils"
 import { QueryError } from "@/components/query-error"
@@ -72,14 +73,14 @@ function Rename({ repo, owner }: { repo: string; owner: string }) {
     event.preventDefault()
     if (!trimmed || unchanged || change.isPending) return
     try {
-      const { repo: renamed } = await change.mutateAsync({
+      const changed = await change.mutateAsync({
         op: "repo_rename",
         name: `${owner}/${trimmed}`,
       })
-      if (renamed)
+      if ("repo" in changed)
         navigate({
           to: "/$",
-          params: { _splat: href(renamed.name, "settings") },
+          params: { _splat: href(changed.repo.name, "settings") },
           replace: true,
         })
     } catch {

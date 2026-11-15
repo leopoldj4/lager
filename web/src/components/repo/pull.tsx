@@ -13,17 +13,10 @@ import {
 } from "lucide-react"
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 
-import {
-  requestId,
-  useCompare,
-  useLive,
-  usePull,
-  usePullChange,
-  type Commit,
-  type Pull,
-  type PullDetail,
-  type PullEvent,
-} from "@/lib/api"
+import { requestId, useCompare, usePull, usePullChange } from "@/lib/pulls"
+import type { Pull, PullDetail, PullEvent } from "@/lib/wire"
+import { useLive } from "@/lib/query"
+import type { Commit } from "@/lib/wire"
 import { ago, fullDate, short, since } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { cn } from "@/lib/utils"

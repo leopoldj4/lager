@@ -2,15 +2,11 @@ import { Link } from "@tanstack/react-router"
 import { Clock, GitBranch, GitPullRequestCreate } from "lucide-react"
 import { useEffect } from "react"
 
-import {
-  useLive,
-  useLog,
-  usePulls,
-  useTree,
-  type Commit,
-  type Pull,
-  type Refs,
-} from "@/lib/api"
+import { usePulls } from "@/lib/pulls"
+import type { Pull } from "@/lib/wire"
+import { useLive } from "@/lib/query"
+import { useLog, useTree } from "@/lib/repos"
+import type { Commit, Refs } from "@/lib/wire"
 import { fullDate, short, since } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { cn } from "@/lib/utils"

@@ -321,6 +321,17 @@ bun run build      # dist/client, what the server serves
 bun run typecheck
 ```
 
+The operations that pages send over the live connection are typed on the
+server (`crates/server/src/web/ops.rs`); `web/src/lib/wire.ts` holds their
+TypeScript types and is written from them
+([decision 35](docs/decisions/0035-generated-wire-types.md)). After a change
+to an operation or to a type in an answer:
+
+```bash
+scripts/wire.ts            # write web/src/lib/wire.ts
+scripts/wire.ts --check    # fail if it is out of date
+```
+
 The Cargo workspace has three crates:
 
 | Crate | Contents |

@@ -5,7 +5,7 @@ import {
   useLocation,
 } from "@tanstack/react-router"
 
-import { useLive } from "@/lib/api"
+import { useLive } from "@/lib/query"
 import { cn } from "@/lib/utils"
 import { Crumbs, PageBody, PageHeader, PageTitle } from "@/components/frame"
 

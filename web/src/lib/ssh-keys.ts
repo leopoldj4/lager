@@ -1,3 +1,5 @@
+import { rest } from "./rest"
+
 export interface SshKeyInfo {
   id: number
   name: string
@@ -7,32 +9,17 @@ export interface SshKeyInfo {
   last_used_ms: number | null
 }
 
-async function request(path: string, init?: RequestInit) {
-  const response = await fetch(`/-/api/ssh-keys${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...init?.headers },
-  })
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    throw new Error(
-      error.message ?? `SSH key request failed (${response.status})`
-    )
-  }
-  if (response.status === 204) return
-  return response.json()
-}
-
 export function listSshKeys(): Promise<{ keys: SshKeyInfo[] }> {
-  return request("")
+  return rest("/ssh-keys", "SSH key request")
 }
 
 export function addSshKey(key: {
   key: string
   name?: string
 }): Promise<{ key: SshKeyInfo }> {
-  return request("", { method: "POST", body: JSON.stringify(key) })
+  return rest("/ssh-keys", "SSH key request", "POST", key)
 }
 
 export function removeSshKey(id: number) {
-  return request(`/${id}`, { method: "DELETE" })
+  return rest(`/ssh-keys/${id}`, "SSH key request", "DELETE")
 }

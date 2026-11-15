@@ -1,6 +1,6 @@
 //! Personal access tokens of the signed-in user
 //! (docs/decisions/0009-personal-access-tokens.md).
-use super::{Web, json_error};
+use super::{Web, json_error, user_error};
 use crate::http::AppState;
 use axum::{
     Json, Router,
@@ -9,9 +9,12 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get},
 };
-use lager_core::identity::{Identity, NewToken, Token, TokenId, UserError, validate_token};
+use lager_core::identity::{Identity, NewToken, Token, TokenId, validate_token};
 use lager_core::repo::Access;
 use std::collections::BTreeMap;
+
+/// What the requests manage, for error messages.
+const WHAT: &str = "access tokens";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -58,31 +61,6 @@ pub(super) async fn signed_in<'a>(
     }
 }
 
-fn failure(error: UserError) -> Response {
-    match error {
-        UserError::Invalid(m) => json_error(StatusCode::BAD_REQUEST, "bad_request", &m),
-        UserError::TokenNotFound(_) => {
-            json_error(StatusCode::NOT_FOUND, "not_found", "token not found")
-        }
-        e @ UserError::SshKeyNotFound(_) => {
-            json_error(StatusCode::NOT_FOUND, "not_found", &e.to_string())
-        }
-        UserError::NotFound(_) | UserError::Exists(_) => json_error(
-            StatusCode::FORBIDDEN,
-            "unsupported",
-            "access tokens need a user in the database",
-        ),
-        UserError::Unavailable(m) => {
-            tracing::warn!(error = %m, "token request unavailable");
-            json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "unavailable",
-                "access tokens unavailable; retry later",
-            )
-        }
-    }
-}
-
 fn token_json(t: &Token) -> serde_json::Value {
     serde_json::json!({
         "id": t.id,
@@ -96,7 +74,12 @@ fn token_json(t: &Token) -> serde_json::Value {
 
 async fn list(State(s): State<AppState>, headers: HeaderMap) -> Result<Response, Response> {
     let (_, name) = user(&s, &headers, false).await?;
-    let tokens = s.directory.users().tokens(&name).await.map_err(failure)?;
+    let tokens = s
+        .directory
+        .users()
+        .tokens(&name)
+        .await
+        .map_err(user_error(WHAT))?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
@@ -124,13 +107,13 @@ async fn create(
         access: body.access,
         expires_days: body.expires_days,
     };
-    validate_token(&new).map_err(failure)?;
+    validate_token(&new).map_err(user_error(WHAT))?;
     let (token, secret) = s
         .directory
         .users()
         .create_token(&name, new)
         .await
-        .map_err(failure)?;
+        .map_err(user_error(WHAT))?;
     tracing::info!(user = %name, token = token.id, "created an access token on the web");
     Ok((
         StatusCode::CREATED,
@@ -150,7 +133,7 @@ async fn remove(
         .users()
         .delete_token(&name, id)
         .await
-        .map_err(failure)?;
+        .map_err(user_error(WHAT))?;
     tracing::info!(user = %name, token = id, "deleted an access token on the web");
     Ok(StatusCode::NO_CONTENT.into_response())
 }

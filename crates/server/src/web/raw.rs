@@ -10,7 +10,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use percent_encoding::percent_decode_str;
 
-use super::read::{self, ReadError};
+use super::ops::OpError;
+use super::read;
 use crate::http::AppState;
 
 const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -90,7 +91,7 @@ fn content_type(path: &str, data: &[u8]) -> &'static str {
     }
 }
 
-fn read_error(e: ReadError) -> Response {
+fn read_error(e: OpError) -> Response {
     let status = match e.code {
         "not_found" | "not_a_file" => StatusCode::NOT_FOUND,
         "bad_request" => StatusCode::BAD_REQUEST,

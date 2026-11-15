@@ -33,6 +33,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+ts-rs.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 webauthn-rs.workspace = true

@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router"
 import { GitBranch } from "lucide-react"
 
-import type { Refs } from "@/lib/api"
+import type { Refs } from "@/lib/wire"
 import { fullDate, short, since } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { EmptyRow, PageTitle, SectionHead, rowList } from "@/components/frame"

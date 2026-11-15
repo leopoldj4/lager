@@ -11,13 +11,11 @@ import {
   User,
 } from "lucide-react"
 
-import {
-  signOut,
-  useLive,
-  usePullCounts,
-  useRepos,
-  type RepoSummary,
-} from "@/lib/api"
+import { usePullCounts } from "@/lib/pulls"
+import { useLive } from "@/lib/query"
+import { useRepos } from "@/lib/repos"
+import type { RepoSummary } from "@/lib/wire"
+import { signOut } from "@/lib/session"
 import { href, type Location, type View } from "@/lib/paths"
 import { cn } from "@/lib/utils"
 import {

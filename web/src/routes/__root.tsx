@@ -11,7 +11,7 @@ import { useEffect, useState, useSyncExternalStore } from "react"
 
 import appCss from "../styles.css?url"
 import logo from "../assets/lager.svg?url"
-import { queryClient, useLive } from "@/lib/api"
+import { queryClient, useLive } from "@/lib/query"
 import { live } from "@/lib/live"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"

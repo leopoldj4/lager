@@ -14,7 +14,7 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Semaphore, broadcast, mpsc};
 
-use super::read::{self, ReadError};
+use super::ops::{self, OpError};
 use super::{Web, session};
 use crate::bus::Event;
 use crate::http::AppState;
@@ -56,8 +56,10 @@ enum ClientMsg {
     },
     Req {
         id: u64,
+        op: String,
+        /// The operation's own fields.
         #[serde(flatten)]
-        query: read::Query,
+        args: serde_json::Map<String, serde_json::Value>,
     },
 }
 
@@ -324,7 +326,7 @@ impl Connection {
                 self.subs.retain(|_, s| s.name != repo);
                 self.send(ServerMsg::Unsubbed { id, repo }).await;
             }
-            ClientMsg::Req { id, query } => {
+            ClientMsg::Req { id, op, args } => {
                 self.s.registry.svc.metrics.inc("live_requests");
                 let Ok(permit) = self.requests.clone().try_acquire_owned() else {
                     self.send(ServerMsg::Error {
@@ -338,7 +340,7 @@ impl Connection {
                 };
                 let (s, who, out) = (self.s.clone(), self.identity.clone(), self.out.clone());
                 tokio::spawn(async move {
-                    let msg = match read::run(&s, &who, query).await {
+                    let msg = match ops::run(&s, &who, &op, args.into()).await {
                         Ok(data) => ServerMsg::Res { id, data },
                         Err(e) => ServerMsg::Error {
                             id: Some(id),
@@ -364,7 +366,7 @@ impl Connection {
             code,
             message,
         };
-        let repo = match read::readable(&self.s, &self.identity, &name).await {
+        let repo = match ops::readable(&self.s, &self.identity, &name).await {
             Ok(r) => r,
             Err(e) => return self.send(error(e.code, e.message)).await,
         };
@@ -380,8 +382,8 @@ impl Connection {
                     .await;
             }
             Err(e) => {
-                let ReadError { code, message } =
-                    ReadError::from(crate::repository::RepoError::from(e));
+                let OpError { code, message } =
+                    OpError::from(crate::repository::RepoError::from(e));
                 return self.send(error(code, message)).await;
             }
         };

@@ -2,14 +2,9 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft, GitBranch } from "lucide-react"
 import { useState } from "react"
 
-import {
-  requestId,
-  useCompare,
-  useLive,
-  usePullChange,
-  type Commit,
-  type Refs,
-} from "@/lib/api"
+import { requestId, useCompare, usePullChange } from "@/lib/pulls"
+import { useLive } from "@/lib/query"
+import type { Commit, Refs } from "@/lib/wire"
 import { ago, short } from "@/lib/format"
 import { href, splitCompare } from "@/lib/paths"
 import { Alert, AlertDescription } from "@/components/ui/alert"

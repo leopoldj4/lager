@@ -24,14 +24,11 @@ import {
   X,
 } from "lucide-react"
 
-import {
-  signOut,
-  useLive,
-  usePulls,
-  useRefs,
-  useRepos,
-  type Refs,
-} from "@/lib/api"
+import { usePulls } from "@/lib/pulls"
+import { useLive } from "@/lib/query"
+import { useRefs, useRepos } from "@/lib/repos"
+import type { Refs } from "@/lib/wire"
+import { signOut } from "@/lib/session"
 import { href, parse, type View } from "@/lib/paths"
 import { cn } from "@/lib/utils"
 import {

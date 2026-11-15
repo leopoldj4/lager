@@ -23,13 +23,16 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use ts_rs::TS;
 
+use super::ops::{Empty, Op, OpError};
 use super::passkeys::{owns_repositories, refused, signed_in as session_response, taken};
-use super::read::{Query, ReadError};
 use super::{Web, json_error};
-use crate::github::{Delivery, Github, GithubError};
+use crate::github::{Delivery, Github, GithubError, GithubRepo, GithubStatus};
 use crate::http::{AppInner, AppState};
+use lager_core::github::Mirror;
 use lager_core::identity::passkeys::PasskeyError;
 use lager_core::identity::{Identity, validate_user_name};
 use lager_core::limits;
@@ -458,7 +461,7 @@ async fn sign_up(State(s): State<AppState>, headers: HeaderMap, body: Json<SignU
     }
 }
 
-impl From<GithubError> for ReadError {
+impl From<GithubError> for OpError {
     fn from(e: GithubError) -> Self {
         match e {
             GithubError::SignedOut => Self::new("unauthorized", "sign in first"),
@@ -478,54 +481,139 @@ impl From<GithubError> for ReadError {
     }
 }
 
-/// The GitHub queries of the settings page.
-pub async fn run(s: &AppInner, who: &Identity, q: Query) -> Result<Value, ReadError> {
-    let Some(github) = &s.github else {
-        return match q {
-            Query::Github => Ok(json!({
-                "configured": false,
-                "account": null,
-                "sign_in": null,
-                "mirrors": [],
-            })),
-            _ => Err(ReadError::new(
-                "not_configured",
-                "GitHub is not configured on this server",
-            )),
+// The GitHub queries and changes of the settings page
+// (docs/decisions/0020-github-mirrors.md). They need a session.
+
+fn configured(s: &AppInner) -> Result<&Github, OpError> {
+    s.github
+        .as_deref()
+        .ok_or_else(|| OpError::new("not_configured", "GitHub is not configured on this server"))
+}
+
+#[derive(Serialize, TS)]
+pub struct GithubRepoList {
+    repos: Vec<GithubRepo>,
+}
+
+#[derive(Serialize, TS)]
+pub struct MirrorCreated {
+    mirror: Mirror,
+}
+
+/// The user's GitHub account and mirrors.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct GithubOp {}
+
+impl Op for GithubOp {
+    type Answer = GithubStatus;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<GithubStatus, OpError> {
+        match &s.github {
+            Some(github) => Ok(github.status(who).await?),
+            None => Ok(GithubStatus::default()),
+        }
+    }
+}
+
+/// The GitHub repositories the user can mirror.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct GithubReposOp {}
+
+impl Op for GithubReposOp {
+    type Answer = GithubRepoList;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<GithubRepoList, OpError> {
+        let repos = configured(s)?.repos(who).await?;
+        Ok(GithubRepoList { repos })
+    }
+}
+
+/// Mirrors a GitHub repository.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct GithubMirrorOp {
+    /// `owner/name`.
+    github: String,
+}
+
+impl Op for GithubMirrorOp {
+    type Answer = MirrorCreated;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<MirrorCreated, OpError> {
+        let mirror = configured(s)?.mirror(who, &self.github).await?;
+        Ok(MirrorCreated { mirror })
+    }
+}
+
+/// Stops syncing the user's mirror `name`; it takes pushes again.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct GithubUnmirrorOp {
+    name: String,
+}
+
+impl Op for GithubUnmirrorOp {
+    type Answer = Empty;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<Empty, OpError> {
+        configured(s)?.unmirror(who, &self.name).await?;
+        Ok(Empty {})
+    }
+}
+
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct GithubDisconnectOp {}
+
+impl Op for GithubDisconnectOp {
+    type Answer = Empty;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<Empty, OpError> {
+        configured(s)?.disconnect(who).await?;
+        Ok(Empty {})
+    }
+}
+
+/// Turns syncing new GitHub repositories on or off.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct GithubAutoOp {
+    on: bool,
+}
+
+impl Op for GithubAutoOp {
+    type Answer = Empty;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<Empty, OpError> {
+        configured(s)?.set_auto(who, self.on).await?;
+        Ok(Empty {})
+    }
+}
+
+/// Stops the user's GitHub account from signing in
+/// (docs/decisions/0031-github-sign-in.md).
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct GithubUnlinkOp {}
+
+impl Op for GithubUnlinkOp {
+    type Answer = Empty;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<Empty, OpError> {
+        configured(s)?;
+        let Identity::User { name, .. } = who else {
+            return Err(GithubError::SignedOut.into());
         };
-    };
-    match q {
-        Query::Github => Ok(github.status(who).await?),
-        Query::GithubRepos => Ok(json!({ "repos": github.repos(who).await? })),
-        Query::GithubMirror { github: full_name } => {
-            Ok(json!({ "mirror": github.mirror(who, &full_name).await? }))
+        match s.directory.users().unlink_github(name).await {
+            Ok(()) => Ok(Empty {}),
+            Err(PasskeyError::Conflict(m)) => Err(OpError::new("conflict", m)),
+            Err(PasskeyError::Invalid(m)) => Err(OpError::bad(m)),
+            Err(PasskeyError::Auth(_)) => Err(OpError::new(
+                "unavailable",
+                "the database did not answer; retry later",
+            )),
         }
-        Query::GithubUnmirror { name } => {
-            github.unmirror(who, &name).await?;
-            Ok(json!({}))
-        }
-        Query::GithubAuto { on } => {
-            github.set_auto(who, on).await?;
-            Ok(json!({}))
-        }
-        Query::GithubDisconnect => {
-            github.disconnect(who).await?;
-            Ok(json!({}))
-        }
-        Query::GithubUnlink => {
-            let Identity::User { name, .. } = who else {
-                return Err(GithubError::SignedOut.into());
-            };
-            match s.directory.users().unlink_github(name).await {
-                Ok(()) => Ok(json!({})),
-                Err(PasskeyError::Conflict(m)) => Err(ReadError::new("conflict", m)),
-                Err(PasskeyError::Invalid(m)) => Err(ReadError::bad(m)),
-                Err(PasskeyError::Auth(_)) => Err(ReadError::new(
-                    "unavailable",
-                    "the database did not answer; retry later",
-                )),
-            }
-        }
-        _ => Err(ReadError::bad("not a GitHub query")),
     }
 }

@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router"
 
-import { useCommit } from "@/lib/api"
+import { useCommit } from "@/lib/repos"
 import { fullDate, short } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { Button } from "@/components/ui/button"

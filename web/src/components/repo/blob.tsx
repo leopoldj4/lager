@@ -3,7 +3,7 @@ import { File } from "@pierre/diffs/react"
 import { Navigate } from "@tanstack/react-router"
 import { useMemo, useState, type ReactNode } from "react"
 
-import { useBlob } from "@/lib/api"
+import { useBlob } from "@/lib/repos"
 import { bytes } from "@/lib/format"
 import { LiveError } from "@/lib/live"
 import { href } from "@/lib/paths"

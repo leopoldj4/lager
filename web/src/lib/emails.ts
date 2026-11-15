@@ -1,16 +1,7 @@
-async function request(path: string, init?: RequestInit) {
-  const response = await fetch(`/-/api/emails${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...init?.headers },
-  })
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    throw new Error(
-      error.message ?? `Email request failed (${response.status})`
-    )
-  }
-  if (response.status === 204) return
-  return response.json()
+import { rest } from "./rest"
+
+function request(path: string, method = "GET", body?: unknown) {
+  return rest(`/emails${path}`, "Email request", method, body)
 }
 
 export interface EmailInfo {
@@ -36,17 +27,17 @@ export function listEmails(): Promise<EmailList> {
 export function addEmail(
   email: string
 ): Promise<{ email: string; sent: boolean }> {
-  return request("", { method: "POST", body: JSON.stringify({ email }) })
+  return request("", "POST", { email })
 }
 
 export function sendVerification(email: string) {
-  return request(`/${encodeURIComponent(email)}/send`, { method: "POST" })
+  return request(`/${encodeURIComponent(email)}/send`, "POST")
 }
 
 export function verifyEmail(token: string): Promise<{ email: string }> {
-  return request("/verify", { method: "POST", body: JSON.stringify({ token }) })
+  return request("/verify", "POST", { token })
 }
 
 export function removeEmail(email: string) {
-  return request(`/${encodeURIComponent(email)}`, { method: "DELETE" })
+  return request(`/${encodeURIComponent(email)}`, "DELETE")
 }

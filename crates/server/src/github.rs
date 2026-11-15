@@ -33,6 +33,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, Semaphore, watch};
+use ts_rs::TS;
 
 use crate::git::hook::{HookCommand, HookResponse};
 use crate::http::access::Directory;
@@ -41,7 +42,7 @@ use crate::repository::{AccessCheck, Origin, PendingPush, PushAccess, Registry, 
 use lager_core::activity::Day;
 use lager_core::catalog::CatalogError;
 use lager_core::config::GithubConfig;
-use lager_core::github::{AutoDue, Due, GithubDb, GithubDbError, Mirror};
+use lager_core::github::{Account, AutoDue, Due, GithubDb, GithubDbError, Mirror};
 use lager_core::identity::Identity;
 use lager_core::limits;
 use lager_core::model::{Oid, Operation, RefName, RepoId, RepoState, RequestId};
@@ -92,7 +93,7 @@ impl From<reqwest::Error> for GithubError {
 }
 
 /// A GitHub repository as the settings page lists it.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 pub struct GithubRepo {
     pub full_name: String,
     pub name: String,
@@ -102,6 +103,23 @@ pub struct GithubRepo {
     pub pushed_at: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
+}
+
+/// The user's GitHub account and mirrors, as the settings page shows them.
+#[derive(Default, Serialize, TS)]
+pub struct GithubStatus {
+    /// False without `LAGER_GITHUB_CLIENT_ID` on the server.
+    pub configured: bool,
+    pub account: Option<Account>,
+    /// The GitHub account that signs the user in
+    /// (docs/decisions/0031-github-sign-in.md).
+    pub sign_in: Option<GithubSignIn>,
+    pub mirrors: Vec<Mirror>,
+}
+
+#[derive(Serialize, TS)]
+pub struct GithubSignIn {
+    pub login: String,
 }
 
 #[derive(Deserialize)]
@@ -302,7 +320,7 @@ impl Github {
             .await?)
     }
 
-    fn token_of(account: Option<lager_core::github::Account>) -> Result<String, GithubError> {
+    fn token_of(account: Option<Account>) -> Result<String, GithubError> {
         account.map(|a| a.token).ok_or(GithubError::NotConnected)
     }
 
@@ -454,17 +472,17 @@ impl Github {
     // Queries and changes of the settings page.
 
     /// The account and mirrors of the signed-in user.
-    pub async fn status(&self, who: &Identity) -> Result<serde_json::Value, GithubError> {
+    pub async fn status(&self, who: &Identity) -> Result<GithubStatus, GithubError> {
         let user = signed_in(who)?;
         let account = self.db.account(user).await?;
         let mirrors = self.db.mirrors(user).await?;
         let sign_in = self.db.linked(user).await?;
-        Ok(serde_json::json!({
-            "configured": true,
-            "account": account,
-            "sign_in": sign_in.map(|(_, login)| serde_json::json!({ "login": login })),
-            "mirrors": mirrors,
-        }))
+        Ok(GithubStatus {
+            configured: true,
+            account,
+            sign_in: sign_in.map(|(_, login)| GithubSignIn { login }),
+            mirrors,
+        })
     }
 
     /// The GitHub repositories the user can read, most recently pushed

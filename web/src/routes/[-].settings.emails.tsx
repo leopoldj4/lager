@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { BadgeCheck, Mail } from "lucide-react"
 
-import { useGithub, useLive } from "@/lib/api"
+import { useGithub } from "@/lib/github"
+import { useLive } from "@/lib/query"
 import {
   addEmail,
   listEmails,

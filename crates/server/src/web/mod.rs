@@ -14,13 +14,14 @@
 mod emails;
 mod github;
 pub mod live;
+pub mod ops;
 mod passkeys;
 mod profile;
 pub mod pulls;
 pub mod raw;
 pub mod read;
+mod repos;
 pub mod session;
-mod settings;
 mod sign_up;
 mod ssh_keys;
 mod tokens;
@@ -38,7 +39,7 @@ use tokio::sync::watch;
 
 use crate::http::AppState;
 use lager_core::config::WebConfig;
-use lager_core::identity::{AuthError, Identity, TOKEN_PREFIX};
+use lager_core::identity::{AuthError, Identity, TOKEN_PREFIX, UserError};
 
 pub struct Web {
     pub sessions: session::Sessions,
@@ -178,6 +179,33 @@ fn json_error(status: StatusCode, code: &str, message: &str) -> Response {
         Json(serde_json::json!({ "code": code, "message": message })),
     )
         .into_response()
+}
+
+/// The response for a failed request about `what` of a user, such as
+/// "access tokens".
+fn user_error(what: &str) -> impl Fn(UserError) -> Response + '_ {
+    move |error| match error {
+        UserError::Invalid(m) => json_error(StatusCode::BAD_REQUEST, "bad_request", &m),
+        UserError::TokenNotFound(_) => {
+            json_error(StatusCode::NOT_FOUND, "not_found", "token not found")
+        }
+        UserError::SshKeyNotFound(_) => {
+            json_error(StatusCode::NOT_FOUND, "not_found", "SSH key not found")
+        }
+        UserError::NotFound(_) | UserError::Exists(_) => json_error(
+            StatusCode::FORBIDDEN,
+            "unsupported",
+            &format!("{what} need a user in the database"),
+        ),
+        UserError::Unavailable(m) => {
+            tracing::warn!(error = %m, what, "user store unavailable");
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                &format!("{what} unavailable; retry later"),
+            )
+        }
+    }
 }
 
 async fn sign_in(State(s): State<AppState>, headers: HeaderMap, body: Json<SignIn>) -> Response {

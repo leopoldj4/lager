@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router"
 import { FileDown, History } from "lucide-react"
 
-import { useBlob, useTree } from "@/lib/api"
+import { useBlob, useTree } from "@/lib/repos"
 import { href, rawHref } from "@/lib/paths"
 import { Button } from "@/components/ui/button"
 import { BlobView } from "./blob"

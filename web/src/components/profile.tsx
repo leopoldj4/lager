@@ -1,8 +1,9 @@
 import { Link } from "@tanstack/react-router"
 import { useMemo } from "react"
 
-import { useProfile, useRepos } from "@/lib/api"
-import type { ActivityDay } from "@/lib/api"
+import { useProfile } from "@/lib/profile"
+import { useRepos } from "@/lib/repos"
+import type { ActivityDay } from "@/lib/wire"
 import { href } from "@/lib/paths"
 import { cn } from "@/lib/utils"
 import { Avatar, RepoDot } from "@/components/repo/avatar"

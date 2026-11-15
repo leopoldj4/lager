@@ -1,5 +1,5 @@
-import { live } from "./live"
-import { queryClient } from "./api"
+import { rest } from "./rest"
+import { sessionChanged } from "./session"
 
 export interface PasskeyInfo {
   id: string
@@ -14,20 +14,8 @@ export function supportsPasskeys() {
   )
 }
 
-async function request(path: string, body?: unknown, method = "POST") {
-  const response = await fetch(`/-/api/passkeys${path}`, {
-    method,
-    headers: { "content-type": "application/json" },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  })
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    throw new Error(
-      error.message ?? `Passkey request failed (${response.status})`
-    )
-  }
-  if (response.status === 204 || response.status === 201) return
-  return response.json()
+function request(path: string, body?: unknown, method = "POST") {
+  return rest(`/passkeys${path}`, "Passkey request", method, body)
 }
 
 function decode(value: string): ArrayBuffer {
@@ -106,8 +94,7 @@ export async function signInWithPasskey() {
   })) as PublicKeyCredential | null
   if (!credential) throw new Error("No passkey was selected.")
   await request("/login/finish", serialize(credential))
-  live.reconnect()
-  queryClient.clear()
+  sessionChanged()
 }
 
 async function createPasskey(path: string, body: unknown) {
@@ -132,8 +119,7 @@ export function addPasskey(name: string) {
 /** Creates an account whose only credential is a new passkey, and signs in. */
 export async function signUpWithPasskey(user: string) {
   await createPasskey("/signup", { user })
-  live.reconnect()
-  queryClient.clear()
+  sessionChanged()
 }
 
 export function listPasskeys(): Promise<{

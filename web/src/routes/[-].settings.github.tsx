@@ -2,13 +2,9 @@ import { createFileRoute, Link } from "@tanstack/react-router"
 import { useState } from "react"
 import { AlertCircle, Lock, RefreshCw, Search } from "lucide-react"
 
-import {
-  githubSignInHref,
-  useGithub,
-  useGithubChange,
-  useGithubRepos,
-  type GithubMirror,
-} from "@/lib/api"
+import { useGithub, useGithubChange, useGithubRepos } from "@/lib/github"
+import type { GithubMirror } from "@/lib/wire"
+import { githubSignInHref } from "@/lib/session"
 import { ago } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { Alert, AlertDescription } from "@/components/ui/alert"

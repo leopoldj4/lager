@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use sqlx::postgres::PgPool;
+use ts_rs::TS;
 
 use crate::activity::Day;
 use crate::model::RepoId;
@@ -35,7 +36,8 @@ fn unavailable(e: sqlx::Error) -> GithubDbError {
     GithubDbError::Unavailable(e.to_string())
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(rename = "GithubAccount")]
 pub struct Account {
     pub login: String,
     /// GitHub's user ID.
@@ -51,7 +53,8 @@ pub struct Account {
     pub auto_skipped: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(rename = "GithubMirror")]
 pub struct Mirror {
     /// The repository's name here.
     pub name: String,

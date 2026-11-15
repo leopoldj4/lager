@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router"
 
-import type { Commit } from "@/lib/api"
+import type { Commit } from "@/lib/wire"
 import { fullDate, short, since } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { Avatar } from "./avatar"

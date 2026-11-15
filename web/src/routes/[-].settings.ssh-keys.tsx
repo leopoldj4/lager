@@ -3,7 +3,7 @@ import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Terminal } from "lucide-react"
 
-import { useLive } from "@/lib/api"
+import { useLive } from "@/lib/query"
 import { ago, fullDate } from "@/lib/format"
 import { addSshKey, listSshKeys, removeSshKey } from "@/lib/ssh-keys"
 import { sshCloneUrl, useSshUrl } from "@/components/repo/clone"

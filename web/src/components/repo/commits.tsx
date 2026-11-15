@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router"
 import { useEffect, useRef, useState } from "react"
 
-import { useLog, type Commit } from "@/lib/api"
+import { useLog } from "@/lib/repos"
+import type { Commit } from "@/lib/wire"
 import { fullDate, short, since } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { cn } from "@/lib/utils"

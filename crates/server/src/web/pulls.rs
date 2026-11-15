@@ -6,22 +6,25 @@
 //! query. Changes go to [`PullService`](crate::pulls::PullService) and need
 //! a session.
 
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-use super::read::{COMMIT_FORMAT, Git, MAX_DIFF_BYTES, Query, ReadError, parse_commits};
+use super::ops::{DEFAULT_LIMIT, Op, OpError, readable};
+use super::read::{COMMIT_FORMAT, Commit, Git, MAX_DIFF_BYTES, open, parse_commits};
 use crate::git::MergeTree;
+use crate::github::Github;
 use crate::http::AppInner;
 use crate::pulls::PullOpError;
 use lager_core::identity::Identity;
 use lager_core::model::Oid;
-use lager_core::pulls::{PullError, PullState};
+use lager_core::pulls::{Counts, Pull, PullError, PullEvent, PullState};
 use lager_core::repo::{Access, RepoSettings};
 
 const MAX_PULLS: u32 = 100;
 /// Commits shown for one comparison.
 const MAX_COMMITS: usize = 250;
 
-impl From<PullOpError> for ReadError {
+impl From<PullOpError> for OpError {
     fn from(e: PullOpError) -> Self {
         match e {
             PullOpError::NotFound => Self::not_found("pull request"),
@@ -48,120 +51,290 @@ impl From<PullOpError> for ReadError {
     }
 }
 
-impl From<PullError> for ReadError {
+impl From<PullError> for OpError {
     fn from(e: PullError) -> Self {
         PullOpError::from(e).into()
     }
 }
 
-/// A client's request UUID.
-fn request(r: &str) -> Result<String, ReadError> {
-    uuid::Uuid::parse_str(r)
-        .map(|u| u.to_string())
-        .map_err(|_| ReadError::bad("request must be a UUID"))
+/// A pull request after a change to it.
+#[derive(Serialize, TS)]
+pub struct PullChanged {
+    pull: Pull,
 }
 
-pub async fn run(
-    s: &AppInner,
-    who: &Identity,
-    repo: &RepoSettings,
-    q: Query,
-) -> Result<Value, ReadError> {
-    let pulls = &s.pulls;
-    let changed = |p| Ok(json!({ "pull": p }));
-    // The pull requests of a mirror are GitHub's, and change there
-    // (docs/decisions/0028-two-way-github-mirrors.md).
-    if let (Some(_), Some(github)) = (&repo.mirror, &s.github) {
-        match q {
-            Query::PullCreate {
-                source,
-                target,
-                title,
-                body,
-                ..
-            } => {
-                return changed(
-                    github
-                        .pull_create(repo, who, &source, &target, &title, &body)
-                        .await?,
-                );
-            }
-            Query::PullComment { number, body, .. } => {
-                return changed(github.pull_comment(repo, who, number, &body).await?);
-            }
-            Query::PullClose { number, .. } => {
-                return changed(github.pull_set_open(repo, who, number, false).await?);
-            }
-            Query::PullReopen { number, .. } => {
-                return changed(github.pull_set_open(repo, who, number, true).await?);
-            }
-            Query::PullMerge {
-                number,
-                head,
-                squash,
-                ..
-            } => {
-                return changed(github.pull_merge(repo, who, number, &head, squash).await?);
-            }
-            _ => {}
-        }
+#[derive(Serialize, TS)]
+pub struct PullList {
+    pulls: Vec<Pull>,
+    counts: Counts,
+    more: bool,
+}
+
+#[derive(Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum Mergeable {
+    Clean,
+    Conflict,
+    UpToDate,
+    SourceMissing,
+    TargetMissing,
+}
+
+#[derive(Serialize, TS)]
+pub struct PullDetail {
+    generation: u64,
+    pull: Pull,
+    events: Vec<PullEvent>,
+    /// The comparison that shows the pull request's changes.
+    base: String,
+    head: String,
+    source_oid: Option<String>,
+    target_oid: Option<String>,
+    /// `None` unless open, and for a copy from GitHub that no longer syncs.
+    mergeable: Option<Mergeable>,
+    conflicts: Vec<String>,
+    can_comment: bool,
+    can_merge: bool,
+    can_close: bool,
+}
+
+#[derive(Serialize, TS)]
+pub struct Comparison {
+    generation: u64,
+    base: String,
+    head: String,
+    merge_base: String,
+    /// Newest first.
+    commits: Vec<Commit>,
+    more: bool,
+    diff: String,
+    truncated: bool,
+}
+
+/// A client's request UUID.
+fn request(r: &str) -> Result<String, OpError> {
+    uuid::Uuid::parse_str(r)
+        .map(|u| u.to_string())
+        .map_err(|_| OpError::bad("request must be a UUID"))
+}
+
+/// GitHub, for a repository whose pull requests are GitHub's and change
+/// there (docs/decisions/0028-two-way-github-mirrors.md).
+fn mirror<'a>(s: &'a AppInner, repo: &RepoSettings) -> Option<&'a Github> {
+    repo.mirror.as_ref().and(s.github.as_deref())
+}
+
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct PullsOp {
+    repo: String,
+    /// Closed and merged ones instead of open ones.
+    closed: Option<bool>,
+    skip: Option<u32>,
+    limit: Option<u32>,
+}
+
+impl Op for PullsOp {
+    type Answer = PullList;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<PullList, OpError> {
+        let repo = readable(s, who, &self.repo).await?;
+        let limit = self.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_PULLS);
+        let (open, skip) = (!self.closed.unwrap_or(false), self.skip.unwrap_or(0));
+        let (mut pulls, counts) = s.pulls.db.list(repo.id, open, skip, limit + 1).await?;
+        let more = pulls.len() > limit as usize;
+        pulls.truncate(limit as usize);
+        Ok(PullList {
+            pulls,
+            counts,
+            more,
+        })
     }
-    match q {
-        Query::Pulls {
-            closed,
-            skip,
-            limit,
-            ..
-        } => {
-            let limit = limit.clamp(1, MAX_PULLS);
-            let (mut list, counts) = pulls.db.list(repo.id, !closed, skip, limit + 1).await?;
-            let more = list.len() > limit as usize;
-            list.truncate(limit as usize);
-            Ok(json!({ "pulls": list, "counts": counts, "more": more }))
-        }
-        Query::Pull { number, .. } => pull(s, who, repo, number).await,
-        Query::Compare { base, head, .. } => compare(s, repo, &base, &head).await,
-        Query::PullCreate {
+}
+
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct PullOp {
+    repo: String,
+    number: u64,
+}
+
+impl Op for PullOp {
+    type Answer = PullDetail;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<PullDetail, OpError> {
+        let repo = readable(s, who, &self.repo).await?;
+        pull(s, who, &repo, self.number).await
+    }
+}
+
+/// The commits and changes of `head` since its merge base with `base`.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CompareOp {
+    repo: String,
+    base: String,
+    head: String,
+}
+
+impl Op for CompareOp {
+    type Answer = Comparison;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<Comparison, OpError> {
+        let (_, g) = open(s, who, &self.repo).await?;
+        compare(&g, &self.base, &self.head).await
+    }
+}
+
+// The operations below change something and need a session.
+
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct PullCreateOp {
+    repo: String,
+    source: String,
+    target: String,
+    title: String,
+    body: Option<String>,
+    /// A UUID: a retry opens no second pull request.
+    request: Option<String>,
+}
+
+impl Op for PullCreateOp {
+    type Answer = PullChanged;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<PullChanged, OpError> {
+        let repo = readable(s, who, &self.repo).await?;
+        let Self {
             source,
             target,
             title,
-            body,
-            request: r,
             ..
-        } => {
-            let r = r.as_deref().map(request).transpose()?;
-            changed(
-                pulls
-                    .create(repo, who, &source, &target, &title, &body, r)
-                    .await?,
-            )
-        }
-        Query::PullComment {
-            number,
-            body,
-            request: r,
-            ..
-        } => {
-            let r = r.as_deref().map(request).transpose()?;
-            changed(
-                pulls
-                    .comment(repo, who, number, &body, r.as_deref())
-                    .await?,
-            )
-        }
-        Query::PullClose { number, .. } => changed(pulls.set_open(repo, who, number, false).await?),
-        Query::PullReopen { number, .. } => changed(pulls.set_open(repo, who, number, true).await?),
-        Query::PullMerge {
-            number,
-            head,
-            squash,
-            request: r,
-            ..
-        } => {
-            let r = request(&r)?;
-            changed(pulls.merge(repo, who, number, &head, squash, &r).await?)
-        }
-        _ => Err(ReadError::bad("not a pull request query")),
+        } = &self;
+        let body = self.body.as_deref().unwrap_or_default();
+        let pull = match mirror(s, &repo) {
+            Some(github) => {
+                github
+                    .pull_create(&repo, who, source, target, title, body)
+                    .await?
+            }
+            None => {
+                let r = self.request.as_deref().map(request).transpose()?;
+                s.pulls
+                    .create(&repo, who, source, target, title, body, r)
+                    .await?
+            }
+        };
+        Ok(PullChanged { pull })
+    }
+}
+
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct PullCommentOp {
+    repo: String,
+    number: u64,
+    body: String,
+    request: Option<String>,
+}
+
+impl Op for PullCommentOp {
+    type Answer = PullChanged;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<PullChanged, OpError> {
+        let repo = readable(s, who, &self.repo).await?;
+        let pull = match mirror(s, &repo) {
+            Some(github) => {
+                github
+                    .pull_comment(&repo, who, self.number, &self.body)
+                    .await?
+            }
+            None => {
+                let r = self.request.as_deref().map(request).transpose()?;
+                s.pulls
+                    .comment(&repo, who, self.number, &self.body, r.as_deref())
+                    .await?
+            }
+        };
+        Ok(PullChanged { pull })
+    }
+}
+
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct PullCloseOp {
+    repo: String,
+    number: u64,
+}
+
+impl Op for PullCloseOp {
+    type Answer = PullChanged;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<PullChanged, OpError> {
+        set_open(s, who, &self.repo, self.number, false).await
+    }
+}
+
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct PullReopenOp {
+    repo: String,
+    number: u64,
+}
+
+impl Op for PullReopenOp {
+    type Answer = PullChanged;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<PullChanged, OpError> {
+        set_open(s, who, &self.repo, self.number, true).await
+    }
+}
+
+async fn set_open(
+    s: &AppInner,
+    who: &Identity,
+    name: &str,
+    number: u64,
+    open: bool,
+) -> Result<PullChanged, OpError> {
+    let repo = readable(s, who, name).await?;
+    let pull = match mirror(s, &repo) {
+        Some(github) => github.pull_set_open(&repo, who, number, open).await?,
+        None => s.pulls.set_open(&repo, who, number, open).await?,
+    };
+    Ok(PullChanged { pull })
+}
+
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct PullMergeOp {
+    repo: String,
+    number: u64,
+    /// The source commit the page showed.
+    head: String,
+    squash: Option<bool>,
+    request: String,
+}
+
+impl Op for PullMergeOp {
+    type Answer = PullChanged;
+
+    async fn run(self, s: &AppInner, who: &Identity) -> Result<PullChanged, OpError> {
+        let repo = readable(s, who, &self.repo).await?;
+        let (number, head) = (self.number, &self.head);
+        let squash = self.squash.unwrap_or(false);
+        let pull = match mirror(s, &repo) {
+            Some(github) => github.pull_merge(&repo, who, number, head, squash).await?,
+            None => {
+                let r = request(&self.request)?;
+                s.pulls.merge(&repo, who, number, head, squash, &r).await?
+            }
+        };
+        Ok(PullChanged { pull })
     }
 }
 
@@ -172,13 +345,13 @@ async fn pull(
     who: &Identity,
     repo: &RepoSettings,
     number: u64,
-) -> Result<Value, ReadError> {
+) -> Result<PullDetail, OpError> {
     let p = s
         .pulls
         .db
         .get(repo.id, number)
         .await?
-        .ok_or_else(|| ReadError::not_found("pull request"))?;
+        .ok_or_else(|| OpError::not_found("pull request"))?;
     // GitHub's pull requests follow GitHub, not the branches here.
     let github = p.github_url.is_some();
     // While the mirror syncs, changes here go to GitHub; after **Stop
@@ -188,15 +361,12 @@ async fn pull(
         s.pulls.clone().request_sync(repo.id);
     }
     let events = s.pulls.db.events(repo.id, number).await?;
-    let view = s.registry.controller(repo.id).prepare_read().await?;
-    let _permits = crate::http::process_permit(s)
-        .await
-        .map_err(|_| ReadError::new("busy", "server busy; retry later"))?;
-    let g = Git { s, view: &view };
+    let g = Git::open(s, repo).await?;
+    let view = &g.view;
     let source = g.commit_oid(&format!("refs/heads/{}", p.source)).await;
     let target = g.commit_oid(&format!("refs/heads/{}", p.target)).await;
     let kept = g.commit_oid(&format!("refs/pull/{number}/head")).await;
-    let mut mergeable = Value::Null;
+    let mut mergeable = None;
     let mut conflicts: Vec<String> = vec![];
     let (head, base) = match p.state {
         // The head is GitHub's ref, which forks have too; GitHub merges
@@ -209,17 +379,17 @@ async fn pull(
             }
             .unwrap_or_else(|| p.merge_base.clone());
             if live {
-                mergeable = json!(match &target {
-                    None => "target_missing",
-                    Some(_) if base == head => "up_to_date",
+                mergeable = Some(match &target {
+                    None => Mergeable::TargetMissing,
+                    Some(_) if base == head => Mergeable::UpToDate,
                     // The sync has not brought the head yet.
-                    Some(_) if kept.is_none() => "clean",
+                    Some(_) if kept.is_none() => Mergeable::Clean,
                     Some(t) => {
-                        conflicts = merge_check(s, &view, t, &head).await?;
+                        conflicts = merge_check(s, view, t, &head).await?;
                         if conflicts.is_empty() {
-                            "clean"
+                            Mergeable::Clean
                         } else {
-                            "conflict"
+                            Mergeable::Conflict
                         }
                     }
                 });
@@ -236,18 +406,18 @@ async fn pull(
                 None => None,
             }
             .unwrap_or_else(|| p.merge_base.clone());
-            mergeable = json!(match (&source, &target) {
-                (None, _) => "source_missing",
-                (_, None) => "target_missing",
+            mergeable = Some(match (&source, &target) {
+                (None, _) => Mergeable::SourceMissing,
+                (_, None) => Mergeable::TargetMissing,
                 (Some(src), Some(t)) => {
                     if base == *src {
-                        "up_to_date"
+                        Mergeable::UpToDate
                     } else {
-                        conflicts = merge_check(s, &view, t, src).await?;
+                        conflicts = merge_check(s, view, t, src).await?;
                         if conflicts.is_empty() {
-                            "clean"
+                            Mergeable::Clean
                         } else {
-                            "conflict"
+                            Mergeable::Conflict
                         }
                     }
                 }
@@ -287,20 +457,20 @@ async fn pull(
         _ => false,
     };
     let open_here = !github || live;
-    Ok(json!({
-        "pull": p,
-        "events": events,
-        "head": head,
-        "base": base,
-        "source_oid": source,
-        "target_oid": target,
-        "mergeable": mergeable,
-        "conflicts": conflicts,
-        "can_comment": user.is_some() && open_here,
-        "can_merge": user.is_some() && level >= Access::Write && open_here,
-        "can_close": user.is_some() && open_here && (author || level >= Access::Write),
-        "generation": view.generation,
-    }))
+    Ok(PullDetail {
+        generation: view.generation,
+        events,
+        head,
+        base,
+        source_oid: source,
+        target_oid: target,
+        mergeable,
+        conflicts,
+        can_comment: user.is_some() && open_here,
+        can_merge: user.is_some() && level >= Access::Write && open_here,
+        can_close: user.is_some() && open_here && (author || level >= Access::Write),
+        pull: p,
+    })
 }
 
 /// The conflicted paths of a merge of `theirs` into `ours`. The merge
@@ -310,9 +480,9 @@ async fn merge_check(
     view: &crate::repository::ReadView,
     ours: &str,
     theirs: &str,
-) -> Result<Vec<String>, ReadError> {
+) -> Result<Vec<String>, OpError> {
     let format = view.format();
-    let parse = |o: &str| Oid::parse(format, o).map_err(|e| ReadError::bad(e.to_string()));
+    let parse = |o: &str| Oid::parse(format, o).map_err(|e| OpError::bad(e.to_string()));
     let (ours, theirs) = (parse(ours)?, parse(theirs)?);
     let tmp = s
         .registry
@@ -335,23 +505,10 @@ async fn merge_check(
 
 /// The commits of `head` since its merge base with `base`, newest first,
 /// and their changes.
-async fn compare(
-    s: &AppInner,
-    repo: &RepoSettings,
-    base: &str,
-    head: &str,
-) -> Result<Value, ReadError> {
-    let view = s.registry.controller(repo.id).prepare_read().await?;
-    let _permits = crate::http::process_permit(s)
-        .await
-        .map_err(|_| ReadError::new("busy", "server busy; retry later"))?;
-    let g = Git { s, view: &view };
+async fn compare(g: &Git<'_>, base: &str, head: &str) -> Result<Comparison, OpError> {
     let (base, head) = (g.resolve(base).await?, g.resolve(head).await?);
     let Some(merge_base) = g.merge_base(&base, &head).await? else {
-        return Err(ReadError::new(
-            "unrelated",
-            "the revisions share no history",
-        ));
+        return Err(OpError::new("unrelated", "the revisions share no history"));
     };
     let range = format!("{merge_base}..{head}");
     let count = format!("--max-count={}", MAX_COMMITS + 1);
@@ -376,14 +533,14 @@ async fn compare(
             MAX_DIFF_BYTES,
         )
         .await?;
-    Ok(json!({
-        "base": base,
-        "head": head,
-        "merge_base": merge_base,
-        "commits": commits,
-        "more": more,
-        "diff": String::from_utf8_lossy(&diff),
-        "truncated": truncated,
-        "generation": view.generation,
-    }))
+    Ok(Comparison {
+        generation: g.view.generation,
+        base,
+        head,
+        merge_base,
+        commits: g.link(commits).await,
+        more,
+        diff: String::from_utf8_lossy(&diff).into_owned(),
+        truncated,
+    })
 }

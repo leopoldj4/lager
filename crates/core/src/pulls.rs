@@ -17,6 +17,7 @@
 use serde::Serialize;
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::{Connection, PgConnection, Row};
+use ts_rs::TS;
 
 use crate::model::RepoId;
 
@@ -25,7 +26,7 @@ pub const MAX_TITLE_CHARS: usize = 256;
 /// Longest description or comment, in characters: GitHub's limit.
 pub const MAX_BODY_CHARS: usize = 64 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum PullState {
     Open,
@@ -44,7 +45,7 @@ impl PullState {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Pull {
     pub number: u64,
     pub title: String,
@@ -77,8 +78,9 @@ pub struct Pull {
     pub merge_request: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename = "PullEventKind")]
 pub enum EventKind {
     Comment,
     /// The source branch moved.
@@ -111,7 +113,7 @@ impl EventKind {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct PullEvent {
     pub id: i64,
     pub kind: EventKind,
@@ -191,7 +193,8 @@ pub struct GithubComment {
 }
 
 /// Open and closed (with merged) pull requests of a repository.
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, TS)]
+#[ts(rename = "PullCounts")]
 pub struct Counts {
     pub open: u64,
     pub closed: u64,

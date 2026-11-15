@@ -1,6 +1,8 @@
 import { Link } from "@tanstack/react-router"
 
-import { usePulls, type Pull, type PullState, type Refs } from "@/lib/api"
+import { usePulls } from "@/lib/pulls"
+import type { Pull, PullState } from "@/lib/wire"
+import type { Refs } from "@/lib/wire"
 import { fullDate, since } from "@/lib/format"
 import { href } from "@/lib/paths"
 import { cn } from "@/lib/utils"

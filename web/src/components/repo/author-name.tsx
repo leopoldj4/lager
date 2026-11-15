@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router"
 
-import type { Person } from "@/lib/api"
+import type { Person } from "@/lib/wire"
 import { cn } from "@/lib/utils"
 
 /** A commit author's name, linked to the profile of the user whose email it is. */
