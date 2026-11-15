@@ -350,6 +350,13 @@ bun run down                         # remove the tests' containers and data
 test makes its own users and repositories. The servers' warnings of a run
 are in `.local/test/runs/<run>/server-<n>.log`.
 
+For outages, a test kills a server and starts it again (`server.kill()`,
+`server.emptyCache()`, `server.start()`), or cuts one server off from
+storage, the database, or NATS (`server.links.nats.cut()` and
+`restore()`); `cluster().heal()` ends every outage. The whole suite takes
+four to six minutes, most of it in `git/snapshot.test.ts` and
+`git/faults.test.ts`.
+
 The Cargo workspace has three crates:
 
 | Crate | Contents |

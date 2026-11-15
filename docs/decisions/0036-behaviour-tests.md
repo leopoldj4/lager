@@ -32,6 +32,11 @@ with one and fails with three shows state that a server keeps to itself.
 repositories with random names, and every run has its own database and
 storage prefix. Tests do not depend on each other or on their order.
 
+**Outages from the test.** Each server reaches each service through its
+own relay in the test process (`tests/harness/link.ts`). A test cuts and
+restores the connection of one server to storage, the database, or NATS,
+and kills and starts servers, with or without their cache.
+
 **TypeScript with `bun test`.** The scripts are TypeScript already, and
 the live client takes the types of requests and answers from
 `web/src/lib/wire.ts` (decision 35). `tests/` is its own package with
@@ -50,6 +55,12 @@ the live connection), and a later `tests/ui` the pages in a browser.
 - `sha2` is optimized in development builds. PBKDF2 took three seconds per
   password in an unoptimized build, for every new user and for the first
   request of a user on each server.
+- A push cut off by a stopped server is timed against a whole push, so
+  which point of the push each run cuts differs. The test accepts both
+  outcomes of a push that failed for the client, and requires that every
+  server agrees on one.
+- Tests wait for what the server does on a timer: up to five seconds for a
+  change to the catalog, up to a minute for a snapshot.
 - GitHub mirrors and sign-in are not covered: they need a stand-in for
   GitHub.
 - Nothing runs the tests automatically yet.

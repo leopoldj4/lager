@@ -4,20 +4,10 @@ import { expect, test } from "bun:test"
 import { cluster } from "../harness/cluster"
 import { Remote, Work } from "../harness/git"
 import { eventually } from "../harness/process"
-import { newUser, repoName } from "../harness/world"
-
-/** A repository of a new user with one commit on main. */
-async function seeded() {
-  const owner = await newUser()
-  const repo = repoName(owner)
-  const work = await Work.init()
-  const head = await work.commit("First", { "a.txt": "a\n" })
-  await work.push(new Remote(repo, owner), "main")
-  return { owner, repo, work, head }
-}
+import { newRepo, newUser, repoName } from "../harness/world"
 
 test("a repository is private until it is made public", async () => {
-  const { repo, head } = await seeded()
+  const { repo, head } = await newRepo()
   const stranger = await newUser()
   for (const server of cluster().servers) {
     await expect(new Remote(repo).on(server).refs()).rejects.toThrow()
@@ -49,7 +39,7 @@ test("a push cannot create a repository under another user", async () => {
 })
 
 test("write access pushes but does not rewrite history", async () => {
-  const { owner, repo, head } = await seeded()
+  const { owner, repo, head } = await newRepo()
   const writer = await newUser(`${repo}=write`)
   const work = await Work.clone(new Remote(repo, writer))
   const next = await work.commit("Second", { "b.txt": "b\n" })
@@ -70,7 +60,7 @@ test("write access pushes but does not rewrite history", async () => {
 })
 
 test("read access clones but does not push", async () => {
-  const { repo, head } = await seeded()
+  const { repo, head } = await newRepo()
   const reader = await newUser(`${repo}=read`)
   const work = await Work.clone(new Remote(repo, reader, "ssh"))
   expect(await work.head()).toBe(head)

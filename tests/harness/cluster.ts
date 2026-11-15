@@ -6,17 +6,24 @@
 // `LAGER_TEST_SERVERS` sets how many (default 2). Tests ask for
 // `cluster.next()` on every call, so one user's requests reach different
 // servers in turn.
+//
+// Each server reaches each service through its own `Link`, and can be
+// killed and started again, for tests of outages.
 
 import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs"
 import { createServer } from "node:net"
 import { join } from "node:path"
-import { eventually, run } from "./process"
+import { Link } from "./link"
+import { attempt, eventually, run, type Output } from "./process"
 import * as services from "./services"
 
 const target = process.env.CARGO_TARGET_DIR ?? join(services.repo, "target")
 const lager = join(target, "debug/lager")
 const lagerServer = join(target, "debug/lager-server")
+
+/** The connections of one server to the services. */
+export type Links = { storage: Link; postgres: Link; nats: Link }
 
 export class Server {
   private process: Bun.Subprocess | undefined
@@ -27,6 +34,7 @@ export class Server {
     readonly http: string,
     /** `127.0.0.1:<port>` for Git over SSH. */
     readonly ssh: string,
+    readonly links: Links,
     private env: Record<string, string>,
     /** The server's warnings and errors. */
     readonly log: string
@@ -34,6 +42,31 @@ export class Server {
 
   get cache(): string {
     return this.env.LAGER_CACHE_DIR
+  }
+
+  get running(): boolean {
+    return this.process !== undefined
+  }
+
+  /** Whether the load balancer check passes. */
+  async healthy(): Promise<boolean> {
+    return fetch(`${this.http}/_lager/health`).then(
+      (r) => r.ok,
+      () => false
+    )
+  }
+
+  /** A counter of `GET /_lager/metrics`, such as `snapshots`; 0 before its first count. */
+  async counter(name: string): Promise<number> {
+    const text = await (await fetch(`${this.http}/_lager/metrics`)).text()
+    return Number(new RegExp(`^lager_${name}_total (\\d+)$`, "m").exec(text)?.[1] ?? 0)
+  }
+
+  /** Removes the cache, as a new machine has none. The server must not run. */
+  emptyCache() {
+    if (this.running) throw new Error(`server ${this.index} runs`)
+    rmSync(this.cache, { recursive: true, force: true })
+    mkdirSync(this.cache)
   }
 
   /** Starts the process and waits until the load balancer check passes. */
@@ -47,9 +80,7 @@ export class Server {
     let code: number | undefined
     exited.then((c) => (code = c))
     await eventually(async () => {
-      if (code !== undefined) return
-      const r = await fetch(`${this.http}/_lager/health`)
-      if (!r.ok) throw new Error(`server ${this.index} is not healthy: ${r.status}`)
+      if (code === undefined && !(await this.healthy())) throw new Error(`server ${this.index} is not healthy`)
     }, 60_000)
     if (code !== undefined) throw new Error(`server ${this.index} stopped (${code}):\n${readFileSync(this.log, "utf8")}`)
   }
@@ -85,14 +116,16 @@ export class Cluster {
     const hostKey = join(dir, "ssh_host_ed25519_key")
     await run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "lager-test", "-f", hostKey])
 
+    const reach = (to: { storage: string; postgres: string; nats: string }) => ({
+      LAGER_S3_ENDPOINT: `http://${to.storage}`,
+      LAGER_DATABASE_URL: `postgres://lager@${to.postgres}/${database}`,
+      LAGER_NATS_URL: `nats://${to.nats}`,
+    })
     const shared = {
-      LAGER_S3_ENDPOINT: `http://${addr.storage}`,
       LAGER_S3_BUCKET: services.s3.bucket,
       LAGER_S3_ACCESS_KEY_ID: services.s3.accessKey,
       LAGER_S3_SECRET_ACCESS_KEY: services.s3.secretKey,
       LAGER_S3_PREFIX: `test/${id}`,
-      LAGER_DATABASE_URL: `postgres://lager@${addr.postgres}/${database}`,
-      LAGER_NATS_URL: `nats://${addr.nats}`,
       LAGER_SESSION_SECRET: randomBytes(32).toString("hex"),
       LAGER_SSH_HOST_KEY: readFileSync(hostKey, "utf8"),
       LAGER_SIGN_UP: "true",
@@ -103,15 +136,22 @@ export class Cluster {
       const [http, ssh] = [await freePort(), await freePort()]
       const cache = join(dir, `server-${i}`)
       mkdirSync(cache)
+      const links = {
+        storage: await Link.start(addr.storage),
+        postgres: await Link.start(addr.postgres),
+        nats: await Link.start(addr.nats),
+      }
       const env = {
         ...shared,
+        ...reach({ storage: links.storage.address, postgres: links.postgres.address, nats: links.nats.address }),
         LAGER_LISTEN: `127.0.0.1:${http}`,
         LAGER_SSH_LISTEN: `127.0.0.1:${ssh}`,
         LAGER_CACHE_DIR: cache,
       }
-      servers.push(new Server(i, `http://127.0.0.1:${http}`, `127.0.0.1:${ssh}`, env, join(dir, `server-${i}.log`)))
+      servers.push(new Server(i, `http://127.0.0.1:${http}`, `127.0.0.1:${ssh}`, links, env, join(dir, `server-${i}.log`)))
     }
-    const cluster = new Cluster(servers, { ...shared, LAGER_CACHE_DIR: join(dir, "admin") }, database)
+    // The administration commands reach the services directly.
+    const cluster = new Cluster(servers, { ...shared, ...reach(addr), LAGER_CACHE_DIR: join(dir, "admin") }, database)
     // The storage service answers a little after its container starts.
     await eventually(() => cluster.admin(["repo", "list"]), 60_000)
     // The first server creates the tables.
@@ -125,13 +165,28 @@ export class Cluster {
     return this.servers[this.turn++ % this.servers.length]
   }
 
+  /** Ends every outage: restores the links and starts the servers that do not run. */
+  async heal() {
+    for (const s of this.servers) for (const l of Object.values(s.links)) l.restore()
+    await Promise.all(this.servers.filter((s) => !s.running).map((s) => s.start()))
+    await eventually(async () => {
+      for (const s of this.servers) if (!(await s.healthy())) throw new Error(`server ${s.index} is not healthy`)
+    }, 60_000)
+  }
+
   /** Runs an administration command (`lager ...`). */
   admin(args: string[], input?: string): Promise<string> {
     return run([lager, ...args], { env: this.env, input })
   }
 
+  /** An administration command, whatever its exit code. */
+  attemptAdmin(args: string[], input?: string): Promise<Output> {
+    return attempt([lager, ...args], { env: this.env, input })
+  }
+
   async stop() {
     await Promise.all(this.servers.map((s) => s.kill()))
+    for (const s of this.servers) for (const l of Object.values(s.links)) l.close()
     await services.dropDatabase(this.database)
     await services.stop()
     // The logs stay for a look after a failure; the caches are large.
