@@ -324,6 +324,32 @@ scripts/wire.ts            # write web/src/lib/wire.ts
 scripts/wire.ts --check    # fail if it is out of date
 ```
 
+### Tests
+
+`tests/` holds behaviour tests that use lager from outside: Git over HTTP
+and SSH, the live connection, and the administration commands
+([decision 36](docs/decisions/0036-behaviour-tests.md)). They start their
+own SeaweedFS, PostgreSQL, and NATS in Docker, apart from local mode, and
+several servers of this checkout's build that share them. Every call goes
+to the next server, so a test that pushes and reads does so on different
+servers.
+
+```bash
+cargo build                          # the tests run target/debug
+cd tests && bun install
+bun run test                         # two servers
+LAGER_TEST_SERVERS=3 bun run test    # or any number from 1
+bun run test git/push.test.ts        # one file
+bun run typecheck
+bun run down                         # remove the tests' containers and data
+```
+
+`tests/git` covers the Git server and `tests/around` what surrounds it;
+`tests/harness` has the cluster (`cluster.ts`), users and repository names
+(`world.ts`), Git (`git.ts`), and the live connection (`live.ts`). Each
+test makes its own users and repositories. The servers' warnings of a run
+are in `.local/test/runs/<run>/server-<n>.log`.
+
 The Cargo workspace has three crates:
 
 | Crate | Contents |

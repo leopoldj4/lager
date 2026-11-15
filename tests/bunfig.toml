@@ -1,0 +1,3 @@
+[test]
+# Starts the cluster once for all test files.
+preload = ["./harness/setup.ts"]

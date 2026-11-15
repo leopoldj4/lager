@@ -10,8 +10,10 @@ license = "FSL-1.1-ALv2"
 
 # Password hashing is deliberately expensive and prohibitively slow in an
 # unoptimized local build. Keep the application debuggable while optimizing
-# the crate that performs PBKDF2.
+# the crates that perform PBKDF2.
 [profile.dev.package.lager-core]
+opt-level = 3
+[profile.dev.package.sha2]
 opt-level = 3
 
 # Likewise for the gix crates that decompress and decode objects in the web
