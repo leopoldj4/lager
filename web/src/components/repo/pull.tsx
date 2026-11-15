@@ -102,7 +102,15 @@ export function PullView({ repo, rest }: { repo: string; rest: string[] }) {
 
   return (
     <div className="flex min-h-[calc(var(--frame-height)-3rem)] shrink-0 flex-col lg:flex-row">
-      <aside className="order-last shrink-0 border-t border-hairline lg:order-none lg:w-75 lg:border-t-0 lg:border-r">
+      {/* On phones a stack comes first, the commits of one alone last. */}
+      <aside
+        className={cn(
+          "shrink-0 border-hairline lg:w-75 lg:border-r",
+          stacked
+            ? "border-b lg:border-b-0"
+            : "order-last border-t lg:order-none lg:border-t-0"
+        )}
+      >
         <div className="grid grid-cols-1 gap-8 px-4 py-6 lg:sticky lg:top-12 lg:max-h-[calc(var(--frame-height)-3rem)] lg:overflow-y-auto">
           <section id="commits" className="scroll-mt-14">
             <div className="flex items-center gap-2 px-1 pb-3">
