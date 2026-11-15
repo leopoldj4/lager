@@ -37,6 +37,11 @@ own relay in the test process (`tests/harness/link.ts`). A test cuts and
 restores the connection of one server to storage, the database, or NATS,
 and kills and starts servers, with or without their cache.
 
+**Known faults are tests.** A behaviour that is wrong today is a test
+marked `test.failing`, with the cause above it. The suite stays green, and
+the test turns red when the fault is fixed, which is the moment to remove
+the mark. Faults that only several servers show are marked only then.
+
 **TypeScript with `bun test`.** The scripts are TypeScript already, and
 the live client takes the types of requests and answers from
 `web/src/lib/wire.ts` (decision 35). `tests/` is its own package with

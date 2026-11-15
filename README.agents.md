@@ -350,6 +350,11 @@ bun run down                         # remove the tests' containers and data
 test makes its own users and repositories. The servers' warnings of a run
 are in `.local/test/runs/<run>/server-<n>.log`.
 
+`harness/session.ts` is a browser's session: it signs in or up, sends the
+requests of the settings pages, and opens live connections. A behaviour
+that is known to be wrong is a test marked `test.failing` with the cause
+above it; `grep -rn "test.failing" tests` lists them.
+
 For outages, a test kills a server and starts it again (`server.kill()`,
 `server.emptyCache()`, `server.start()`), or cuts one server off from
 storage, the database, or NATS (`server.links.nats.cut()` and

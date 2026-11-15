@@ -5,7 +5,7 @@
 
 import type { Ops } from "../../web/src/lib/wire"
 import { cluster, type Server } from "./cluster"
-import type { User } from "./world"
+import type { Session } from "./session"
 
 /** A request: the name of an operation and its fields. */
 export type Request<K extends keyof Ops = keyof Ops> = {
@@ -34,45 +34,39 @@ export class Live {
   private pending = new Map<number, Waiter>()
   /** Events not yet asked for, oldest first. */
   private events: Event[] = []
+  /** The close code, once the connection has closed. */
+  closed: number | undefined
   private waiting: { match: (e: Event) => boolean; resolve: (e: Event) => void }[] = []
 
   private constructor(
     private ws: WebSocket,
-    readonly server: Server
+    readonly server: Server,
+    /** Who the server takes the connection for; null for a visitor. */
+    readonly user: string | null
   ) {
     ws.onmessage = (e) => this.receive(JSON.parse(e.data as string))
-    ws.onclose = () => {
+    ws.onclose = (e) => {
+      this.closed = e.code
       for (const p of this.pending.values()) p.reject(new Error("the live connection closed"))
       this.pending.clear()
     }
   }
 
-  /** Signs in on a server, the next one by default, and connects to it; without a user, as a visitor. */
-  static async open(as?: User, server: Server = cluster().next()): Promise<Live> {
-    const headers: Record<string, string> = {}
-    if (as) {
-      const r = await fetch(`${server.http}/-/api/session`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ user: as.name, password: as.password }),
-      })
-      if (!r.ok) throw new Error(`signing in as ${as.name}: ${r.status} ${await r.text()}`)
-      const cookie = r.headers
-        .getSetCookie()
-        .map((c) => c.split(";")[0])
-        .find((c) => c.startsWith("lager_session="))
-      if (!cookie) throw new Error(`signing in as ${as.name}: no session cookie`)
-      headers.cookie = cookie
-    }
+  /**
+   * Connects to a server, the next one by default, with the session's
+   * cookie. The connection is for the session's user, or for a visitor when
+   * the server no longer accepts the cookie: `user` tells.
+   */
+  static async open(session: Session, server: Server = cluster().next()): Promise<Live> {
+    const headers: Record<string, string> = session.cookie ? { cookie: session.cookie } : {}
     const ws = new WebSocket(`${server.http.replace(/^http/, "ws")}/-/api/live`, { headers })
     const welcome = await new Promise<any>((resolve, reject) => {
       ws.onopen = () => ws.send(JSON.stringify({ type: "hello", v: 1 }))
       ws.onmessage = (e) => resolve(JSON.parse(e.data as string))
       ws.onerror = () => reject(new Error(`the live connection to server ${server.index} failed`))
     })
-    if (welcome.type !== "welcome" || welcome.user !== (as?.name ?? null))
-      throw new Error(`live connection: ${JSON.stringify(welcome)}`)
-    return new Live(ws, server)
+    if (welcome.type !== "welcome") throw new Error(`live connection: ${JSON.stringify(welcome)}`)
+    return new Live(ws, server, welcome.user)
   }
 
   private receive(m: any) {
@@ -101,6 +95,17 @@ export class Live {
     return (await this.send<{ data: Ops[K]["answer"] }>({ type: "req", ...query })).data
   }
 
+  /** A request that must fail; answers the error's code. */
+  async refused<K extends keyof Ops>(query: Request<K>): Promise<string> {
+    try {
+      await this.request(query)
+    } catch (e) {
+      if (e instanceof LiveError) return e.code
+      throw e
+    }
+    throw new Error(`${query.op} was answered`)
+  }
+
   /** Asks for the change events of a repository; answers its generation now. */
   async watch(repo: string): Promise<number> {
     return (await this.send<{ generation: number }>({ type: "sub", repo })).generation
@@ -124,3 +129,15 @@ export class Live {
     this.ws.close(1000)
   }
 }
+
+/** Matches the change events of a repository. */
+export const changed =
+  (repo: string) =>
+  (e: Event): e is Extract<Event, { type: "changed" }> =>
+    e.type === "changed" && e.repo === repo
+
+/** Matches the events of a pull request. */
+export const pullChanged =
+  (repo: string, number: number) =>
+  (e: Event): e is Extract<Event, { type: "pull" }> =>
+    e.type === "pull" && e.repo === repo && e.number === number
